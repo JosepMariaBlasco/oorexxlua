@@ -32,6 +32,7 @@ env:
 
 jobs:
   unix:
+    if: false                   # temporary: the Windows probe only
     name: ${{ matrix.platform.name }} lua${{ matrix.lua }}
     strategy:
       fail-fast: false
@@ -119,7 +120,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        lua: ["5.3.6", "5.4.9", "5.5.1"]
+        lua: ["5.3.6"]          # temporary: the probe only
     runs-on: windows-2022
     defaults:
       run:
@@ -146,6 +147,19 @@ jobs:
         run: scripts/build.sh
       - name: Tests
         run: OUT=$RUNNER_TEMP/tests tests/run.sh
+      - name: Probe texlua closing (temporary)
+        if: env.LUA_VERSION == '5.3'
+        run: |
+          TEXLUA=$(scripts/setup-luatex.sh)
+          B=$(cd .. && pwd)/build
+          export LUA_CPATH="$(cygpath -w "$B/texlive")\\?.dll;;"
+          "$TEXLUA" tests/probe/close.lua; echo "rc=$?"
+          export LUA_CPATH="$(cygpath -w "$B")\\?.dll;;"
+          L=$(ls -d ../lua-*/src | head -1)/lua.exe
+          "$L" tests/probe/close.lua; echo "lua.exe rc=$?"
+          export LUA_CPATH="$(cygpath -w "$B/texlive")\\?.dll;;"
+          K="/c/Program Files (x86)/Windows Kits/10/Debuggers/x64"
+          "$K/cdb.exe" -y "$(cygpath -w "$B/texlive")" -c "g; .ecxr; kv 40; q" "$(cygpath -w "$TEXLUA")" tests/probe/close.lua || true
       - name: The Lua module in TeX Live's LuaTeX (Lua 5.3)
         if: env.LUA_VERSION == '5.3'
         run: |
