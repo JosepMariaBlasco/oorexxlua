@@ -55,11 +55,17 @@ T.test("Lua values in Rexx are .LuaObjects of this Lua", function()
   T.eq(rexx.eval("arg(1)~call(6)", function(x) return x * 7 end), 42)
 end)
 
-T.test(".lua is the state of the Lua that runs ooRexx", function()
+T.test(".lua is the state of the Lua that runs ooRexx: its globals", function()
   answer = 42
   T.eq(rexx.eval(".lua~global('answer')"), 42)
+end)
+
+T.test(".lua is the state of the Lua that runs ooRexx: eval", function()
   rexx.eval(".lua~eval('fromRexx = ...', 'hi')")
   T.eq(fromRexx, "hi")
+end)
+
+T.test(".lua cannot be closed from Rexx", function()
   T.fails("closed by that Lua, not by Rexx", rexx.eval, ".lua~close")
   T.eq(rexx.eval(".lua~isClosed"), 0)
 end)

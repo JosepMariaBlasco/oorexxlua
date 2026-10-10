@@ -105,7 +105,9 @@ struct Proxy {
 
 // registry[&STATEKEY]: the State of a lua_State (a light userdata).  Not Lua's
 // extra space, which belongs to the host when the state is adopted.
-static const char STATEKEY = 0;
+// (Not const: MSVC may fold equal constants into one address, and the keys
+// must differ.)
+static char STATEKEY;
 static State *stateOf(lua_State *L)
 {
     lua_rawgetp(L, LUA_REGISTRYINDEX, &STATEKEY);
@@ -1998,7 +2000,7 @@ static int mod_interpreter(lua_State *L)
 // when it was adopted, so finalized after every Rexx object's userdata):
 // its instances are terminated, and Rexx's proxies of its Lua values dead
 struct HostSentinel { State *st; };
-static const char SENTINELKEY = 0;
+static char SENTINELKEY;
 
 static int host_gc(lua_State *L)
 {
