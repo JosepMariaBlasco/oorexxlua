@@ -66,6 +66,23 @@ function T.test(name, f)
   end
 end
 
+-- Run a command line through Rexx's ADDRESS SYSTEM (LuaTeX replaces
+-- io.popen with one of its own): its return code and its output (stdout and
+-- stderr, lines joined with "\n")
+function T.system(rexx, line)
+  local r = rexx.routine([[
+    use arg cmd
+    out = .array~new
+    address system cmd with output using (out) error using (out)
+    do i = 1 to out~items                  -- Windows: lines may end in CR
+      if out[i]~right(1) == "0d"x then out[i] = out[i]~left(out[i]~length - 1)
+    end
+    return rc out~makeString("L", "0a"x)
+  ]])
+  local rc, out = r(T.command(line)):match("^(%-?%d+) ?(.*)$")
+  return tonumber(rc), out
+end
+
 -- A shell command line for io.popen and os.execute: cmd.exe drops the first
 -- and the last quote of a line that starts with one
 function T.command(line)
