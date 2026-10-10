@@ -3,15 +3,14 @@
  * Rexx side: lua.cls (.lua, .LuaState, .LuaObject).  How it works and why:
  * docs/design.md (the comments name its sections, e.g. *States*).
  *
- * Values, Lua -> Rexx:  nil -> .nil; boolean -> 1/0; integer -> "%lld";
- *   float -> Lua's own tostring; string -> string (bytes, unchanged);
- *   a Rexx object passed in earlier -> that object; anything else -> a
- *   .LuaObject proxy.
- * Values, Rexx -> Lua:  .nil -> nil; .LuaObject -> its value; Array -> a new
- *   sequence table (copy); string -> string (Lua coerces strings to numbers
- *   in arithmetic); Routine -> a Lua function; any other object -> userdata
- *   "RexxObject" that Lua can call or send messages to (obj:name(...)).
- *   Keys of [] and []= follow the canonical-integer rule instead: "1" -> 1.
+ * Values (docs/design.md, *Values*), Lua -> Rexx: nil -> .nil; boolean ->
+ *   1/0; integer -> its decimal string; float -> the shortest string that
+ *   gives it back; string -> string; a Rexx object passed in earlier -> that
+ *   object; anything else -> a .LuaObject proxy.
+ * Rexx -> Lua: .nil -> nil; .LuaObject -> its value; Array -> a new sequence
+ *   table (copy); a string -> integer, float or string by ooRexx/Python's
+ *   rule (numberKind); Routine -> a Lua function; any other object ->
+ *   userdata "RexxObject" that Lua can call or send messages to.
  */
 
 #include <oorexxapi.h>
@@ -27,6 +26,9 @@ extern "C" {
 #include <cstring>
 #include <cctype>
 #include <cstdint>
+#include <cmath>
+#include <cerrno>
+#include <cstdlib>
 #include <strings.h>
 
 static const char *REXXOBJ = "RexxObject";          // metatable of Rexx objects in Lua
@@ -135,19 +137,82 @@ static void drain(RexxThreadContext *c)
 /* Helpers                                                                    */
 /* ------------------------------------------------------------------------ */
 
-static bool isCanonicalInteger(const char *s, size_t n)
+static bool isDigits(const char *p, const char *end)
 {
-    if (n == 0 || n > 18) return false;
-    size_t i = 0;
-    if (s[0] == '-') { if (n == 1) return false; i = 1; }
-    if (s[i] == '0' && n > i + 1) return false;
-    for (; i < n; i++) if (!isdigit((unsigned char)s[i])) return false;
-    if (s[0] == '-' && n == 2 && s[1] == '0') return false;
+    if (p == end) return false;
+    for (; p < end; p++) if (*p < '0' || *p > '9') return false;
     return true;
 }
 
+// What a Rexx string becomes in Lua (docs/design.md, *Values*): the same rule
+// as ooRexx/Python's, and the same code (its bridge.cpp, numberKind).
+enum NumberKind { NOT_NUMBER, INTEGER_NUMBER, FLOAT_NUMBER };
+
+static NumberKind numberKind(const char *s, size_t n)
+{
+    const char *p = s, *end = p + n;
+    if (p < end && *p == '-') p++;
+    if (p == end) return NOT_NUMBER;
+    // canonical integer: 0, or no leading zero
+    if (isDigits(p, end)) return (*p != '0' || end - p == 1) ? INTEGER_NUMBER : NOT_NUMBER;
+    // a Rexx number with a decimal point and/or an exponent
+    const char *e = p;
+    while (e < end && *e != 'e' && *e != 'E') e++;
+    const char *dot = (const char *)memchr(p, '.', e - p);
+    bool mantissa;
+    if (dot != NULL) {
+        bool intPart = dot == p || isDigits(p, dot);
+        bool fracPart = dot + 1 == e || isDigits(dot + 1, e);
+        mantissa = intPart && fracPart && (e - p) > 1;      // not a lone "."
+    }
+    else mantissa = isDigits(p, e);
+    if (!mantissa) return NOT_NUMBER;
+    if (e == end) return dot != NULL ? FLOAT_NUMBER : NOT_NUMBER;   // "007": not a number
+    const char *x = e + 1;
+    if (x < end && (*x == '+' || *x == '-')) x++;
+    return isDigits(x, end) ? FLOAT_NUMBER : NOT_NUMBER;
+}
+
+// Push a Rexx string by that rule.  An integer that does not fit in 64 bits
+// stays a string (a float would lose digits silently).
+static void pushRexxString(lua_State *L, const char *d, size_t n)
+{
+    std::string s(d, n);                    // NUL-terminated, for strtoll/strtod
+    switch (numberKind(d, n)) {
+    case INTEGER_NUMBER: {
+        errno = 0;
+        long long v = strtoll(s.c_str(), NULL, 10);
+        if (errno == 0) { lua_pushinteger(L, (lua_Integer)v); return; }
+        break;
+    }
+    case FLOAT_NUMBER:
+        lua_pushnumber(L, (lua_Number)strtod(s.c_str(), NULL));
+        return;
+    default:
+        break;
+    }
+    lua_pushlstring(L, d, n);
+}
+
+// A Lua float as Rexx sees it: the shortest of %.15g, %.16g, %.17g that gives
+// the same double back, with ".0" when it looks like an integer (as Python's
+// repr).  Lua's own %.14g loses digits: 0.1 + 0.2 would be "0.3".
+static std::string formatFloat(double d)
+{
+    if (std::isnan(d)) return "nan";
+    if (std::isinf(d)) return d > 0 ? "inf" : "-inf";
+    char buf[40];
+    for (int prec = 15; prec <= 17; prec++) {
+        snprintf(buf, sizeof buf, "%.*g", prec, d);
+        if (strtod(buf, NULL) == d) break;
+    }
+    std::string r(buf);
+    if (r.find_first_of(".eE") == std::string::npos) r += ".0";
+    return r;
+}
+
 static RexxObjectPtr toRexx(State *st, int idx);
-static bool pushValue(State *st, RexxObjectPtr v, bool asKey = false);
+static bool pushValue(State *st, RexxObjectPtr v);
 
 static int msgh(lua_State *L)
 {
@@ -422,13 +487,13 @@ static RexxObjectPtr toRexx(State *st, int idx)
     switch (lua_type(L, idx)) {
     case LUA_TNIL:     return c->Nil();
     case LUA_TBOOLEAN: return lua_toboolean(L, idx) ? c->True() : c->False();
-    case LUA_TNUMBER: {                                 // Lua's own format, on a copy
-        lua_pushvalue(L, idx);
-        size_t len;
-        const char *s = lua_tolstring(L, -1, &len);
-        RexxObjectPtr r = c->NewString(s, len);
-        lua_pop(L, 1);
-        return r;
+    case LUA_TNUMBER: {
+        if (lua_isinteger(L, idx)) {
+            char buf[32];
+            snprintf(buf, sizeof buf, "%lld", (long long)lua_tointeger(L, idx));
+            return c->String(buf);
+        }
+        return c->String(formatFloat((double)lua_tonumber(L, idx)).c_str());
     }
     case LUA_TSTRING: {
         size_t len;
@@ -456,7 +521,7 @@ static Proxy *proxyOf(RexxThreadContext *c, RexxObjectPtr v)
 /* Push a Rexx value.  False if it cannot go to this state (a .LuaObject of
  * another state, or of a closed one): then the error message is pushed
  * instead, for lua_error or for raiseTop.                                  */
-static bool pushValue(State *st, RexxObjectPtr v, bool asKey)
+static bool pushValue(State *st, RexxObjectPtr v)
 {
     RexxThreadContext *c = st->tc;
     lua_State *L = st->L;
@@ -486,10 +551,7 @@ static bool pushValue(State *st, RexxObjectPtr v, bool asKey)
     }
     if (c->IsString(v) || c->IsOfType(v, "STRING")) {   // Integers from literals too
         RexxStringObject s = c->ObjectToString(v);
-        const char *d = c->StringData(s);
-        size_t n = c->StringLength(s);
-        if (asKey && isCanonicalInteger(d, n)) lua_pushinteger(L, (lua_Integer)strtoll(d, NULL, 10));
-        else lua_pushlstring(L, d, n);
+        pushRexxString(L, c->StringData(s), c->StringLength(s));
         return true;
     }
     // A Routine: a real Lua function. Any other object: a userdata Lua can
@@ -634,14 +696,52 @@ RexxMethod2(RexxObjectPtr, LuaState_Require, CSTRING, name, CSELF, self)
     return firstResult(en.st, pcallAll(en.st, 1));
 }
 
-// ~true, ~false
-RexxMethod2(RexxObjectPtr, LuaState_Boolean, logical_t, b, CSELF, self)
+// ~box(type, value): a Lua value of the given type, as a .LuaObject, when
+// the rule of *Values* does not give the one needed (docs/design.md, *Boxing*)
+RexxMethod3(RexxObjectPtr, LuaState_Box, CSTRING, type, RexxObjectPtr, value, CSELF, self)
 {
     Entry en(context, (State *)self, context->GetSelf());
     if (!en.ok) return NULLOBJECT;
-    lua_pushboolean(en.st->L, b ? 1 : 0);
-    RexxObjectPtr r = newProxy(en.st, -1);
-    lua_pop(en.st->L, 1);
+    State *st = en.st; lua_State *L = st->L;
+    RexxThreadContext *c = context->threadContext;
+    std::string t(type);
+    for (auto &ch : t) ch = (char)tolower((unsigned char)ch);
+    std::string bad;
+    if (t == "boolean") {
+        logical_t b;
+        if (c->ObjectToLogical(value, &b)) lua_pushboolean(L, b ? 1 : 0);
+        else bad = "a boolean must be 1 or 0";
+    }
+    else if (t == "integer") {
+        int64_t i;
+        if (c->ObjectToInt64(value, &i)) lua_pushinteger(L, (lua_Integer)i);
+        else bad = "an integer must be a whole number that fits in 64 bits";
+    }
+    else if (t == "float") {
+        double d;
+        if (c->ObjectToDouble(value, &d)) lua_pushnumber(L, (lua_Number)d);
+        else bad = "a float must be a number";
+    }
+    else if (t == "string") {
+        RexxStringObject s = c->ObjectToString(value);
+        lua_pushlstring(L, c->StringData(s), c->StringLength(s));
+    }
+    else if (t == "reference") {
+        if (proxyOf(c, value) != NULL || c->IsString(value) || c->IsOfType(value, "STRING"))
+            bad = "only a Rexx object that is not a string goes by reference";
+        else pushBox(st, value);
+    }
+    else bad = "the type must be boolean, integer, float, string or reference, not \"" + std::string(type) + "\"";
+    if (!bad.empty()) {
+        if (bad.compare(0, 8, "the type") != 0) {
+            RexxStringObject s = c->ObjectToString(value);
+            bad += ", not \"" + std::string(c->StringData(s), c->StringLength(s)) + "\"";
+        }
+        raise(c, "Lua error: box: " + bad);
+        return NULLOBJECT;
+    }
+    RexxObjectPtr r = newProxy(st, -1);
+    lua_pop(L, 1);
     return r;
 }
 
@@ -672,7 +772,7 @@ RexxMethod2(RexxObjectPtr, LuaState_Table, OPTIONAL_RexxObjectPtr, src, CSELF, s
         lua_newtable(L);
         RexxObjectPtr sup = c->SendMessage0(src, "SUPPLIER");
         while (c->SupplierAvailable((RexxSupplierObject)sup)) {
-            if (!pushValue(st, c->SupplierIndex((RexxSupplierObject)sup), true) ||
+            if (!pushValue(st, c->SupplierIndex((RexxSupplierObject)sup)) ||
                 !pushValue(st, c->SupplierItem((RexxSupplierObject)sup))) {
                 raiseTop(st); lua_settop(L, top); return NULLOBJECT;
             }
@@ -828,13 +928,13 @@ RexxMethod2(RexxObjectPtr, LuaObj_Get, CSTRING, name, CSELF, self)
     return r;
 }
 
-// o[k], o[k]=v: raw Lua indexing (keys: canonical integers become integers)
+// o[k], o[k]=v: Lua indexing (keys follow the same rule as values)
 RexxMethod2(RexxObjectPtr, LuaObj_At, RexxObjectPtr, key, CSELF, self)
 {
     PROXY_ENTRY
     int top = lua_gettop(L);
     pushSelf(px);
-    if (!pushValue(st, key, true)) { raiseTop(st); lua_settop(L, top); return NULLOBJECT; }
+    if (!pushValue(st, key)) { raiseTop(st); lua_settop(L, top); return NULLOBJECT; }
     lua_gettable(L, -2);
     RexxObjectPtr r = toRexx(st, -1);
     lua_settop(L, top);
@@ -846,7 +946,7 @@ RexxMethod3(RexxObjectPtr, LuaObj_Put, RexxObjectPtr, value, RexxObjectPtr, key,
     PROXY_ENTRY
     int top = lua_gettop(L);
     pushSelf(px);
-    if (!pushValue(st, key, true) || !pushValue(st, value)) { raiseTop(st); lua_settop(L, top); return NULLOBJECT; }
+    if (!pushValue(st, key) || !pushValue(st, value)) { raiseTop(st); lua_settop(L, top); return NULLOBJECT; }
     lua_settable(L, -3);
     lua_settop(L, top);
     return NULLOBJECT;
@@ -900,7 +1000,7 @@ RexxMethodEntry rexxlua_methods[] = {
     REXX_METHOD(LuaState_Eval,      LuaState_Eval),
     REXX_METHOD(LuaState_Global,    LuaState_Global),
     REXX_METHOD(LuaState_Require,   LuaState_Require),
-    REXX_METHOD(LuaState_Boolean,   LuaState_Boolean),
+    REXX_METHOD(LuaState_Box,       LuaState_Box),
     REXX_METHOD(LuaState_Table,     LuaState_Table),
     REXX_METHOD(LuaState_Predicate, LuaState_Predicate),
     REXX_METHOD(LuaState_Stats,     LuaState_Stats),

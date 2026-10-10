@@ -120,6 +120,34 @@ global. `tests/rexx/cmodule.rex` requires such a module, built by
 
 ## Values
 
+Rexx → Lua, with **the same rule as ooRexx/Python** (and the same code, its
+`numberKind`), so that there is only one rule to remember. A Rexx string
+becomes:
+
+- a canonical integer (`0`, `42`, `-7`: no leading zeros, blanks or `+`)
+  that fits in 64 bits → a Lua integer;
+- any other valid Rexx number with a decimal point or an exponent (`3.14`,
+  `-0.5`, `1E3`, `.5`) → a Lua float;
+- anything else (`"007"`, `" 5"`, `"+5"`, text, and integers that do not
+  fit in 64 bits, which a float would round silently) → a Lua string.
+
+Lua converts strings to numbers in arithmetic only: `"10" == 10` is false,
+and `"10" < 20` and `math.max("1", 2)` fail. With strings always, a Lua
+function that compares a number it got from Rexx would fail. The cost is the
+same as in ooRexx/Python: a string that looks like a number arrives as a
+number. `..` and `tostring` usually give it back unchanged; when they do not,
+`box` forces a type (see *Boxing*). The keys of `o[k]` and `o[k] = v`
+follow the same rule, so `t[1]` from Rexx is `t[1]` in Lua.
+
+| Rexx | Lua |
+|---|---|
+| `.nil` | `nil` |
+| `.LuaObject` | its value (of the same state) |
+| Array | a new sequence table (a copy), each item by this rule |
+| a string (literal numbers included) | integer, float or string, by the rule above |
+| Routine | a real Lua function (a C closure) |
+| any other object | a `RexxObject` userdata: `obj:name(...)` sends a message, `obj(...)` sends `CALL` |
+
 Lua → Rexx:
 
 | Lua | Rexx |
@@ -127,24 +155,40 @@ Lua → Rexx:
 | `nil` | `.nil` |
 | boolean | `1` / `0` |
 | integer | its decimal string |
-| float | Lua's own `tostring` (`2^10` → `1024.0`) |
+| float | the shortest of `%.15g`, `%.16g`, `%.17g` that gives back the same number, with `.0` if it looks like an integer |
 | string | a string, bytes unchanged |
 | a Rexx object passed in earlier | that same object |
 | table, function, userdata, thread | a `.LuaObject` proxy |
 
-Rexx → Lua:
+Floats are written as Python's `repr` writes them: `2^10` is `1024.0`,
+`0.1 + 0.2` is `0.30000000000000004`. Lua's own `tostring` (`%.14g`) would
+lose digits (`0.3`), and a float that went from Lua to Rexx and back would no
+longer be the same number. `inf`, `-inf` and `nan` come as those strings,
+which are not Rexx numbers.
 
-| Rexx | Lua |
-|---|---|
-| `.nil` | `nil` |
-| `.LuaObject` | its value (of the same state) |
-| Array | a new sequence table (a copy) |
-| String (literal numbers included) | a string (Lua converts strings to numbers in arithmetic) |
-| Routine | a real Lua function (a C closure) |
-| any other object | a `RexxObject` userdata: `obj:name(...)` sends a message, `obj(...)` sends `CALL` |
+## Boxing
 
-The keys of `o[k]` and `o[k] = v` follow the canonical-integer rule instead:
-`"2"` becomes the integer `2`, so that `t[2]` from Rexx is `t[2]` in Lua.
+`s~box(type, value)` makes a Lua value of a given type, as a `.LuaObject`,
+when the rule of *Values* does not give the type needed:
+
+| type | value | Lua |
+|---|---|---|
+| `"boolean"` | `1` or `0` | `true` / `false` |
+| `"integer"` | a whole number that fits in 64 bits (`"007"` too) | an integer |
+| `"float"` | any Rexx number | a float |
+| `"string"` | anything | its string value |
+| `"reference"` | a Rexx object that is not a string | the object by reference (an Array that Lua can change) |
+
+Rexx's `1` and `0` are both true in Lua, and `.true` is just the string
+`"1"`, so booleans cannot be converted automatically: `s~box("boolean",
+flag)`, or the shorthands `s~true` and `s~false`. For the results of Rexx
+callbacks that Lua uses as conditions (`table.sort`'s comparator),
+`s~predicate(routine)` makes a Lua function that turns the routine's `1` or
+`0` into a boolean. The results of other callbacks are not converted: a
+routine that returns `0` as a number must not become `false`.
+
+The argument order is that of ooRexx/Python's `.py~box` (and BSF4ooRexx's
+`box`).
 
 ## Names
 
@@ -170,7 +214,7 @@ so it can come back to Rexx, nested.
 
 ## Decided, not yet implemented
 
-These replace parts of *Values* and *Calls* above.
+Each of these changes or extends the sections above.
 
 1. **The colon problem.** The choice between `o:name(...)` and
    `o.name(...)` will depend on the function, not on the object. A Lua
@@ -188,34 +232,18 @@ These replace parts of *Values* and *Calls* above.
    new `~all(name, args...)` (which follows the colon rule) return an Array
    with one item per result, `nil` as `.nil` in its place: no holes, `items`
    is the number of results, and `return nil` differs from `return`.
-4. **Booleans.** Lua → Rexx stays `1` / `0`. Rexx → Lua cannot be automatic
-   (`.true` is the string `"1"`): `.lua~box(type, value)`, as
-   ooRexx/Python's `.py~box`, with the types `"boolean"` (the value must be
-   1 or 0), `"integer"`, `"float"`, `"string"` and `"reference"` (an Array
-   by reference). `~true`, `~false` and `~predicate(routine)` stay.
-5. **Rexx objects in Lua.** `obj.name = v` sends `NAME=`; keys that are
+4. **Rexx objects in Lua.** `obj.name = v` sends `NAME=`; keys that are
    strings are messages, keys of any other type use Rexx's `[]` (`a[1]`,
    `ipairs(a)` on a Rexx Array); `#obj` sends `items`; `pairs(obj)` goes
    through its `supplier`. Only Arrays are copied, as in ooRexx/Python;
    `.lua~table(d)` copies a Directory.
-6. **Rexx → Lua numbers: ooRexx/Python's rule**, for values and keys alike
-   (so the special rule for keys goes): a canonical integer that fits in 64
-   bits → an integer; any other valid Rexx number with a decimal point or an
-   exponent → a float; anything else → a string. Lua converts strings to
-   numbers in arithmetic only: `"10" == 10` is false, and `"10" < 20` and
-   `math.max("1", 2)` fail.
-7. **Floats → Rexx: the shortest form that gives back the same number**
-   (`%.15g`, `%.16g`, `%.17g`), with `.0` if it looks like an integer, as
-   Python's `repr`. Lua 5.4's own `%.14g` loses precision (`0.1 + 0.2` shows
-   as `0.3`). `inf`, `-inf` and `nan` come as those strings, which are not
-   Rexx numbers.
-8. **Operators on proxies**, as in ooRexx/Python: Lua's arithmetic (with
+5. **Operators on proxies**, as in ooRexx/Python: Lua's arithmetic (with
    metamethods); `=` is Lua's `==`, `==` is `rawequal`; `hashCode`
    consistent with `=`.
-9. **Lua versions:** 5.3, 5.4 and 5.5 from the same source (5.3 is needed
+6. **Lua versions:** 5.3, 5.4 and 5.5 from the same source (5.3 is needed
    for LuaTeX); 5.4 by default. Not LuaJIT (Lua 5.1's API, no integers).
-10. **Coroutines** are used like any function. A `yield` across a callback
-    into Rexx fails with Lua's own "attempt to yield across a C-call
-    boundary": to be documented, not worked around.
-11. **Platforms:** Linux first; macOS and Windows, with CI as in the sister
-    bridges, once the prototype is stable.
+7. **Coroutines** are used like any function. A `yield` across a callback
+   into Rexx fails with Lua's own "attempt to yield across a C-call
+   boundary": to be documented, not worked around.
+8. **Platforms:** Linux first; macOS and Windows, with CI as in the sister
+   bridges, once the prototype is stable.

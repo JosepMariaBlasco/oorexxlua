@@ -1,0 +1,19 @@
+integer integer integer float float float
+string string string string string
+string
+1 0
+7
+one
+3 3.0 1024.0
+0.30000000000000004
+0.3333333333333333
+1e+100 -0.0
+inf -inf nan
+1
+string float integer
+false
+false
+x,y
+x,y
+Error: Lua error: box: an integer must be a whole number that fits in 64 bits, not "1.5".
+Error: Lua error: box: a boolean must be 1 or 0, not "yes".

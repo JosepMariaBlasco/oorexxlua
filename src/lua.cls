@@ -9,6 +9,8 @@
  *     s~require(name)          require(name)
  *     s~table([coll])          a new table (from an Array, Directory, StringTable)
  *     s~predicate(routine)     a Lua function whose Rexx 1/0 result is a boolean
+ *     s~box(type, value)       value as a Lua boolean, integer, float or string,
+ *                              or (type "reference") a Rexx object by reference
  *     s~true, s~false          Lua's booleans (Rexx 1/0 are both true in Lua)
  *     s~close                  lua_close: frees everything; its objects are dead
  *     s~isClosed
@@ -20,7 +22,7 @@
  *     o~get(name)              the field, never called
  *     o~name = v               set field
  *     o~call(args...)          o(...)           o~callAll(args...)  all results
- *     o[k], o[k] = v           raw indexing ("1" -> 1)
+ *     o[k], o[k] = v           indexing (k converted as any value: "1" -> 1)
  *     do x over o              1..#o
  *     o~luaType                type(o)
  *     o~"LUA.STATE"            its .LuaState
@@ -51,9 +53,9 @@
 ::method require unguarded      external "LIBRARY rexxlua LuaState_Require"
 ::method table unguarded        external "LIBRARY rexxlua LuaState_Table"
 ::method predicate unguarded    external "LIBRARY rexxlua LuaState_Predicate"
-::method true unguarded         ; return self~"LUA.BOOLEAN"(1)
-::method false unguarded        ; return self~"LUA.BOOLEAN"(0)
-::method "LUA.BOOLEAN" private unguarded external "LIBRARY rexxlua LuaState_Boolean"
+::method box unguarded          external "LIBRARY rexxlua LuaState_Box"
+::method true unguarded         ; return self~box("boolean", 1)
+::method false unguarded        ; return self~box("boolean", 0)
 ::method "LUA.STATS" unguarded  external "LIBRARY rexxlua LuaState_Stats"   -- for the tests
 
 ::class LuaObject public

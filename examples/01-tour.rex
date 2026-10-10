@@ -12,7 +12,7 @@ string = .lua~global("string")
 say string~rep("ab", 3, "-")                       -- ab-ab-ab
 say string~upper("lua")                            -- LUA
 math = .lua~global("math")
-say math~pi math~maxinteger                        -- 3.1415926535898 9223372036854775807
+say math~pi math~maxinteger                        -- 3.141592653589793 9223372036854775807
 
 -- 3. Several results
 find = string~func("find", "hello world", "o w")   -- the first one only
