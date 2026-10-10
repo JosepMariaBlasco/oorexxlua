@@ -26,8 +26,10 @@ TESTS=${TESTS:-$(cd "$HERE/rexx" && ls ./*.testGroup | sed 's|^\./||'; cd "$HERE
 CMOD=$BUILD/test-cmodules
 V=${LUA_VERSION:-5.4}
 "$HERE/../scripts/build-cmodule.sh" "$CMOD" || { echo "run.sh: cannot build tests/cmodule/hello.c" >&2; exit 2; }
-# the Lua module first, then the test C module
-export LUA_CPATH="$(native_path "$BUILD")/?.$MODEXT;$(native_path "$CMOD")/?.$MODEXT;;"
+# the Lua module first (ORXLUA_MODDIR: another build of it, such as
+# build.sh's texlive/ on Windows), then the test C module
+MODDIR=${ORXLUA_MODDIR:-$BUILD}
+export LUA_CPATH="$(native_path "$MODDIR")/?.$MODEXT;$(native_path "$CMOD")/?.$MODEXT;;"
 LUA_EXE=${LUA_EXE:-$(lua_exe "$V")}
 export ORXLUA_LUA=$LUA_EXE                                  # for Examples.testGroup's .lua examples
 export ORXLUA_HARNESS=$(native_path "$HERE/lua/harness.lua") ORXLUA_TESTS=$(native_path "$HERE/lua")

@@ -7,21 +7,35 @@ case-insensitive names, and values converted only when they are simple. The
 code comments refer to the sections of this document by name (for example
 "docs/design.md, *Lifetime*").
 
-The bridge is a prototype: every design question the first spike raised has
-been decided and implemented. *Not yet done* lists what is left.
+The bridge is a prototype: every design question the first spikes raised
+has been decided and implemented. *Not yet done* lists what is left.
 
 ## Shape
 
-Two directions, of which the first exists:
+Two directions, which nest freely (Rexx calls Lua, which calls Rexx, which
+calls Lua...):
 
 - **ooRexx → Lua** (Lua embedded in ooRexx): an ooRexx native package,
   `librexxlua` (`.so`, `.dylib`; `rexxlua.dll` on Windows) with
   `lua.cls`, gives Rexx `.lua`, `.LuaState` and
   `.LuaObject`.
-- **Lua → ooRexx** (ooRexx inside Lua): a Lua C module, `require "oorexx"`,
-  that creates ooRexx interpreter instances and runs Rexx code. A spike
-  exists outside this repository. It runs inside LuaTeX (Lua 5.3, with
-  `--shell-escape`) as well as in a standalone Lua.
+- **Lua → ooRexx** (ooRexx inside Lua): a Lua C module, `require "oorexx"`
+  (`oorexx.so`, `oorexx.dll`), that creates ooRexx interpreter instances and
+  runs Rexx code, in any Lua 5.3, 5.4 or 5.5 and in LuaTeX (with
+  `--shell-escape`). See *Lua → ooRexx*.
+
+**One source, two binaries.** Both are `src/rexxlua.cpp`. `librexxlua`
+brings its Lua (linked in, or a DLL on Windows: *C modules*). The Lua module
+must not: it must use the Lua that loads it, so on Linux and macOS it is the
+same source built again without any Lua (its `lua_*` come from the host, as
+for every Lua C module); on Windows, where a module is linked against the
+Lua DLL by name anyway, it is a copy of `rexxlua.dll`. When the module makes
+an interpreter instance, it registers itself with it as the library
+`rexxlua` (`REGISTER_LIBRARY`), so `lua.cls`, which requires `"rexxlua"
+LIBRARY`, works unchanged and no second copy of the code (or of its global
+state) is ever loaded: one bridge, both directions. (ooRexx/Python needs two
+libraries, a loader and the bridge, for the opposite reason: there the
+bridge must not bring its Python.)
 
 Only public APIs are used on both sides: Lua's C API and ooRexx's native API
 (`oorexxapi.h`). Neither interpreter needs any change.
@@ -39,8 +53,8 @@ s~close
 ```
 
 - `.lua` is the default state, made when `lua.cls` is loaded. When Rexx
-  runs inside a Lua host (LuaTeX), `.lua` will be the host's `lua_State`,
-  adopted instead of made, and nothing else will change.
+  runs inside a Lua host (the Lua module), `.lua` is the host's `lua_State`,
+  adopted instead of made, and nothing else changes (*Lua → ooRexx*).
 - Every `.LuaObject` belongs to one state and knows it (`o~"LUA.STATE"`).
   Passing it to another state is an error ("a Lua object of another
   LuaState"), not a crash.
@@ -324,6 +338,19 @@ error is a Rexx condition like any other. Those functions use only Lua's API,
 with no C++ objects: a Lua error is a `longjmp`, which would not destroy
 them. Only running out of memory while pushing a value can still panic.
 
+**No C++ object where a Lua error is raised.** The bridge's own Lua C
+functions (the callbacks into Rexx, the Lua module's functions) raise Lua
+errors too, with `lua_error`. On Linux and macOS a `longjmp` destroys
+nothing; MSVC's unwinds the stack as an exception does, and with `/EHsc`,
+which assumes that C functions such as `lua_error` never throw, its record
+of which objects are alive is not updated around such calls: it destroyed
+again a `std::string` of a scope already left (heap corruption on Windows,
+found with `cdb` and page heap). So no C++ object ever lives in the frame of
+a function that raises: the module's functions keep theirs in `NOINLINE`
+`*_body` functions, and the helpers that make C++ objects (`toRexx`,
+`pushValue`, `pushRexxCondition`, `drain`...) are `NOINLINE`, so that the
+compiler cannot move their objects into such a frame.
+
 Lua guarantees only about 20 free slots on its stack, and does not check
 them in release builds: the bridge makes room (`lua_checkstack`) before
 pushing arguments and at every level of a nested Array, so 300 arguments or
@@ -374,6 +401,95 @@ called (Lua cannot suspend the C call to Rexx that is in between): that fails
 with Lua's own "attempt to yield across a C-call boundary", which comes back
 as a Rexx condition. It is not worked around.
 
+## Lua → ooRexx
+
+```lua
+local rexx = require "oorexx"
+rexx.eval("6 * 7")                          --> 42 (arg(1), arg(2)... are extra arguments)
+rexx.run("prog.rex", "a", "b")              --> CALL a program: its result
+local f = rexx.routine("use arg a, b; return a * b")
+f(6, 7)                                     --> 42: a Rexx Routine is a Lua function
+local r = rexx.interpreter{rexx_path = {"/my/classes"}, extensions = ".rex",
+                           initial_address = "MINE", load_libraries = "rxmath"}
+r.eval("address()"); r.close()              --> another instance, with options
+```
+
+The API is ooRexx/Python's `oorexx` module, with one difference that Lua
+makes natural: the module's own `eval`, `run` and `routine` work on a
+**default instance**, made at their first use, so that LuaTeX documents need
+no setup (`\directlua{rexx = require "oorexx"}`). `interpreter{...}` makes
+others, with ooRexx's options (`EXTERNAL_CALL_PATH`, `..._EXTENSIONS`,
+`INITIAL_ADDRESS_ENVIRONMENT`, `LOAD_REQUIRED_LIBRARY`), as a table with
+`eval`, `run`, `routine` and `close` (dots, not colons: like the module).
+Each instance has `lua.cls` loaded, found next to the module (the call path
+also gets the module's directory), and the code of `eval` and `routine` sees
+its public classes (`.LuaState`, `.LuaObject`), as if it required it.
+
+Values cross by the rules of *Values* and *Rexx objects in Lua*, which were
+made for both directions: results and arguments that Rexx gets from Lua are
+`.LuaObject`s (tables, functions) or plain strings, and what Lua gets from
+Rexx follows the rule that loses nothing (`rexx.eval("format(3.1, , 2)")` is
+the string `"3.10"`), with Arrays as tables and other objects as userdata.
+Rexx conditions are Lua errors ("Rexx error 41.1: ..."); Lua errors inside
+them come back nested, as from Rexx.
+
+**The host's state.** In Rexx, `.lua` is the `lua_State` of the Lua that
+loaded the module (its main thread), adopted, not made: Rexx sees the host's
+globals, and Lua and Rexx share every value. Everything else in *States*
+holds, with three differences:
+
+- The host closes it, not Rexx: `.lua~close` is an error. When the host
+  closes its state (`lua_close`: `lua` does at the end of a script, and
+  `os.exit(code, true)` anywhere), a sentinel the module put in the
+  registry when it adopted the state (finalized last, after every Rexx
+  object's userdata) marks the state closed, so that Rexx's proxies of its
+  values give "the LuaState is closed", and terminates the module's
+  instances (their Rexx uninits run then). LuaTeX does not close its state,
+  and nothing needs to happen then.
+- Only the host's thread may use it. The host runs Lua whenever it likes,
+  outside any lock of the bridge, so another Rexx thread (`START`, `REPLY`,
+  a `Message~start`) that used `.lua` would corrupt it. That is an error
+  ("the LuaState of the Lua that runs ooRexx can only be used from that
+  Lua's thread"), not a wait, which would deadlock as soon as the host's
+  thread waits for that one. Other threads use states of their own
+  (`.LuaState~new`), as *Threads* recommends anyway. The graveyard leaves the
+  host's proxies to its thread.
+- The `State` of a `lua_State` is in its registry (a light userdata under a
+  key of the bridge), for every state: Lua's extra space, where it was,
+  belongs to the host.
+
+**Calls from the host.** Lua runs outside any Rexx code here, and calls into
+Rexx when it likes: the module's functions, and also any Rexx object or
+routine it holds (`d:put(v, k)`, `f(6, 7)`). Each such call attaches the
+thread to an instance (`AttachThread`; the host's thread made the instances
+and stays attached to them, as ooRexx bug #2107 requires) and detaches it
+after, which frees the local references the call made. A Rexx object's
+userdata that Lua finalizes outside any Rexx code cannot let go of its
+object then (no thread context): it is queued, and let go at the next entry
+into Rexx.
+
+**Nesting.** In a state the bridge makes (`.LuaState~new`, and `.lua` when
+Rexx started), `package.preload.oorexx` gives the module of the instance
+whose Rexx code is running: Lua code that does `require "oorexx"` there
+gets that instance, with no new instance and no second copy of the library.
+It has no `interpreter`.
+
+**LuaTeX.** `lualatex --shell-escape` (LuaTeX loads no C module without it),
+with the module on `package.cpath`: `\directlua{rexx = require "oorexx"}`,
+and then `tex.sprint(rexx.eval(...))`, or Rexx code that drives TeX itself
+through `.lua~global("tex")`. LuaTeX is Lua 5.3. On Linux and macOS, TeX
+Live's `luatex` exports the `lua_*` symbols (checked: 115 on Linux, 168 in
+both macOS architectures), so the module built against Lua 5.3 works. On
+Windows LuaTeX's Lua is a DLL of its own, `lua53w64.dll`, and a module's
+imports are bound by DLL name: `build.sh` also makes `texlive/oorexx.dll`,
+the same module linked against an import library for that name (made from
+the exports of `lua53.dll`: the same Lua 5.3 API). The tests of the module
+(`tests/lua`) also run in TeX Live's `texlua` (`scripts/setup-luatex.sh`
+fetches it from CTAN), on the three platforms.
+
+`tests/lua/Module.test.lua` and `tests/lua/Lifetime.test.lua` check all of
+this, with any standalone Lua 5.3, 5.4 or 5.5 and with `texlua`.
+
 ## Lua versions
 
 The same source builds with Lua 5.3, 5.4 and 5.5 (`LUA_VERSION` in
@@ -402,6 +518,9 @@ Linux x64, macOS arm64 and x64, and Windows x64, each with Lua 5.3, 5.4 and
 measure memory on each platform (`/proc` on Linux, `ps` on macOS, the
 working set on Windows).
 
+The Lua 5.3 jobs also run the tests of the Lua module in TeX Live's own
+LuaTeX (*Lua → ooRexx*).
+
 **Packages.** Each of those twelve builds is also a zip of binaries
 (`scripts/package.sh`), and a tag `vX.Y.Z` makes a release with them. A
 package carries its Lua, so that its users need none: linked statically into
@@ -409,16 +528,19 @@ package carries its Lua, so that its users need none: linked statically into
 since the CI's first one uses the distribution's shared `liblua` for 5.3 and
 5.4; `package.sh` refuses a build that needs a `liblua`), and as
 `luaXY.dll` next to `rexxlua.dll` on Windows, where Lua's C modules need it
-(*C modules*). The package's `check.rex` runs from outside the unzipped
-folder, finding everything as the package's README says, and before zipping
-`package.sh` also has it load a C module. One package per Lua, not one for
+(*C modules*). Each also carries the Lua module (`oorexx.so`, `oorexx.dll`,
+and on Windows with Lua 5.3 `texlive/` too). The package's `check.rex` runs
+from outside the unzipped folder, finding everything as the package's
+README says, and before zipping `package.sh` also has it load a C module;
+`check.lua` runs the Lua module from a standalone Lua the same way. One package per Lua, not one for
 all three: the bridge is compiled against one Lua, and a C module must be
 built for that same version. Lua's licence (MIT) goes with each package,
 taken from the `lua.h` of the Lua inside.
 
 ## Not yet done
 
-- **Lua → ooRexx** (`require "oorexx"`), and with it the adoption of a host's
-  `lua_State` (LuaTeX) as `.lua` (see *States*).
+- `ADDRESS LUA`: an `ADDRESS` environment that runs its commands as Lua
+  code (`address lua 'tex.sprint("hello")'` in LuaLaTeX), as ooRexx/Python
+  has Python callables as environments. Decided for later.
 - A `lua_State` built with real `lua_lock`, so that threads do not wait for
   each other during callbacks (see *Threads*), if a real need appears.

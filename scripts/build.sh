@@ -10,6 +10,9 @@
 #                   Lua that loads it (on Windows, oorexx.dll: a copy of
 #                   rexxlua.dll, since there every Lua module is linked
 #                   against the Lua DLL anyway)
+#   texlive/        on Windows with Lua 5.3, the module for TeX Live's LuaTeX,
+#                   whose Lua is lua53w64.dll: oorexx.dll linked against it,
+#                   and lua.cls
 # ooRexx: the installation of the `rexx` on the PATH (OOREXX_HOME to choose
 # another), which must have include/oorexxapi.h and lib/librexx.* (rexx.lib
 # on Windows); an installation outside /usr and /usr/local is also recorded
@@ -55,6 +58,22 @@ if [ "$OS" = Windows ]; then
   rm -f "$BUILD"/*.exp "$BUILD"/*.lib
   cp "$LUADIR/$LUALIB.dll" "$BUILD/"
   cp "$BUILD/$PKG" "$BUILD/$MOD"
+  if [ "$V" = 5.3 ]; then
+    # TeX Live's LuaTeX: its Lua is lua53w64.dll (Lua 5.3, the same API), and
+    # Windows binds a DLL's imports by the DLL's name.  An import library for
+    # that name, made from the exports of our lua53.dll
+    { echo "LIBRARY lua53w64.dll"; echo "EXPORTS"
+      dumpbin -nologo -exports "$(W "$LUADIR/$LUALIB.dll")" | tr -d '\r' |
+        awk '$1 ~ /^[0-9]+$/ && $4 ~ /^lua/ { print "    " $4 }'
+    } > "$OBJ/lua53w64.def"
+    quiet lib -nologo -def:"$(W "$OBJ/lua53w64.def")" -machine:x64 -out:"$(W "$OBJ/lua53w64.lib")"
+    mkdir -p "$BUILD/texlive"
+    quiet "$CXX" -nologo -LD -EHsc -O2 -MD -Zi -std:c++17 -W3 -Fo"$(W "$OBJ")\\" -Fd"$(W "$OBJ")\\" -DLUA_BUILD_AS_DLL \
+        -I"$(W "$LUADIR")" -I"$(W "$OOREXX_HOME/include")" "$(W "$SRC/rexxlua.cpp")" -Fe"$(W "$BUILD/texlive/$MOD")" \
+        -link -DEBUG -OPT:REF -OPT:ICF -LIBPATH:"$(W "$OOREXX_HOME/lib")" rexx.lib rexxapi.lib "$(W "$OBJ/lua53w64.lib")"
+    rm -f "$BUILD"/texlive/*.exp "$BUILD"/texlive/*.lib
+    cp "$SRC/lua.cls" "$BUILD/texlive/"
+  fi
 else
   if [ -z "${LUA_CFLAGS:-}${LUA_LIBS:-}" ]; then
     if [ "$OS" = Linux ] && [ "${LUA_STATIC:-}" != 1 ]; then

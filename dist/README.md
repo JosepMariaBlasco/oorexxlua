@@ -1,7 +1,9 @@
 # ooRexx/Lua — binaries
 
 Lua embedded in ooRexx: ooRexx programs run Lua code, use Lua's libraries and
-modules as objects, and pass Rexx objects and routines to Lua.
+modules as objects, and pass Rexx objects and routines to Lua. And the other
+way round: Lua programs (LuaTeX's too) run Rexx code with
+`require "oorexx"`.
 Source, documentation and design: https://github.com/JosepMariaBlasco/oorexxlua
 
 **Status: prototype.** Parts of the API may still change.
@@ -64,6 +66,42 @@ say string~rep("ab", 3, "-")                -- ab-ab-ab
 
 The `examples` folder has short examples of every feature, each with its
 exact output (`NAME.out`). The API is in the header of `lua.cls`.
+
+## Rexx from Lua: the Lua module
+
+`oorexx.so` (`oorexx.dll` on Windows) is a Lua C module for the Lua version
+in the zip's name (5.3 for LuaTeX): `require "oorexx"`.
+
+```lua
+local rexx = require "oorexx"
+print(rexx.eval("6 * 7"))                   -- 42
+local f = rexx.routine("use arg a, b; return a * b")
+print(f(6, 7))                              -- 42
+```
+
+Lua finds it through `LUA_CPATH` (`lua.cls` must stay next to it):
+`export LUA_CPATH="/path/to/oorexxlua/?.so;;"` (on Windows,
+`set LUA_CPATH=C:\path\to\oorexxlua\?.dll;;`). It needs ooRexx's
+libraries (`librexx`, `librexxapi`; `rexx.dll`, `rexxapi.dll`) where the
+system finds them: on Windows, ooRexx's `bin` on the `PATH`; on Linux and
+macOS, an ooRexx installed in `/usr/local` is found, and a portable one
+needs its `lib` directory on `LD_LIBRARY_PATH` (`DYLD_LIBRARY_PATH`).
+`lua check.lua` checks it (it ends with `ooRexx/Lua module: OK`); the API is
+in `examples/07-from-lua.lua`.
+
+**LuaTeX** (LuaLaTeX...) is Lua 5.3: use a `lua5.3` zip, and run with
+`--shell-escape` (LuaTeX loads no C module without it). LuaTeX may not use
+`LUA_CPATH`: set `package.cpath` in the document. On Windows, TeX Live's
+LuaTeX needs the module in `texlive\` (its Lua is `lua53w64.dll`):
+
+```latex
+\directlua{package.cpath = "/path/to/oorexxlua/?.so;" .. package.cpath
+           rexx = require "oorexx"}
+\newcommand\rexx[1]{\directlua{tex.sprint(rexx.eval("\luaescapestring{#1}"))}}
+$2^{100}$ is \rexx{2**100}; a price: \rexx{format(3.1, , 2)} EUR.
+```
+
+`texlua check.lua` checks it (with `LUA_CPATH` set as above).
 
 ## Lua modules
 

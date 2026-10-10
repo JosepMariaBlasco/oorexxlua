@@ -7,6 +7,10 @@
 # built from lua.org's sources by scripts/setup-lua.sh, pinned to a release
 # (static on Linux and macOS, a DLL on Windows).
 #
+# The Lua 5.3 jobs also run the tests of the Lua module (tests/lua) in TeX
+# Live's own LuaTeX (texlua, from CTAN: scripts/setup-luatex.sh), the Lua the
+# module is most wanted in; on Windows with build.sh's texlive/ module.
+#
 # Each job's build is then packaged as a zip of binaries with its Lua inside
 # (scripts/package.sh; artifacts oorexxlua-<platform>-lua<X.Y>), which is
 # checked unzipped, as a user would install it: twelve packages. On Linux the
@@ -74,6 +78,11 @@ jobs:
         run: scripts/build.sh
       - name: Tests
         run: OUT=$RUNNER_TEMP/tests tests/run.sh
+      - name: The Lua module in TeX Live's LuaTeX (Lua 5.3)
+        if: env.LUA_VERSION == '5.3'
+        run: |
+          TEXLUA=$(scripts/setup-luatex.sh); "$TEXLUA" --version | head -1 || true
+          LUA_EXE=$TEXLUA TESTS="Module.test.lua Lifetime.test.lua" OUT=$RUNNER_TEMP/tests-luatex tests/run.sh
       - name: The package's build (Linux, 5.3 and 5.4 - static, not the distribution's liblua) and its tests
         run: |
           if [ "$RUNNER_OS" = Linux ] && [ "$LUA_VERSION" != 5.5 ]; then
@@ -137,6 +146,12 @@ jobs:
         run: scripts/build.sh
       - name: Tests
         run: OUT=$RUNNER_TEMP/tests tests/run.sh
+      - name: The Lua module in TeX Live's LuaTeX (Lua 5.3)
+        if: env.LUA_VERSION == '5.3'
+        run: |
+          TEXLUA=$(scripts/setup-luatex.sh); "$TEXLUA" --version | head -1 || true
+          ORXLUA_MODDIR=$(cd .. && pwd)/build/texlive LUA_EXE=$TEXLUA TESTS="Module.test.lua Lifetime.test.lua" \
+            OUT=$RUNNER_TEMP/tests-luatex tests/run.sh
       - name: Package
         run: |
           if [ "$GITHUB_REF_TYPE" = tag ]; then export ORXLUA_VERSION=${GITHUB_REF_NAME#v}; fi
@@ -157,7 +172,7 @@ jobs:
         continue-on-error: true         # the logs are a help: GitHub's storage failing is not a test failing
         with:
           name: test-logs-windows-x64-lua${{ matrix.lua }}
-          path: ${{ runner.temp }}/tests
+          path: ${{ runner.temp }}/tests*
 
   release:
     if: github.ref_type == 'tag'

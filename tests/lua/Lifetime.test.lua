@@ -57,8 +57,8 @@ T.test("many calls leave the memory flat", function()
   T.ok(grown < 100, "grew " .. grown .. " MB")
 end)
 
--- A Lua that closes its state (lua.c does, at the end of a script):
--- the instances are terminated, so Rexx uninits run
+-- A Lua that closes its state (os.exit(code, true); lua.c also does at the
+-- end of a script): the instances are terminated, so Rexx uninits run
 T.test("the host closing its state terminates the instances", function()
   local lua = arg[-1]
   local script = T.tmpname("orxlua-close.lua")
@@ -71,6 +71,7 @@ T.test("the host closing its state terminates the instances", function()
     t = {}
     rexx.routine("use arg t; .local~t = t")(t)
     print("end of script")
+    os.exit(0, true)            -- close the state (lua.c does anyway; texlua does not)
   ]])
   f:close()
   local p = io.popen(T.command('"' .. lua .. '" "' .. script .. '" 2>&1'))
