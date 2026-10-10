@@ -671,9 +671,12 @@ static void pushRoutine(State *st, RexxObjectPtr v, bool predicate)
 static int box_tostring(lua_State *L)
 {
     RexxBox *b = checkBox(L, 1);
-    RexxThreadContext *c = stateOf(L)->tc;
+    USE_THREAD(L);                      // its string method may call Lua
+    RexxThreadContext *c = st->tc;
     RexxStringObject s;
-    if (!stringValue(c, b->obj, s)) {
+    bool ok = stringValue(c, b->obj, s);
+    END_THREAD();
+    if (!ok) {
         if (c->CheckCondition()) pushRexxCondition(L, c);
         else lua_pushstring(L, "the Rexx object has no string value");
         return lua_error(L);
@@ -760,7 +763,11 @@ static RexxObjectPtr newProxy(State *st, int idx)
     Proxy *p = new Proxy();
     p->st = st;
     p->ref = luaL_ref(st->L, LUA_REGISTRYINDEX);
-    RexxObjectPtr o = c->SendMessage2(c->FindClass("LUAOBJECT"), "NEW", c->NewPointer(p), st->self);
+    RexxClassObject cls = c->FindClass("LUAOBJECT");
+    RexxPointerObject ptr = c->NewPointer(p);
+    RexxObjectPtr o = c->SendMessage2(cls, "NEW", ptr, st->self);
+    release(c, cls);
+    release(c, ptr);                                // the proxy holds it
     if (o == NULLOBJECT) {                          // a condition is pending
         luaL_unref(st->L, LUA_REGISTRYINDEX, p->ref);
         delete p;

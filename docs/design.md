@@ -109,6 +109,13 @@ the bridge releases what callbacks make as soon as it has been used: the
 arguments, their Array, the result, the strings made from numbers, the
 counts of `keep`.
 
+One growth is ooRexx's own, not the bridge's: every Lua table or function
+that reaches Rexx is a new `.LuaObject`, which has an uninit, and ooRexx
+runs uninits lazily. A loop of a million callbacks that each receive a
+table peaks at about 400 MB, as a plain Rexx loop that makes a million
+objects with an uninit peaks at 170 MB. Callbacks that receive strings,
+numbers or Rexx objects stay flat.
+
 **Finalized objects.** A Lua finalizer (`__gc`) can bring back a userdata
 whose own finalizer has already run. A Rexx object's userdata is then
 refused ("a Rexx object used after Lua finalized it"), and is `.nil` if it
