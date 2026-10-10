@@ -135,6 +135,13 @@ jobs:
         run: scripts/setup-oorexxunit.sh
       - name: Build
         run: scripts/build.sh
+      - name: Probe (temporary)
+        run: |
+          B=$(cd .. && pwd)/build
+          export LUA_CPATH="$(cygpath -w "$B")\\?.dll;;" PATH="$B:$PATH"
+          L=$(ls -d ../lua-*/src | head -1)/lua.exe
+          "$L" tests/probe/probe.lua || echo "bash rc=$?"
+          powershell -NoProfile -Command "& '$(cygpath -w "$L")' tests/probe/probe.lua; Write-Host ('exit 0x{0:X8}' -f \$LASTEXITCODE); exit 0"
       - name: Tests
         run: OUT=$RUNNER_TEMP/tests tests/run.sh
       - name: Package

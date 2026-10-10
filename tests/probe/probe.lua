@@ -1,0 +1,11 @@
+-- temporary: where does Windows crash? (removed once found)
+io.stdout:setvbuf("no")
+local rexx = require "oorexx"
+print("1 eval", rexx.eval("6*7"))
+print("2 pcall error()", pcall(error, "plain"))
+print("3 routine raising", pcall(rexx.routine("raise syntax 98.900 array ('mine')")))
+print("4 eval syntax", pcall(rexx.eval, "1 +"))
+print("5 eval 41", pcall(rexx.eval, "1 + 'a'"))
+print("6 close", pcall(rexx.eval, ".lua~close"))
+print("7 isClosed", rexx.eval(".lua~isClosed"))
+print("8 end")
