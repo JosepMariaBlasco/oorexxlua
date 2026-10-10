@@ -11,7 +11,9 @@
 # as the library's run path.
 # Lua: LUA_VERSION (5.3, 5.4 or 5.5; default 5.4), found
 #   - with LUA_CFLAGS and LUA_LIBS, if given (Linux and macOS);
-#   - on Linux, with pkg-config (Debian/Ubuntu: liblua5.4-dev, liblua5.3-dev);
+#   - on Linux, with pkg-config (Debian/Ubuntu: liblua5.4-dev, liblua5.3-dev),
+#     unless LUA_STATIC=1 (what package.sh needs: a package with no liblua
+#     to install);
 #   - else the one that scripts/setup-lua.sh built next to the clone: a
 #     static liblua.a, linked whole (so that C modules find every lua_* in
 #     the package), or on Windows luaXY.dll.
@@ -49,7 +51,7 @@ if [ "$OS" = Windows ]; then
   cp "$LUADIR/$LUALIB.dll" "$BUILD/"
 else
   if [ -z "${LUA_CFLAGS:-}${LUA_LIBS:-}" ]; then
-    if [ "$OS" = Linux ]; then
+    if [ "$OS" = Linux ] && [ "${LUA_STATIC:-}" != 1 ]; then
       for pc in "lua$V" "lua-$V" "lua${V/./}"; do
         if pkg-config --exists "$pc" 2>/dev/null; then
           LUA_CFLAGS=$(pkg-config --cflags "$pc"); LUA_LIBS=$(pkg-config --libs "$pc"); break

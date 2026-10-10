@@ -5,8 +5,8 @@
 # example and compares its output with the NAME.out next to it.
 #
 # Builds the test C module (tests/cmodule) first, as LuaRocks builds them,
-# with the same Lua as the build's: LUA_VERSION (default 5.4) found as
-# build.sh finds it, or LUA_CFLAGS.  TESTS="Threads.testGroup" to choose;
+# with the same Lua as the build's (scripts/build-cmodule.sh: LUA_VERSION,
+# default 5.4, LUA_STATIC, LUA_CFLAGS).  TESTS="Threads.testGroup" to choose;
 # TIMEOUT= seconds per group (default 300); logs in OUT (default
 # /tmp/orxlua-tests).
 set -uo pipefail
@@ -20,30 +20,9 @@ TESTS=${TESTS:-$(cd "$HERE/rexx" && ls ./*.testGroup | sed 's|^\./||')}
 [ -f "$UNIT/testOORexx.rex" ] || { echo "run.sh: ooRexxUnit missing: run scripts/setup-oorexxunit.sh" >&2; exit 2; }
 [ -f "$BUILD/$PKG" ] || { echo "run.sh: no $BUILD/$PKG: run scripts/build.sh" >&2; exit 2; }
 
-# The C module: on Linux and macOS not linked against liblua (the lua_*
-# symbols come from whoever loads it); on Windows linked against the luaXY.dll
-# of the build, as every Lua module on Windows is
 CMOD=$BUILD/test-cmodules
-mkdir -p "$CMOD"
 V=${LUA_VERSION:-5.4}
-if [ "$OS" = Windows ]; then
-  LUADIR=$(lua_dir "$V")
-  [ -n "$LUADIR" ] || { echo "run.sh: no Lua $V next to the clone (scripts/setup-lua.sh $V)" >&2; exit 2; }
-  (export MSYS2_ARG_CONV_EXCL='*'; cd "$CMOD" &&
-   quiet cl -nologo -O2 -MD -LD -DLUA_BUILD_AS_DLL -I"$(native_path "$LUADIR")" "$(native_path "$HERE/cmodule/hello.c")" \
-      -Fehello.dll -link -LIBPATH:"$(native_path "$LUADIR")" "lua${V/./}.lib" -EXPORT:luaopen_hello &&
-   rm -f hello.obj hello.exp hello.lib) ||
-    { echo "run.sh: cannot build tests/cmodule/hello.c" >&2; exit 2; }
-else
-  if [ -z "${LUA_CFLAGS:-}" ]; then
-    if [ "$OS" = Linux ] && pkg-config --exists "lua$V" 2>/dev/null; then LUA_CFLAGS=$(pkg-config --cflags "lua$V")
-    else LUADIR=$(lua_dir "$V"); [ -n "$LUADIR" ] && LUA_CFLAGS="-I$LUADIR"; fi
-  fi
-  if [ "$OS" = Darwin ]; then MODFLAGS="-bundle -undefined dynamic_lookup"; else MODFLAGS="-shared"; fi
-  # shellcheck disable=SC2086
-  "$CC" -O2 -fPIC $MODFLAGS ${LUA_CFLAGS:-} "$HERE/cmodule/hello.c" -o "$CMOD/hello.$MODEXT" ||
-    { echo "run.sh: cannot build tests/cmodule/hello.c" >&2; exit 2; }
-fi
+"$HERE/../scripts/build-cmodule.sh" "$CMOD" || { echo "run.sh: cannot build tests/cmodule/hello.c" >&2; exit 2; }
 export LUA_CPATH="$(native_path "$CMOD")/?.$MODEXT;;"
 
 export ORXLUA_BUILD=$(native_path "$BUILD")

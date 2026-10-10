@@ -6,11 +6,19 @@
 # distribution's (shared liblua, through pkg-config); everything else is
 # built from lua.org's sources by scripts/setup-lua.sh, pinned to a release
 # (static on Linux and macOS, a DLL on Windows).
+#
+# Each job's build is then packaged as a zip of binaries with its Lua inside
+# (scripts/package.sh; artifacts oorexxlua-<platform>-lua<X.Y>), which is
+# checked unzipped, as a user would install it: twelve packages. On Linux the
+# package is a second, static build (LUA_STATIC=1), tested as the first. A tag
+# vX.Y.Z[-suffix] (git tag v0.1.0 && git push origin v0.1.0) also makes a
+# GitHub release with the twelve zips; pushes to main publish nothing.
 name: build
 
 on:
   push:
     branches: [main]
+    tags: ['v*']
   pull_request:
   workflow_dispatch:
 
@@ -58,21 +66,43 @@ jobs:
           if [ "$RUNNER_OS" = Linux ] && [ "$V" != 5.5 ]; then
             sudo apt-get update -qq && sudo apt-get install -y -qq "liblua$V-dev"
             pkg-config --modversion "lua$V"
-          else
-            scripts/setup-lua.sh "$LUA_RELEASE"
           fi
+          scripts/setup-lua.sh "$LUA_RELEASE"     # the package's Lua (on Linux 5.3 and 5.4, too)
       - name: ooRexxUnit
         run: scripts/setup-oorexxunit.sh
       - name: Build
         run: scripts/build.sh
       - name: Tests
         run: OUT=$RUNNER_TEMP/tests tests/run.sh
+      - name: The package's build (Linux, 5.3 and 5.4 - static, not the distribution's liblua) and its tests
+        run: |
+          if [ "$RUNNER_OS" = Linux ] && [ "$LUA_VERSION" != 5.5 ]; then
+            export LUA_STATIC=1 BUILD=$RUNNER_TEMP/build-static
+            scripts/build.sh
+            OUT=$RUNNER_TEMP/tests-static tests/run.sh
+            echo "PKG_BUILD=$BUILD" >> "$GITHUB_ENV"
+          fi
+      - name: Package
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then export ORXLUA_VERSION=${GITHUB_REF_NAME#v}; fi
+          LUA_STATIC=1 BUILD=${PKG_BUILD:-$(cd .. && pwd)/build} scripts/package.sh "$RUNNER_TEMP/dist"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: oorexxlua-${{ matrix.platform.name }}-lua${{ env.LUA_VERSION }}
+          path: ${{ runner.temp }}/dist/*.zip
+      - name: The package, unzipped
+        run: |
+          mkdir -p "$RUNNER_TEMP/try" && cd "$RUNNER_TEMP/try"
+          unzip -q "$RUNNER_TEMP"/dist/*.zip
+          D=$PWD/oorexxlua
+          if [ "$RUNNER_OS" = macOS ]; then export DYLD_LIBRARY_PATH=$D; else export LD_LIBRARY_PATH=$D; fi
+          cd .. && REXX_PATH=$D rexx "$D/check.rex"
       - uses: actions/upload-artifact@v4
         if: always()
         continue-on-error: true         # the logs are a help: GitHub's storage failing is not a test failing
         with:
           name: test-logs-${{ matrix.platform.name }}-lua${{ matrix.lua }}
-          path: ${{ runner.temp }}/tests
+          path: ${{ runner.temp }}/tests*
 
   # The same scripts, in Git Bash, with MSVC's developer environment
   windows:
@@ -107,9 +137,45 @@ jobs:
         run: scripts/build.sh
       - name: Tests
         run: OUT=$RUNNER_TEMP/tests tests/run.sh
+      - name: Package
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then export ORXLUA_VERSION=${GITHUB_REF_NAME#v}; fi
+          scripts/package.sh "$RUNNER_TEMP/dist"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: oorexxlua-windows-x64-lua${{ env.LUA_VERSION }}
+          path: ${{ runner.temp }}/dist/*.zip
+      - name: The package, unzipped
+        run: |
+          mkdir -p "$RUNNER_TEMP/try" && cd "$RUNNER_TEMP/try"
+          unzip -q "$RUNNER_TEMP"/dist/*.zip
+          D=$PWD/oorexxlua
+          export PATH="$D:$PATH" REXX_PATH=$(cygpath -w "$D")
+          cd .. && rexx "$(cygpath -w "$D/check.rex")"
       - uses: actions/upload-artifact@v4
         if: always()
         continue-on-error: true         # the logs are a help: GitHub's storage failing is not a test failing
         with:
           name: test-logs-windows-x64-lua${{ matrix.lua }}
           path: ${{ runner.temp }}/tests
+
+  release:
+    if: github.ref_type == 'tag'
+    needs: [unix, windows]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: oorexxlua-*
+          path: dist
+          merge-multiple: true
+      - name: GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls dist; [ "$(ls dist/*.zip | wc -l)" -eq 12 ] || { echo "expected 12 packages"; exit 1; }
+          pre=(); case "$GITHUB_REF_NAME" in *-*) pre=(--prerelease) ;; esac
+          gh release create "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" "${pre[@]}" \
+            --title "$GITHUB_REF_NAME" --generate-notes dist/*.zip
