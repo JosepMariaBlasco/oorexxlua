@@ -572,10 +572,13 @@ static bool stringValue(RexxThreadContext *c, RexxObjectPtr o, RexxStringObject 
  */
 static char GUARD;
 static const char *noRexx(State *st);
-static int fromHost(lua_State *L, struct Inst *hint);
-#define FROM_HOST(L, hint)                                                    \
+static int fromHost(lua_State *L, struct Inst *hint, lua_CFunction self, int nup);
+// self, nup: the C function now running and its number of upvalues, so that
+// hostRun can make it again (no lua_getinfo: lua_Debug's layout is the
+// host's, not necessarily our headers')
+#define FROM_HOST(L, hint, self, nup)                                         \
     if (lua_touserdata(L, 1) == &GUARD) lua_remove(L, 1);                     \
-    else if (stateOf(L)->tc == NULL) return fromHost(L, hint)
+    else if (stateOf(L)->tc == NULL) return fromHost(L, hint, self, nup)
 
 // The instance of the userdata at idx, if it is a Rexx object's (no error)
 static struct Inst *boxInst(lua_State *L, int idx)
@@ -632,14 +635,14 @@ static int rexxCallBack(lua_State *L, RexxObjectPtr target, const char *message,
 
 static int box_call(lua_State *L)       // rexxobj(...)
 {
-    FROM_HOST(L, boxInst(L, 1));
+    FROM_HOST(L, boxInst(L, 1), box_call, 0);
     RexxBox *b = checkBox(L, 1);
     return rexxCallBack(L, b->obj, NULL, 2);
 }
 
 static int box_method(lua_State *L)     // closure from __index: rexxobj:name(...)
 {
-    FROM_HOST(L, boxInst(L, lua_upvalueindex(1)));
+    FROM_HOST(L, boxInst(L, lua_upvalueindex(1)), box_method, 2);
     RexxBox *b = upvalueBox(L);
     const char *name = lua_tostring(L, lua_upvalueindex(2));
     // obj:name(...) passes obj first: skip it; obj.name(...) does not
@@ -671,7 +674,7 @@ static int box_index(lua_State *L)      // obj.name: the bound method; obj[k]: o
         lua_pushcclosure(L, box_method, 2);
         return 1;
     }
-    FROM_HOST(L, boxInst(L, 1));
+    FROM_HOST(L, boxInst(L, 1), box_index, 0);
     RexxBox *b = checkBox(L, 1);
     lua_settop(L, 2);
     return rexxCallBack(L, b->obj, "[]", 2);
@@ -679,7 +682,7 @@ static int box_index(lua_State *L)      // obj.name: the bound method; obj[k]: o
 
 static int box_newindex(lua_State *L)   // obj.name = v: NAME=; obj[k] = v: obj[k] = v
 {
-    FROM_HOST(L, boxInst(L, 1));
+    FROM_HOST(L, boxInst(L, 1), box_newindex, 0);
     RexxBox *b = checkBox(L, 1);
     lua_settop(L, 3);
     if (lua_type(L, 2) == LUA_TSTRING) {
@@ -697,7 +700,7 @@ static int box_newindex(lua_State *L)   // obj.name = v: NAME=; obj[k] = v: obj[
 
 static int box_len(lua_State *L)        // #obj: obj~items
 {
-    FROM_HOST(L, boxInst(L, 1));
+    FROM_HOST(L, boxInst(L, 1), box_len, 0);
     RexxBox *b = checkBox(L, 1);
     lua_settop(L, 1);
     return rexxCallBack(L, b->obj, "ITEMS", 2);
@@ -706,7 +709,7 @@ static int box_len(lua_State *L)        // #obj: obj~items
 // pairs(obj): through obj~supplier.  upvalue 1: the supplier, as a userdata.
 static int pairs_next(lua_State *L)
 {
-    FROM_HOST(L, boxInst(L, lua_upvalueindex(1)));
+    FROM_HOST(L, boxInst(L, lua_upvalueindex(1)), pairs_next, 1);
     RexxBox *sup = upvalueBox(L);
     USE_THREAD(L);
     RexxThreadContext *c = st->tc;
@@ -735,7 +738,7 @@ static struct Inst *instOfContext(RexxThreadContext *c);
 
 static int box_pairs(lua_State *L)
 {
-    FROM_HOST(L, boxInst(L, 1));
+    FROM_HOST(L, boxInst(L, 1), box_pairs, 0);
     RexxBox *b = checkBox(L, 1);
     USE_THREAD(L);
     RexxThreadContext *c = st->tc;
@@ -756,7 +759,7 @@ static int box_pairs(lua_State *L)
 // upvalue 1: the box; upvalue 2: true for a predicate (Rexx 1/0 -> boolean)
 static int routine_closure(lua_State *L)
 {
-    FROM_HOST(L, boxInst(L, lua_upvalueindex(1)));
+    FROM_HOST(L, boxInst(L, lua_upvalueindex(1)), routine_closure, 2);
     RexxBox *b = upvalueBox(L);
     bool predicate = lua_toboolean(L, lua_upvalueindex(2));
     int n = rexxCallBack(L, b->obj, NULL, 1);
@@ -795,7 +798,7 @@ static void pushRoutine(State *st, RexxObjectPtr v, bool predicate)
 
 static int box_tostring(lua_State *L)
 {
-    FROM_HOST(L, boxInst(L, 1));
+    FROM_HOST(L, boxInst(L, 1), box_tostring, 0);
     RexxBox *b = checkBox(L, 1);
     USE_THREAD(L);                      // its string method may call Lua
     RexxThreadContext *c = st->tc;
@@ -1655,7 +1658,7 @@ static Inst *liveInst(State *st)
 // st->tc), runs the C function now running again, in lua_pcall, with GUARD
 // as its first argument, and puts everything back before raising its error.
 // No C++ object here (a Lua error is raised in this frame).
-static int hostRun(lua_State *L, State *st, Inst *in)
+static int hostRun(lua_State *L, State *st, Inst *in, lua_CFunction self, int nup)
 {
     lua_State *savedL = st->L;
     RexxThreadContext *savedTc = st->tc;
@@ -1674,9 +1677,9 @@ static int hostRun(lua_State *L, State *st, Inst *in)
     }
     else if (st->tc == NULL) return luaL_error(L, "no Rexx code is running");
     int n = lua_gettop(L);
-    lua_Debug ar;
-    lua_getstack(L, 0, &ar);
-    lua_getinfo(L, "f", &ar);                       // this very C function (its closure)
+    if (!lua_checkstack(L, nup + 3)) return luaL_error(L, "Lua stack overflow");
+    for (int i = 1; i <= nup; i++) lua_pushvalue(L, lua_upvalueindex(i));
+    lua_pushcclosure(L, self, nup);                 // this very C function, again
     lua_insert(L, 1);
     lua_pushlightuserdata(L, &GUARD);
     lua_insert(L, 2);
@@ -1693,13 +1696,13 @@ static int hostRun(lua_State *L, State *st, Inst *in)
 // A Rexx object or routine called by the host's Lua outside any Rexx code:
 // attached to the instance that made it (hint) or, if that one is closed,
 // to any live one of this host
-static int fromHost(lua_State *L, Inst *hint)
+static int fromHost(lua_State *L, Inst *hint, lua_CFunction self, int nup)
 {
     State *st = stateOf(L);
     if (!st->adopted || st->closed || foreignThread(st)) return luaL_error(L, "%s", noRexx(st));
     Inst *in = hint != NULL && !hint->closed ? hint : liveInst(st);
     if (in == NULL) return luaL_error(L, "%s", noRexx(st));
-    return hostRun(L, st, in);
+    return hostRun(L, st, in, self, nup);
 }
 
 static const char *noRexx(State *st)
@@ -1902,17 +1905,17 @@ static NOINLINE bool instFor(lua_State *L, Inst **out)
 
 // A module function, called: its instance, and then the function again,
 // protected (hostRun)
-static int moduleCall(lua_State *L)
+static int moduleCall(lua_State *L, lua_CFunction self)
 {
     State *st = stateOf(L);
     if (st->closed || foreignThread(st)) return luaL_error(L, "%s", noRexx(st));
     Inst *in;
     if (!instFor(L, &in)) return lua_error(L);
-    return hostRun(L, st, in);
+    return hostRun(L, st, in, self, 1);
 }
-#define MODULE_ENTRY(L)                                                       \
+#define MODULE_ENTRY(L, self)                                                 \
     if (lua_touserdata(L, 1) == &GUARD) lua_remove(L, 1);                     \
-    else return moduleCall(L)
+    else return moduleCall(L, self)
 
 /*
  * The module's functions raise their Lua errors (lua_error) only once every
@@ -1935,7 +1938,7 @@ static NOINLINE int eval_body(lua_State *L, const char *expr, size_t len)
 
 static int mod_eval(lua_State *L)
 {
-    MODULE_ENTRY(L);
+    MODULE_ENTRY(L, mod_eval);
     size_t len;
     const char *expr = luaL_checklstring(L, 1, &len);
     int n = eval_body(L, expr, len);
@@ -1953,7 +1956,7 @@ static NOINLINE int run_body(lua_State *L, const char *program)
 
 static int mod_run(lua_State *L)
 {
-    MODULE_ENTRY(L);
+    MODULE_ENTRY(L, mod_run);
     const char *program = luaL_checkstring(L, 1);   // (Lua keeps it: argument 1)
     int n = run_body(L, program);
     if (n < 0) return lua_error(L);
@@ -1971,7 +1974,7 @@ static NOINLINE int routine_body(lua_State *L, const char *source, size_t len, c
 
 static int mod_routine(lua_State *L)
 {
-    MODULE_ENTRY(L);
+    MODULE_ENTRY(L, mod_routine);
     size_t len;
     const char *source = luaL_checklstring(L, 1, &len);
     const char *name = luaL_optstring(L, 2, "ROUTINE");

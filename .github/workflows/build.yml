@@ -146,6 +146,13 @@ jobs:
         run: scripts/build.sh
       - name: Tests
         run: OUT=$RUNNER_TEMP/tests tests/run.sh
+      - name: Probe texlua (temporary)
+        if: env.LUA_VERSION == '5.3'
+        run: |
+          TEXLUA=$(scripts/setup-luatex.sh)
+          export LUA_CPATH="$(cygpath -w "$(cd .. && pwd)/build/texlive")\\?.dll;;"
+          K="/c/Program Files (x86)/Windows Kits/10/Debuggers/x64"
+          "$K/cdb.exe" -y "$(cygpath -w "$(cd .. && pwd)/build/texlive")" -c "g; .ecxr; kv 40; q" "$(cygpath -w "$TEXLUA")" tests/probe/tex.lua || true
       - name: The Lua module in TeX Live's LuaTeX (Lua 5.3)
         if: env.LUA_VERSION == '5.3'
         run: |
