@@ -1,0 +1,10 @@
+default other
+1
+Error: Lua error: a Lua object of another LuaState.
+1
+here
+1
+0
+1
+Error: Lua error: the LuaState is closed.
+Error: Lua error: the LuaState is closed.

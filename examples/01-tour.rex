@@ -1,5 +1,5 @@
-/* tour.rex -- Lua embedded in ooRexx, one feature per section.
-   Its exact output is tour.out.  Run: examples/run-one.sh tour.rex        */
+/* 01-tour.rex -- Lua embedded in ooRexx, one feature per section.
+   Its exact output is 01-tour.out.  Run: examples/run-one.sh 01-tour.rex  */
 
 -- 1. Evaluating, and passing arguments
 say .lua~eval("2^10")                              -- 1024.0 (a float in 5.4)

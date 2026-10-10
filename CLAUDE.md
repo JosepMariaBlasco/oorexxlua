@@ -13,7 +13,7 @@ documentation are in English.
 
 ```bash
 scripts/build.sh        # needs ooRexx 5.3 with headers, liblua5.4-dev
-tests/run.sh            # every examples/*.rex against its examples/*.out
+tests/run.sh            # every examples/*.rex and tests/rexx/*.rex against its .out
 ```
 
 Any change of behaviour updates the expected output and `docs/design.md`.
