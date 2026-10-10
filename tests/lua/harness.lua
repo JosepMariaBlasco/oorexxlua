@@ -79,7 +79,10 @@ function T.system(rexx, line)
     end
     return rc out~makeString("L", "0a"x)
   ]])
-  local rc, out = r(T.command(line)):match("^(%-?%d+) ?(.*)$")
+  -- cmd.exe drops the first and the last quote of a line that starts with
+  -- one: there the line starts with "call" instead
+  if package.config:sub(1, 1) == "\\" then line = "call " .. line end
+  local rc, out = r(line):match("^(%-?%d+) ?(.*)$")
   return tonumber(rc), out
 end
 
