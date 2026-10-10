@@ -38,6 +38,16 @@ Linux x64, macOS (arm64 and x64) and Windows x64, with ooRexx 5.3.0 and Lua
 raised is decided and implemented (`docs/design.md`); what is left is listed
 there, in *Not yet done*. The API may still change.
 
+## Binaries
+
+Each [release](https://github.com/JosepMariaBlasco/oorexxlua/releases) has a
+zip for each platform (`linux-x64`, `macos-arm64`, `macos-x64`,
+`windows-x64`) and Lua (`lua5.3`, `lua5.4`, `lua5.5`): twelve. Each carries
+its Lua inside, so no Lua needs to be installed; pick the version your Lua
+code and C modules are made for (5.4 if unsure). Its `README.md` says how to
+install it, and `check.rex` checks the installation. Every push to `main`
+also makes them, as artifacts of the CI run, without a release.
+
 ## Getting started
 
 You need a C++ compiler (on Windows, MSVC, used from Git Bash in a developer
@@ -108,9 +118,12 @@ with the three Luas.
   C module built as LuaRocks builds them).
 - `scripts/` — `build.sh` (the build), `platform.sh` (what differs between
   Linux, macOS and Windows), `setup-lua.sh` (builds a Lua from lua.org),
-  `setup-oorexxunit.sh` (fetches ooRexxUnit) and `setup-oorexx.sh` (builds
-  ooRexx from its sources, on Linux).
-- `.github/workflows/build.yml` — the CI.
+  `build-cmodule.sh` (the test C module), `package.sh` (the zip of
+  binaries), `setup-oorexxunit.sh` (fetches ooRexxUnit) and
+  `setup-oorexx.sh` (builds ooRexx from its sources, on Linux).
+- `dist/` — what goes into the zip besides the binaries: its `README.md`
+  and `check.rex`.
+- `.github/workflows/build.yml` — the CI, the packages and the releases.
 - `docs/design.md` — how the bridge works and why, and what is not yet
   done.
 

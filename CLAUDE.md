@@ -22,7 +22,9 @@ Before a commit that touches `src/`, run the tests with Lua 5.3, 5.4 and 5.5
 (`LUA_VERSION=5.3 BUILD=... scripts/build.sh && LUA_VERSION=5.3 BUILD=...
 tests/run.sh`; 5.5 comes from `scripts/setup-lua.sh`). The CI runs the same
 on Linux, macOS and Windows: what differs between them is in
-`scripts/platform.sh`.
+`scripts/platform.sh`. Each CI job also packages its build
+(`scripts/package.sh`, twelve zips); a pushed tag `vX.Y.Z` makes a release,
+and is the owner's decision, never pushed without being asked.
 
 ## Git attribution
 

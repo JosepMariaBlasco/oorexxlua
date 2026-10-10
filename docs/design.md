@@ -395,6 +395,20 @@ Linux x64, macOS arm64 and x64, and Windows x64, each with Lua 5.3, 5.4 and
 measure memory on each platform (`/proc` on Linux, `ps` on macOS, the
 working set on Windows).
 
+**Packages.** Each of those twelve builds is also a zip of binaries
+(`scripts/package.sh`), and a tag `vX.Y.Z` makes a release with them. A
+package carries its Lua, so that its users need none: linked statically into
+`librexxlua` on Linux and macOS (on Linux a second build, `LUA_STATIC=1`,
+since the CI's first one uses the distribution's shared `liblua` for 5.3 and
+5.4; `package.sh` refuses a build that needs a `liblua`), and as
+`luaXY.dll` next to `rexxlua.dll` on Windows, where Lua's C modules need it
+(*C modules*). The package's `check.rex` runs from outside the unzipped
+folder, finding everything as the package's README says, and before zipping
+`package.sh` also has it load a C module. One package per Lua, not one for
+all three: the bridge is compiled against one Lua, and a C module must be
+built for that same version. Lua's licence (MIT) goes with each package,
+taken from the `lua.h` of the Lua inside.
+
 ## Not yet done
 
 - **Lua → ooRexx** (`require "oorexx"`), and with it the adoption of a host's
