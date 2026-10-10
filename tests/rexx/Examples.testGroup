@@ -1,0 +1,75 @@
+#!/usr/bin/env rexx
+/*----------------------------------------------------------------------------*/
+/* Examples.testGroup: every example (each .rex file in examples) runs in     */
+/* its own process and prints exactly what the NAME.out next to it says.      */
+/* So the examples cannot rot.                                                */
+/*                                                                            */
+/* Environment: what tests/run.sh sets (REXX_PATH and the library path, so    */
+/* that `rexx` finds lua.cls and librexxlua); ORXLUA_BUILD, the build         */
+/* directory, for macOS (see below).                                          */
+/*                                                                            */
+/* Licensed under the Apache License, Version 2.0.                            */
+/*----------------------------------------------------------------------------*/
+  parse source . . fileSpec
+
+  group = .TestGroup~new(fileSpec)
+  group~add(.Examples.testGroup)
+
+  if group~isAutomatedTest then return group
+
+  testResult = group~suite~execute~~print
+
+return testResult
+-- End of entry point.
+
+::requires 'LuaTestCase.cls'
+
+::class "Examples.testGroup" subclass LuaTestCase public
+
+::method test_all_examples
+  parse source . . me
+  sl = .File~separator
+  dir = .File~new(me)~parentFile~parentFile~parentFile~absolutePath || sl || "examples"
+  -- librexxlua is found by name through the library path; macOS drops
+  -- DYLD_* variables when it starts /bin/sh (ADDRESS SYSTEM), so the command
+  -- sets it itself
+  parse upper source platform .
+  windows = platform~abbrev("WIN")
+  libvar = ""
+  if platform~pos("DARWIN") > 0 | platform~pos("MAC") > 0 then
+    libvar = "DYLD_LIBRARY_PATH='"value("ORXLUA_BUILD", , "ENVIRONMENT")"' "
+
+  names = .array~new
+  do f over .File~new(dir)~listFiles
+    if f~name~endsWith(".rex") then names~append(f~absolutePath)
+  end
+  names = names~sort
+  self~assertTrue(names~items >= 6, "examples found in" dir)
+
+  failures = .array~new
+  do path over names
+    outFile = path~left(path~length - 4) || ".out"
+    if \SysFileExists(outFile) then do
+      failures~append(path": no" outFile)
+      iterate
+    end
+    s = .stream~new(outFile)
+    expected = s~arrayIn~makeString("L", "0a"x)
+    s~close
+    if windows then                    -- cmd.exe
+      cmd = 'cd /d "'dir'" && rexx "'path'" 2>&1'
+    else
+      cmd = 'cd "'dir'" && 'libvar'rexx "'path'" 2>&1'
+    out = .array~new
+    address system cmd with output using (out)
+    do i = 1 to out~items              -- Windows: lines may end in CR
+      if out[i]~right(1) == "0d"x then out[i] = out[i]~left(out[i]~length - 1)
+    end
+    got = out~makeString("L", "0a"x)
+    if got == expected then self~assertTrue(.true)
+    else failures~append(.File~new(path)~name || "0a"x ||,
+                         "  expected: [" || expected~changeStr("0a"x, "|") || "]" || "0a"x ||,
+                         "  got:      [" || got~changeStr("0a"x, "|") || "]")
+  end
+  if failures~items > 0 then
+    self~fail(failures~items "example(s) differ:" || "0a"x || failures~makeString("L", "0a"x))

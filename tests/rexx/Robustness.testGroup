@@ -1,0 +1,85 @@
+#!/usr/bin/env rexx
+/*----------------------------------------------------------------------------*/
+/* Robustness.testGroup: what a review of the bridge found (each was a crash, */
+/* a wrong value or unbounded memory before it was fixed).                    */
+/*                                                                            */
+/* Licensed under the Apache License, Version 2.0.                            */
+/*----------------------------------------------------------------------------*/
+  parse source . . fileSpec
+
+  group = .TestGroup~new(fileSpec)
+  group~add(.Robustness.testGroup)
+
+  if group~isAutomatedTest then return group
+
+  testResult = group~suite~execute~~print
+
+return testResult
+-- End of entry point.
+
+::requires 'LuaTestCase.cls'
+
+::class "Robustness.testGroup" subclass LuaTestCase public
+
+-- Callbacks from a coroutine use the coroutine's stack (*Coroutines*)
+::method test_callbacks_in_a_coroutine
+  add = .routine~new("add", "use arg a, b; return a + b")
+  co = .lua~eval("coroutine.wrap(function(f) return f(1, 2) end)")
+  self~assertEquals(3, co~call(add))
+  co = .lua~eval("coroutine.wrap(function(f) local s = 0 for i = 1, 100000 do s = s + f(i, 0) end return s end)")
+  self~assertEquals(5000050000, co~call(add), "100000 of them")
+  d = .directory~new; d~x = 5
+  co = .lua~eval("coroutine.wrap(function(d) local r = {} for k, v in pairs(d) do r[#r+1] = k .. '=' .. v end return table.concat(r) end)")
+  self~assertEquals("X=5", co~call(d), "pairs in a coroutine")
+
+-- Many arguments, deep Arrays (Lua's stack is checked)
+::method test_many_arguments_and_deep_arrays
+  args = .array~new; do i = 1 to 300; args[i] = i; end
+  count = .lua~eval("function(...) return select('#', ...) end")
+  self~assertEquals(300, count~sendWith("CALL", args))
+  deep = .array~of(1); do 200; deep = .array~of(deep); end
+  self~assertEquals(201, .lua~eval("local t = ... local n = 0 while type(t) == 'table' do t = t[1] n = n + 1 end return n", deep))
+
+-- A state cannot be closed by a callback while its Lua code runs
+::method test_close_from_a_callback
+  s = .LuaState~new
+  closer = .routine~new("closer", "use arg s; s~close")
+  self~assertEquals("Lua error: Rexx error 98.900: Lua error: a LuaState cannot be closed while Lua code in it is running.", -
+                    self~errorOf(s, "EVAL", "local f, s = ...; f(s); return 1", closer, s))
+  self~assertFalse(s~isClosed, "the state is still open")
+  self~assertEquals(2, s~eval("1 + 1"))
+  s~close
+
+-- A string method that fails is an error, not a crash
+::method test_failing_string_method
+  self~assertEquals('Lua error: Rexx error 40.1: External routine "Bad~string" failed.', -
+                    self~errorOf(.lua, "EVAL", "local o = ...; return tostring(o)", .Bad~new))
+  self~assertEquals('External routine "Bad~string" failed.', self~errorOf(.lua, "BOX", "string", .Bad~new))
+
+-- A Rexx object that a Lua finalizer brought back is refused, not used
+::method test_finalized_object
+  .lua~eval("local b = ...; setmetatable({box = b}, {__gc = function(t) saved = t.box end})", .directory~new)
+  .lua~eval("collectgarbage(); collectgarbage()")
+  self~assertEquals("Lua error: a Rexx object used after Lua finalized it", -
+                    self~errorOf(.lua, "EVAL", "tostring(saved)"))
+  .lua~eval("saved = nil")
+
+-- hashCode agrees with == for numbers (1 and 1.0 are rawequal)
+::method test_hashcode_of_numbers
+  one = .lua~box("integer", 1); onef = .lua~box("float", 1)
+  self~assertTrue(one == onef, "1 == 1.0")
+  self~assertTrue(one~hashCode == onef~hashCode, "the same hashCode")
+
+-- A million callbacks in one call do not pile up Rexx objects: the memory is
+-- measured by the last callback, while the call is still running
+::method test_a_million_callbacks_stay_flat
+  add = .routine~new("add", "use arg a, b; return a + b")
+  measure = .context~package~findRoutine("RSS")
+  before = rss()
+  during = .lua~eval("local f, m = ... for i = 1, 1000000 do f(i, 1) end return m()", add, measure)
+  self~assertTrue(before > 0 & during > 0, "memory measured (KB" before "->" during")")
+  self~assertTrue(during - before < 50000, "memory stays flat (< 50 MB growth; KB" before "->" during")")
+
+::class Bad
+::method string
+  raise syntax 40.1 array ("Bad~string")

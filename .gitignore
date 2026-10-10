@@ -1,3 +1,7 @@
-# local builds (the scripts write next to the clone, not inside it; just in case)
+# local builds and downloads (the scripts write next to the clone, not inside it; just in case)
 build/
+oorexxunit/
+lua-*/
 *.so
+*.dylib
+*.dll

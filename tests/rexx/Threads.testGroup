@@ -1,0 +1,74 @@
+#!/usr/bin/env rexx
+/*----------------------------------------------------------------------------*/
+/* Threads.testGroup: several Rexx threads in one Lua at once, with           */
+/* callbacks into Rexx (docs/design.md, *Threads*): the state's lock          */
+/* serializes them; and threads with states of their own.                     */
+/*                                                                            */
+/* Licensed under the Apache License, Version 2.0.                            */
+/*----------------------------------------------------------------------------*/
+  parse source . . fileSpec
+
+  group = .TestGroup~new(fileSpec)
+  group~add(.Threads.testGroup)
+
+  if group~isAutomatedTest then return group
+
+  testResult = group~suite~execute~~print
+
+return testResult
+-- End of entry point.
+
+::requires 'LuaTestCase.cls'
+
+::class "Threads.testGroup" subclass LuaTestCase public
+
+::method test_threads_in_one_state
+  threads = 8; n = 2000
+  s = .LuaState~new
+  s~eval("counter = 0; function bump(f, i) counter = counter + 1; return f(i) end")
+  twice = .routine~new("twice", "return arg(1) * 2")
+  done = .queue~new
+  do t = 1 to threads
+    .Worker~new~run(s, n, twice, done)
+  end
+  self~assertTrue(waitAll(done, threads), "every thread got the right results")
+  self~assertEquals(threads * n, s~global("counter"), "every call ran once")
+  s~close
+
+::method test_threads_with_states_of_their_own
+  threads = 8; n = 2000
+  done = .queue~new
+  do t = 1 to threads
+    .Worker~new~own(n, done)
+  end
+  self~assertTrue(waitAll(done, threads), "every thread got the right results")
+
+::routine waitAll           -- the results of all the threads (a Queue's pull does not wait)
+  use arg done, threads
+  do while done~items < threads; call SysSleep 0.01; end
+  ok = 1
+  do t = 1 to threads; ok = ok & done~pull; end
+  return ok
+
+::class Worker
+::method run
+  use arg s, n, twice, done
+  reply
+  bump = s~global("bump")
+  ok = 1
+  do i = 1 to n
+    if bump~call(twice, i) <> 2 * i then ok = 0
+  end
+  done~queue(ok)
+::method own
+  use arg n, done
+  reply
+  s = .LuaState~new
+  s~eval("function sq(x) return x * x end")
+  sq = s~global("sq")
+  ok = 1
+  do i = 1 to n
+    if sq~call(i) <> i * i then ok = 0
+  end
+  s~close
+  done~queue(ok)

@@ -1,0 +1,113 @@
+# Builds the bridge and runs every test group with Lua 5.3, 5.4 and 5.5, on
+# Linux, macOS (arm64 and x64) and Windows: one job per platform and Lua,
+# since the bridge is compiled against one Lua. ooRexx comes from its
+# portable builds on SourceForge, pinned to one revision; a newer one is
+# taken deliberately, after checking it. Lua: on Linux, 5.3 and 5.4 are the
+# distribution's (shared liblua, through pkg-config); everything else is
+# built from lua.org's sources by scripts/setup-lua.sh, pinned to a release
+# (static on Linux and macOS, a DLL on Windows).
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  OOREXX_REV: "13268"
+  OOREXX_URL: https://downloads.sourceforge.net/project/oorexx/oorexx/5.3.0beta/portable
+
+jobs:
+  unix:
+    name: ${{ matrix.platform.name }} lua${{ matrix.lua }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - name: linux-x64
+            os: ubuntu-24.04
+            oorexx: ubuntu2404.x86_64
+          - name: macos-arm64
+            os: macos-14
+            oorexx: macos.arm64.x86_64
+          # Intel: the last x86_64 macOS image GitHub offers (until fall 2027);
+          # ooRexx's macOS portable build is universal
+          - name: macos-x64
+            os: macos-15-intel
+            oorexx: macos.arm64.x86_64
+        lua: ["5.3.6", "5.4.9", "5.5.1"]
+    runs-on: ${{ matrix.platform.os }}
+    env:
+      LUA_RELEASE: ${{ matrix.lua }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: ooRexx r${{ env.OOREXX_REV }} (portable)
+        run: |
+          curl -sSfL --retry 3 -o "$RUNNER_TEMP/oorexx.zip" \
+            "$OOREXX_URL/oorexx-5.3.0-$OOREXX_REV.${{ matrix.platform.oorexx }}-portable-release.zip"
+          unzip -q "$RUNNER_TEMP/oorexx.zip" -d "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/oorexx-5.3.0-$OOREXX_REV.${{ matrix.platform.oorexx }}-portable-release/bin" >> "$GITHUB_PATH"
+      - name: macOS tools (coreutils' timeout)
+        if: runner.os == 'macOS'
+        run: brew install -q coreutils
+      - run: rexx -v
+      - name: Lua ${{ matrix.lua }}
+        run: |
+          V=${LUA_RELEASE%.*}; echo "LUA_VERSION=$V" >> "$GITHUB_ENV"
+          if [ "$RUNNER_OS" = Linux ] && [ "$V" != 5.5 ]; then
+            sudo apt-get update -qq && sudo apt-get install -y -qq "liblua$V-dev"
+            pkg-config --modversion "lua$V"
+          else
+            scripts/setup-lua.sh "$LUA_RELEASE"
+          fi
+      - name: ooRexxUnit
+        run: scripts/setup-oorexxunit.sh
+      - name: Build
+        run: scripts/build.sh
+      - name: Tests
+        run: OUT=$RUNNER_TEMP/tests tests/run.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-logs-${{ matrix.platform.name }}-lua${{ matrix.lua }}
+          path: ${{ runner.temp }}/tests
+
+  # The same scripts, in Git Bash, with MSVC's developer environment
+  windows:
+    name: windows-x64 lua${{ matrix.lua }}
+    strategy:
+      fail-fast: false
+      matrix:
+        lua: ["5.3.6", "5.4.9", "5.5.1"]
+    runs-on: windows-2022
+    defaults:
+      run:
+        shell: bash
+    env:
+      LUA_RELEASE: ${{ matrix.lua }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: ooRexx r${{ env.OOREXX_REV }} (portable)
+        run: |
+          curl -sSfL --retry 3 -o "$RUNNER_TEMP/oorexx.zip" \
+            "$OOREXX_URL/oorexx-5.3.0-$OOREXX_REV.windows.x86_64-portable-release.zip"
+          unzip -q "$RUNNER_TEMP/oorexx.zip" -d "$RUNNER_TEMP"
+          cygpath -w "$RUNNER_TEMP/oorexx-5.3.0-$OOREXX_REV.windows.x86_64-portable-release/bin" >> "$GITHUB_PATH"
+      - run: rexx -v
+      - name: Lua ${{ matrix.lua }}
+        run: |
+          echo "LUA_VERSION=${LUA_RELEASE%.*}" >> "$GITHUB_ENV"
+          scripts/setup-lua.sh "$LUA_RELEASE"
+      - name: ooRexxUnit
+        run: scripts/setup-oorexxunit.sh
+      - name: Build
+        run: scripts/build.sh
+      - name: Tests
+        run: OUT=$RUNNER_TEMP/tests tests/run.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-logs-windows-x64-lua${{ matrix.lua }}
+          path: ${{ runner.temp }}/tests

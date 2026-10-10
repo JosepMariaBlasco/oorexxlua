@@ -1,16 +1,42 @@
 #!/usr/bin/env bash
 # Download and build a Lua from lua.org into $ORXLUA_WORK/lua-X.Y.Z (next to
-# the clone), as a static liblua.a compiled with -fPIC, for the versions no
-# distribution packages yet (5.5).  build.sh and tests/run.sh find it there
-# when LUA_VERSION is 5.5 and pkg-config has no Lua 5.5.
-#   scripts/setup-lua.sh [5.5.0]
+# the clone), for build.sh and tests/run.sh, which find it there by its X.Y:
+#   Linux, macOS  a static liblua.a compiled with -fPIC (build.sh links it
+#                 whole into the package, so C modules find every lua_* in it)
+#   Windows       luaXY.dll and its import library luaXY.lib, built with MSVC
+#                 (Git Bash with cl on the PATH): Windows has no global
+#                 symbols, so the package and the C modules must share one DLL
+# Needed where no distribution packages the Lua (5.5 anywhere; every Lua on
+# macOS and Windows).
+#   scripts/setup-lua.sh [5.3|5.4|5.5|X.Y.Z]      (default 5.5)
 set -euo pipefail
-WORK=${ORXLUA_WORK:-$(cd "$(dirname "$0")/../.." && pwd)}
-V=${1:-5.5.0}
+WORK=${ORXLUA_WORK:-$(cd "$(dirname "$0")/../.." && pwd)}   # the directory that contains the clone
+. "$(dirname "$0")/platform.sh"
+V=${1:-5.5}
+case $V in                      # the latest release of each version
+  5.3) V=5.3.6 ;; 5.4) V=5.4.9 ;; 5.5) V=5.5.1 ;;
+  5.[345].*) ;;
+  *) echo "setup-lua.sh: a Lua 5.3, 5.4 or 5.5, not $V" >&2; exit 2 ;;
+esac
+XY=${V%.*}; XY=${XY/./}                                     # 5.4.8 -> 54
 DIR=$WORK/lua-$V
-if [ ! -f "$DIR/src/liblua.a" ]; then
+if [ "$OS" = Windows ]; then OUT=$DIR/src/lua$XY.dll; else OUT=$DIR/src/liblua.a; fi
+if [ ! -f "$OUT" ]; then
   mkdir -p "$WORK"
-  curl -sSfL "https://www.lua.org/ftp/lua-$V.tar.gz" | tar xz -C "$WORK"
-  make -s -C "$DIR" linux MYCFLAGS=-fPIC 2>&1 >/dev/null | grep -v "modifier ignored" >&2 || true
+  curl -sSfL --retry 3 "https://www.lua.org/ftp/lua-$V.tar.gz" | tar xz -C "$WORK"
+  cd "$DIR/src"
+  case $OS in
+    Windows)
+      export MSYS2_ARG_CONV_EXCL='*'
+      srcs=$(ls *.c | grep -v -x -e lua.c -e luac.c)
+      # shellcheck disable=SC2086
+      cl -nologo -O2 -MD -W3 -DLUA_BUILD_AS_DLL -c $srcs >/dev/null
+      # shellcheck disable=SC2046
+      link -nologo -DLL -OUT:"lua$XY.dll" -IMPLIB:"lua$XY.lib" $(echo "$srcs" | sed 's/\.c$/.obj/') >/dev/null
+      rm -f ./*.obj ./*.exp ;;
+    Darwin) make -s liblua.a SYSCFLAGS=-DLUA_USE_MACOSX MYCFLAGS=-fPIC 2>&1 >/dev/null | grep -v "modifier ignored" >&2 || true ;;
+    *)      make -s liblua.a SYSCFLAGS=-DLUA_USE_LINUX  MYCFLAGS=-fPIC 2>&1 >/dev/null | grep -v "modifier ignored" >&2 || true ;;
+  esac
+  [ -f "$OUT" ] || { echo "setup-lua.sh: the build of Lua $V made no $OUT" >&2; exit 1; }
 fi
-echo "setup-lua.sh: $DIR/src (liblua.a, headers)"
+echo "setup-lua.sh: $DIR/src ($(basename "$OUT"), headers)"

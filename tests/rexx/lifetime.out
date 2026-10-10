@@ -1,5 +1,0 @@
-Lua objects dropped by Rexx are released: 1
-Rexx objects dropped by Lua are released: 1
-and the one Lua still holds is alive: 1
-nothing left: 1
-dropped states are closed: 1

@@ -1,0 +1,70 @@
+#!/usr/bin/env rexx
+/*----------------------------------------------------------------------------*/
+/* Lifetime.testGroup: objects are freed on both sides (docs/design.md,       */
+/* *Lifetime*). Measures the process's memory: run it alone (tests/run.sh     */
+/* runs each test group in its own process).                                  */
+/*                                                                            */
+/* Licensed under the Apache License, Version 2.0.                            */
+/*----------------------------------------------------------------------------*/
+  parse source . . fileSpec
+
+  group = .TestGroup~new(fileSpec)
+  group~add(.Lifetime.testGroup)
+
+  if group~isAutomatedTest then return group
+
+  testResult = group~suite~execute~~print
+
+return testResult
+-- End of entry point.
+
+::requires 'LuaTestCase.cls'
+
+::class "Lifetime.testGroup" subclass LuaTestCase public
+
+::method test_lua_objects_dropped_by_rexx_are_released
+  s = .LuaState~new
+  n = 100000
+  do i = 1 to n
+    t = s~table(.array~of(i))
+  end
+  drop t
+  call churn
+  parse value s~"LUA.STATS" with refs .
+  self~assertTrue(refs < n / 2, "registry references released (" refs "of" n "left)")
+  s~close
+
+::method test_rexx_objects_dropped_by_lua_are_released
+  s = .LuaState~new
+  s~eval("keepme = ...", .directory~new)
+  do i = 1 to 100000
+    s~eval("local x = ...", .directory~new)
+  end
+  s~eval("collectgarbage()")
+  parse value s~"LUA.STATS" with . kept
+  self~assertEquals(1, kept, "only the object Lua still holds is kept")
+  self~assertTrue(s~global("keepme")~isA(.Directory), "and it is alive")
+  -- A Rexx object that Lua drops and gets again is counted right
+  d = .directory~new
+  do i = 1 to 1000
+    s~eval("local x = ...; if ... then collectgarbage() end", d)
+  end
+  s~eval("keepme = nil; collectgarbage()")
+  parse value s~"LUA.STATS" with . kept
+  self~assertEquals(0, kept, "nothing left")
+  s~close
+
+-- A state Rexx drops is closed by the bridge: 2000 states of 1 MB each
+-- would be 2 GB if they were not
+::method test_dropped_states_are_closed
+  before = rss()
+  do i = 1 to 2000
+    s = .LuaState~new
+    s~eval("big = string.rep('x', 1000000)")
+    if i // 100 = 0 then call churn
+  end
+  drop s
+  call churn
+  after = rss()
+  self~assertTrue(before > 0 & after > 0, "memory measured (KB" before "->" after")")
+  self~assertTrue(after - before < 500000, "memory bounded (< 500 MB growth; KB" before "->" after")")

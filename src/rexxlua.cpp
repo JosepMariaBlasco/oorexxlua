@@ -1,5 +1,6 @@
 /*
- * rexxlua.cpp -- librexxlua.so: Lua embedded in ooRexx, as a native package.
+ * rexxlua.cpp -- librexxlua (.so, .dylib; rexxlua.dll): Lua embedded in
+ * ooRexx, as a native package.
  * Rexx side: lua.cls (.lua, .LuaState, .LuaObject).  How it works and why:
  * docs/design.md (the comments name its sections, e.g. *States*).
  *
@@ -25,7 +26,9 @@ extern "C" {
 #if LUA_VERSION_NUM < 504                   // Lua 5.3: one user value, always
 #define lua_newuserdatauv(L, size, nuvalue) lua_newuserdata(L, size)
 #endif
+#ifndef _WIN32
 #include <dlfcn.h>
+#endif
 #include <mutex>
 #include <string>
 #include <vector>
@@ -35,7 +38,14 @@ extern "C" {
 #include <cmath>
 #include <cerrno>
 #include <cstdlib>
-#include <strings.h>
+
+/* strcasecmp, which MSVC does not have: 0 if equal, ignoring ASCII case */
+static int strcmpNoCase(const char *a, const char *b)
+{
+    for (; *a && *b; a++, b++)
+        if (tolower((unsigned char)*a) != tolower((unsigned char)*b)) return 1;
+    return *a != *b;
+}
 
 static const char *REXXOBJ = "RexxObject";          // metatable of Rexx objects in Lua
 static const char *CACHE   = "rexxlua.cache";       // registry: Rexx object -> its userdata (weak)
@@ -303,7 +313,7 @@ static int p_resolve(lua_State *L)
         const char *name = lua_tostring(L, 2);
         lua_pushnil(L);
         while (lua_next(L, 1)) {
-            if (lua_type(L, -2) == LUA_TSTRING && strcasecmp(lua_tostring(L, -2), name) == 0) {
+            if (lua_type(L, -2) == LUA_TSTRING && strcmpNoCase(lua_tostring(L, -2), name) == 0) {
                 lua_remove(L, -2);
                 lua_pushboolean(L, 1);
                 return 2;
@@ -332,7 +342,7 @@ static int p_assign(lua_State *L)
             lua_pushnil(L);
             while (lua_next(L, 1)) {
                 lua_pop(L, 1);
-                if (lua_type(L, -1) == LUA_TSTRING && strcasecmp(lua_tostring(L, -1), name) == 0) {
+                if (lua_type(L, -1) == LUA_TSTRING && strcmpNoCase(lua_tostring(L, -1), name) == 0) {
                     key = lua_gettop(L);
                     break;
                 }
@@ -699,19 +709,24 @@ static int box_gc(lua_State *L)
 /* ------------------------------------------------------------------------ */
 
 /*
- * C modules built for Lua (LuaRocks's) are not linked against liblua: they
- * expect the lua_* symbols to be global.  ooRexx loads this package with
- * RTLD_LOCAL, so the liblua it brought in is not; reopening it with
+ * C modules built for Lua (LuaRocks's) on Linux and macOS are not linked
+ * against liblua: they expect the lua_* symbols to be global.  ooRexx loads
+ * this package with RTLD_LOCAL, so the liblua it brought in (a shared one, or
+ * the static one linked into this package) is not; reopening it with
  * RTLD_NOLOAD | RTLD_GLOBAL makes it global (docs/design.md, *C modules*).
+ * On Windows, C modules are linked against the Lua DLL by name, the same
+ * luaXY.dll this package uses: nothing to do.
  */
 static void makeLuaGlobal()
 {
+#ifndef _WIN32
     static std::once_flag once;
     std::call_once(once, [] {
         Dl_info info;
         if (dladdr((void *)&lua_newstate, &info) && info.dli_fname)
             dlopen(info.dli_fname, RTLD_NOW | RTLD_NOLOAD | RTLD_GLOBAL);
     });
+#endif
 }
 
 static State *openState(RexxThreadContext *c)

@@ -1,0 +1,30 @@
+#!/usr/bin/env rexx
+/*----------------------------------------------------------------------------*/
+/* CModule.testGroup: a Lua C module built as LuaRocks builds them (not       */
+/* linked against liblua on Linux and macOS) loads (docs/design.md,           */
+/* *C modules*). tests/run.sh builds it (tests/cmodule) and sets LUA_CPATH.   */
+/*                                                                            */
+/* Licensed under the Apache License, Version 2.0.                            */
+/*----------------------------------------------------------------------------*/
+  parse source . . fileSpec
+
+  group = .TestGroup~new(fileSpec)
+  group~add(.CModule.testGroup)
+
+  if group~isAutomatedTest then return group
+
+  testResult = group~suite~execute~~print
+
+return testResult
+-- End of entry point.
+
+::requires 'LuaTestCase.cls'
+
+::class "CModule.testGroup" subclass LuaTestCase public
+
+::method test_require_a_c_module
+  hello = .lua~require("hello")
+  self~assertEquals("hello from C, Rexx", hello~hi("Rexx"))
+  s = .LuaState~new                     -- and in another state
+  self~assertEquals("hello from C, Lua", s~require("hello")~hi("Lua"))
+  s~close
