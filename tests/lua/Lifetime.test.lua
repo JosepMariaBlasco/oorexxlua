@@ -61,7 +61,7 @@ end)
 -- the instances are terminated, so Rexx uninits run
 T.test("the host closing its state terminates the instances", function()
   local lua = arg[-1]
-  local script = os.tmpname()
+  local script = T.tmpname("orxlua-close.lua")
   local f = io.open(script, "w")
   f:write([[
     local rexx = require "oorexx"
@@ -73,7 +73,7 @@ T.test("the host closing its state terminates the instances", function()
     print("end of script")
   ]])
   f:close()
-  local p = io.popen('"' .. lua .. '" "' .. script .. '" 2>&1')
+  local p = io.popen(T.command('"' .. lua .. '" "' .. script .. '" 2>&1'))
   local out = p:read("a")
   local ok = p:close()
   os.remove(script)

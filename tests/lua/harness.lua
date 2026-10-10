@@ -12,6 +12,9 @@ Licensed under the Apache License, Version 2.0. ]]
 
 local T = {tests = 0, assertions = 0, failures = 0, errors = 0}
 
+-- unbuffered, so that a crash leaves its log: stderr says which test ran
+io.stdout:setvbuf("no")
+
 local Failure = {}                      -- the error value of a failed assertion
 
 local function fail(msg, level)
@@ -48,6 +51,7 @@ end
 
 function T.test(name, f)
   T.tests = T.tests + 1
+  io.stderr:write("[run] " .. name .. "\n")
   local ok, err = xpcall(f, function(e)
     if getmetatable(e) == Failure then return e end
     return debug.traceback(tostring(e), 2)
@@ -60,6 +64,20 @@ function T.test(name, f)
     T.errors = T.errors + 1
     print("[error] " .. name .. ": " .. err)
   end
+end
+
+-- A shell command line for io.popen and os.execute: cmd.exe drops the first
+-- and the last quote of a line that starts with one
+function T.command(line)
+  if package.config:sub(1, 1) == "\\" then return '"' .. line .. '"' end
+  return line
+end
+
+-- A file name for a temporary file (os.tmpname's is not usable on Windows)
+function T.tmpname(name)
+  local dir = os.getenv("TEMP") or os.getenv("TMP")
+  if dir then return dir .. package.config:sub(1, 1) .. name end
+  return os.tmpname()
 end
 
 -- The resident memory of this process, in KB (0 if it cannot be measured):
