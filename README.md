@@ -32,18 +32,18 @@ say .lua~global("table")~concat(words, " ")        -- a bb ccc
 The other direction (**ooRexx inside Lua**: `require "oorexx"` from a Lua
 program, LuaTeX included) will come later.
 
-**Status: becoming a prototype.** It works and is tested on Linux x86_64
-with ooRexx 5.3.0 and Lua 5.4.6. Every design question is decided, and the
-decisions are being implemented: states, threads, object lifetime, values,
-calls and Rexx objects inside Lua are done; operators and Lua 5.3/5.5 are
-next (`docs/design.md`, *Decided, not yet implemented*). The API will
-change.
+**Status: prototype.** It works and is tested on Linux x86_64 with
+ooRexx 5.3.0 and Lua 5.3, 5.4 and 5.5. Every design question the first spike
+raised is decided and implemented (`docs/design.md`); what is left is listed
+there, in *Not yet done*. The API may still change.
 
 ## Getting started
 
 You need Linux, a C++ compiler, an ooRexx 5.3.0 with its API headers (for
-example, the one installed in `/usr/local`) and Lua 5.4's development files
-(Debian/Ubuntu: `liblua5.4-dev`).
+example, the one installed in `/usr/local`) and Lua's development files:
+Lua 5.4 by default (Debian/Ubuntu: `liblua5.4-dev`), or 5.3
+(`LUA_VERSION=5.3`, `liblua5.3-dev`), or 5.5 (`LUA_VERSION=5.5`, built next
+to the clone by `scripts/setup-lua.sh`).
 
 ```bash
 git clone https://github.com/JosepMariaBlasco/oorexxlua
@@ -66,8 +66,13 @@ oorexxlua/tests/run.sh
 This runs every example and every test, each in its own process under a
 timeout (a deadlock is a failure), and compares its output with the expected
 output (`NAME.out` next to it). `TESTS="threads.rex"` chooses. It also builds
-the small Lua C module the tests load, so it needs `pkg-config`'s `lua5.4`
-(or `LUA_CFLAGS`).
+the small Lua C module the tests load, with the same `LUA_VERSION` as the
+build. To test another Lua, build it into a directory of its own:
+
+```bash
+LUA_VERSION=5.3 BUILD=build53 oorexxlua/scripts/build.sh
+LUA_VERSION=5.3 BUILD=build53 oorexxlua/tests/run.sh
+```
 
 ## Layout
 
@@ -79,13 +84,14 @@ the small Lua C module the tests load, so it needs `pkg-config`'s `lua5.4`
 - `examples/` — short programs, each with its exact output: `01-tour.rex`
   (one feature per section), `02-states.rex` (several Luas, closing,
   identity), `03-values.rex` (how values cross, `box`), `04-calls.rex`
-  (the colon rule, several results), `05-rexx-in-lua.rex` (Rexx objects
-  used from Lua); `run-one.sh`.
+  (the colon rule, several results, coroutines), `05-rexx-in-lua.rex`
+  (Rexx objects used from Lua), `06-operators.rex`; `run-one.sh`.
 - `tests/` — `run.sh`; `rexx/` (lifetime, threads, C modules), `cmodule/`
   (a Lua C module built as LuaRocks builds them).
-- `scripts/build.sh` — the build.
-- `docs/design.md` — how the bridge works and why, and what is decided but
-  not yet implemented.
+- `scripts/` — `build.sh` (the build) and `setup-lua.sh` (builds a Lua
+  from lua.org, for 5.5).
+- `docs/design.md` — how the bridge works and why, and what is not yet
+  done.
 
 ## Credits
 

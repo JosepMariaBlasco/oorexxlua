@@ -17,6 +17,9 @@ tests/run.sh            # every examples/*.rex and tests/rexx/*.rex against its 
 ```
 
 Any change of behaviour updates the expected output and `docs/design.md`.
+Before a commit that touches `src/`, run the tests with Lua 5.3, 5.4 and 5.5
+(`LUA_VERSION=5.3 BUILD=... scripts/build.sh && LUA_VERSION=5.3 BUILD=...
+tests/run.sh`; 5.5 comes from `scripts/setup-lua.sh`).
 
 ## Git attribution
 

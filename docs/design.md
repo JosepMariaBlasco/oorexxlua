@@ -7,9 +7,8 @@ case-insensitive names, and values converted only when they are simple. The
 code comments refer to the sections of this document by name (for example
 "docs/design.md, *Lifetime*").
 
-The bridge is being turned from a spike into a prototype. Every design
-question the spike raised has been decided. The sections below describe what
-is implemented; *Decided, not yet implemented* lists the rest.
+The bridge is a prototype: every design question the first spike raised has
+been decided and implemented. *Not yet done* lists what is left.
 
 ## Shape
 
@@ -281,17 +280,60 @@ error is a Rexx condition like any other. Those functions use only Lua's API,
 with no C++ objects: a Lua error is a `longjmp`, which would not destroy
 them. Only running out of memory while pushing a value can still panic.
 
-## Decided, not yet implemented
+## Operators
 
-Each of these changes or extends the sections above.
+Rexx operators on a `.LuaObject` are Lua's, metamethods included, as
+ooRexx/Python's are Python's. The left operand must be the Lua object (Rexx
+sends the message to it); the right one is converted as any value.
 
-1. **Operators on proxies**, as in ooRexx/Python: Lua's arithmetic (with
-   metamethods); `=` is Lua's `==`, `==` is `rawequal`; `hashCode`
-   consistent with `=`.
-2. **Lua versions:** 5.3, 5.4 and 5.5 from the same source (5.3 is needed
-   for LuaTeX); 5.4 by default. Not LuaJIT (Lua 5.1's API, no integers).
-3. **Coroutines** are used like any function. A `yield` across a callback
-   into Rexx fails with Lua's own "attempt to yield across a C-call
-   boundary": to be documented, not worked around.
-4. **Platforms:** Linux first; macOS and Windows, with CI as in the sister
-   bridges, once the prototype is stable.
+| Rexx | Lua |
+|---|---|
+| `a + b`, `a - b`, `a * b`, `a / b`, `a ** b`, `-a` | `+`, `-`, `*`, `/`, `^`, unary `-` |
+| `a % b` (integer division) | `a // b` (floor division) |
+| `a // b` (remainder) | `a % b` (floor modulo: `-7 % 2` is `1` in Lua, `-7 // 2` is `-1` in Rexx) |
+| `a & b`, `a \| b`, `a && b`, `\a` | `&`, `\|`, `~` (bitwise: and, or, xor, not) |
+| `a < b`, `a > b`, `a <= b`, `a >= b` | `<`, `>`, `<=`, `>=` (`__lt`, `__le`) |
+| `a = b`, `a \= b` (`<>`, `><`) | `==`, `~=` (`__eq`) |
+| `a == b`, `a \== b` | `rawequal(a, b)`: the same Lua value |
+| `+a` | `a` itself |
+
+`==` is identity, as Rexx collections expect, and `hashCode` agrees with it
+(the address of a table, function, userdata or thread; the value of
+anything else). So two proxies of one table are `==`, and Lua objects work
+as keys of Rexx collections. Concatenation (`||`, abuttal, blank) is Rexx's
+own, on the string value (`tostring`): a Lua table needs no `__concat` to be
+shown with `say t "x"`.
+
+## Coroutines
+
+Lua coroutines are used from Rexx like any function: `coroutine.wrap`
+gives a function, and `coroutine.resume` and friends are ordinary calls.
+
+When Lua code calls back into Rexx, and that Rexx code calls Lua again, the
+inner call runs in the same Lua thread as the callback (a coroutine,
+perhaps), not in the state's main thread: errors and tracebacks then show
+the real stack. A coroutine still cannot yield from inside Rexx code it has
+called (Lua cannot suspend the C call to Rexx that is in between): that fails
+with Lua's own "attempt to yield across a C-call boundary", which comes back
+as a Rexx condition. It is not worked around.
+
+## Lua versions
+
+The same source builds with Lua 5.3, 5.4 and 5.5 (`LUA_VERSION` in
+`scripts/build.sh`; 5.4 by default), and the tests give the same output with
+the three. 5.3 is needed for LuaTeX; 5.5 is not packaged yet, and
+`scripts/setup-lua.sh` builds it next to the clone. The differences are a
+macro (`lua_newuserdatauv` is 5.4's). All three have 64-bit integers, so the
+rules of *Values* are the same.
+
+LuaJIT is not supported: its API is Lua 5.1's, without integers, so the
+rules of *Values* would not hold.
+
+## Not yet done
+
+- **Platforms:** Linux only. macOS and Windows, with CI as in the sister
+  bridges, once the prototype is stable.
+- **Lua → ooRexx** (`require "oorexx"`), and with it the adoption of a host's
+  `lua_State` (LuaTeX) as `.lua` (see *States*).
+- A `lua_State` built with real `lua_lock`, so that threads do not wait for
+  each other during callbacks (see *Threads*), if a real need appears.

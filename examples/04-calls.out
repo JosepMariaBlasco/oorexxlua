@@ -12,3 +12,5 @@ The NIL object 175
 0
 1
 Rexx catches: Lua error: no field colour
+10 20 30
+0 Rexx error 98.900: Lua error: attempt to yield across a C-call boundary

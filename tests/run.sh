@@ -2,17 +2,25 @@
 # Run every example (examples/*.rex) and every test (tests/rexx/*.rex) and
 # compare its output with the expected one (NAME.out next to it), each in its
 # own process under a timeout (a deadlock is a failure).  Builds the test C
-# module (tests/cmodule) first.  TESTS="01-tour.rex threads.rex" chooses.
+# module (tests/cmodule) first, with the headers of LUA_VERSION (default 5.4)
+# or LUA_CFLAGS: the same Lua as the build's.  TESTS="01-tour.rex
+# threads.rex" chooses.
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 WORK=${ORXLUA_WORK:-$(cd "$HERE/.." && pwd)}
 BUILD=${BUILD:-$WORK/build}
+mkdir -p "$BUILD" && BUILD=$(cd "$BUILD" && pwd)          # absolute: the tests run in their own directories
 TIMEOUT=${TIMEOUT:-120}
 
 # the C module, as LuaRocks builds them: not linked against liblua
 CMOD=$BUILD/test-cmodules
 mkdir -p "$CMOD"
-LUA_CFLAGS=${LUA_CFLAGS:-$(pkg-config --cflags lua5.4 2>/dev/null)}
+V=${LUA_VERSION:-5.4}
+if [ -z "${LUA_CFLAGS:-}" ]; then
+  if pkg-config --exists "lua$V" 2>/dev/null; then LUA_CFLAGS=$(pkg-config --cflags "lua$V")
+  else LUADIR=$(ls -d "$WORK/lua-$V".*/src 2>/dev/null | sort -V | tail -1 || true)
+       [ -n "$LUADIR" ] && LUA_CFLAGS="-I$LUADIR"; fi
+fi
 # shellcheck disable=SC2086
 cc -O2 -shared -fPIC $LUA_CFLAGS "$HERE/tests/cmodule/hello.c" -o "$CMOD/hello.so" ||
   { echo "run.sh: cannot build tests/cmodule/hello.c" >&2; exit 2; }

@@ -28,6 +28,8 @@
  *     o[k], o[k] = v           indexing (k converted as any value: "1" -> 1)
  *     do x over o              1..#o
  *     o~luaType                type(o)
+ *     o + x, -o, o < x ...     Lua's operators (metamethods too); = is Lua's ==,
+ *                              == is rawequal (and hashCode agrees with it)
  *     o~"LUA.STATE"            its .LuaState
  *
  * Every method but init is UNGUARDED: Lua's state is protected by the lock of
@@ -92,3 +94,26 @@
 ::method string unguarded       external "LIBRARY rexxlua LuaObj_String"
 ::method makeArray unguarded    external "LIBRARY rexxlua LuaObj_MakeArray"
 ::method luaType unguarded      external "LIBRARY rexxlua LuaObj_Type"
+-- Rexx operators: Lua's (a + b, -a, a < b...); == is identity (rawequal)
+::method "+" unguarded      external "LIBRARY rexxlua LuaObj_Operator"
+::method "-" unguarded      external "LIBRARY rexxlua LuaObj_Operator"
+::method "*" unguarded      external "LIBRARY rexxlua LuaObj_Operator"
+::method "/" unguarded      external "LIBRARY rexxlua LuaObj_Operator"
+::method "%" unguarded      external "LIBRARY rexxlua LuaObj_Operator"
+::method "//" unguarded     external "LIBRARY rexxlua LuaObj_Operator"
+::method "**" unguarded     external "LIBRARY rexxlua LuaObj_Operator"
+::method "<" unguarded      external "LIBRARY rexxlua LuaObj_Operator"
+::method ">" unguarded      external "LIBRARY rexxlua LuaObj_Operator"
+::method "<=" unguarded     external "LIBRARY rexxlua LuaObj_Operator"
+::method ">=" unguarded     external "LIBRARY rexxlua LuaObj_Operator"
+::method "=" unguarded      external "LIBRARY rexxlua LuaObj_Operator"
+::method "\=" unguarded     external "LIBRARY rexxlua LuaObj_Operator"
+::method "<>" unguarded     external "LIBRARY rexxlua LuaObj_Operator"
+::method "><" unguarded     external "LIBRARY rexxlua LuaObj_Operator"
+::method "==" unguarded     external "LIBRARY rexxlua LuaObj_Operator"
+::method "\==" unguarded    external "LIBRARY rexxlua LuaObj_Operator"
+::method "&" unguarded      external "LIBRARY rexxlua LuaObj_Operator"
+::method "|" unguarded      external "LIBRARY rexxlua LuaObj_Operator"
+::method "&&" unguarded     external "LIBRARY rexxlua LuaObj_Operator"
+::method "\" unguarded      external "LIBRARY rexxlua LuaObj_Operator"
+::method hashCode unguarded     external "LIBRARY rexxlua LuaObj_HashCode"

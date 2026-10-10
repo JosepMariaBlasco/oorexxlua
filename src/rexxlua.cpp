@@ -19,6 +19,12 @@ extern "C" {
 #include <lauxlib.h>
 #include <lualib.h>
 }
+#if LUA_VERSION_NUM < 503
+#error "the bridge needs Lua 5.3 or later (integers, lua_getextraspace)"
+#endif
+#if LUA_VERSION_NUM < 504                   // Lua 5.3: one user value, always
+#define lua_newuserdatauv(L, size, nuvalue) lua_newuserdata(L, size)
+#endif
 #include <dlfcn.h>
 #include <mutex>
 #include <string>
@@ -45,7 +51,9 @@ enum Kind { KIND_STATE = 1, KIND_PROXY = 2 };
 // only this struct and an empty IdentityTable.
 struct State {
     int kind = KIND_STATE;
-    lua_State *L = NULL;
+    lua_State *L = NULL;                    // the Lua thread in use: main, or the
+                                            // coroutine that called back into Rexx
+    lua_State *main = NULL;                 // the state's main thread
     std::recursive_mutex lock;              // held for a whole entry, callbacks included
     RexxThreadContext *tc = NULL;           // the thread inside, while locked
     RexxObjectPtr self = NULLOBJECT;        // its .LuaState, while locked
@@ -340,6 +348,20 @@ static int p_settable(lua_State *L) { lua_settable(L, 1); return 0; }          /
 static int p_tostring(lua_State *L) { luaL_tolstring(L, 1, NULL); return 1; }  // v -> tostring(v)
 static int p_len(lua_State *L) { lua_pushinteger(L, luaL_len(L, 1)); return 1; }   // v -> #v
 static int p_getglobal(lua_State *L) { lua_getglobal(L, lua_tostring(L, 1)); return 1; }
+// op, a[, b] -> lua_arith(op): a op b, or op a for the unary ones
+static int p_arith(lua_State *L)
+{
+    int op = (int)lua_tointeger(L, 1);
+    lua_remove(L, 1);
+    lua_arith(L, op);
+    return 1;
+}
+// op, a, b -> lua_compare(a, b, op)
+static int p_compare(lua_State *L)
+{
+    lua_pushboolean(L, lua_compare(L, 2, 3, (int)lua_tointeger(L, 1)));
+    return 1;
+}
 
 /* First result as a Rexx object (.nil if none); pops all results. */
 static RexxObjectPtr firstResult(State *st, int n)
@@ -418,11 +440,17 @@ static int rexxCallBack(lua_State *L, RexxObjectPtr target, const char *message,
         RexxObjectPtr v = toRexx(st, i);
         if (v != c->Nil()) c->ArrayPut(args, v, i - first + 1);
     }
+    // Rexx code called back from Lua that calls Lua again runs in the same Lua
+    // thread (a coroutine, perhaps), not in the main one (docs/design.md,
+    // *Coroutines*)
+    lua_State *outer = st->L;
+    st->L = L;
     RexxObjectPtr r;
     if (message == NULL && c->IsRoutine(target))
         r = c->CallRoutine((RexxRoutineObject)target, args);
     else
         r = c->SendMessage(target, message ? message : "CALL", args);
+    st->L = outer;
     if (c->CheckCondition()) {
         pushRexxCondition(L, c);
         return lua_error(L);
@@ -616,7 +644,7 @@ static State *openState(RexxThreadContext *c)
     State *st = new State();
     lua_State *L = luaL_newstate();
     if (L == NULL) { delete st; return NULL; }
-    st->L = L;
+    st->L = st->main = L;
     *(State **)lua_getextraspace(L) = st;
     RexxObjectPtr keep = c->SendMessage0(c->FindClass("IDENTITYTABLE"), "NEW");
     st->keep = c->RequestGlobalReference(keep);       // one per state, never released (#2100)
@@ -641,8 +669,8 @@ static State *openState(RexxThreadContext *c)
 static void closeState(RexxThreadContext *c, State *st)
 {
     if (st->closed) return;
-    lua_close(st->L);
-    st->L = NULL;
+    lua_close(st->main);
+    st->L = st->main = NULL;
     st->closed = true;
     c->SendMessage0(st->keep, "EMPTY");
 }
@@ -1165,6 +1193,105 @@ RexxMethod1(RexxObjectPtr, LuaObj_MakeArray, CSELF, self)
     return a;
 }
 
+/*
+ * Rexx operators on a .LuaObject: Lua's (docs/design.md, *Operators*), with
+ * its metamethods, as ooRexx/Python's are Python's.  The left operand must be
+ * the Lua object (Rexx sends the message to it).  "=" and "\=" are Lua's
+ * == and ~= (__eq); "==" and "\==" are identity (rawequal), as Rexx
+ * collections expect, and ~hashCode agrees with them.  Concatenation is not
+ * here: Rexx's own uses the string value (tostring).
+ */
+enum OpKind { OP_ARITH, OP_COMPARE, OP_RAW };
+struct OpEntry { const char *rexx; OpKind kind; int binary; int unary; bool swap; bool negate; };
+static const OpEntry operators[] = {
+    {"+",   OP_ARITH,   LUA_OPADD,  -2,         false, false},    // -2: unary + is the value itself
+    {"-",   OP_ARITH,   LUA_OPSUB,  LUA_OPUNM,  false, false},
+    {"*",   OP_ARITH,   LUA_OPMUL,  -1,         false, false},
+    {"/",   OP_ARITH,   LUA_OPDIV,  -1,         false, false},
+    {"%",   OP_ARITH,   LUA_OPIDIV, -1,         false, false},    // Lua's //: floor division
+    {"//",  OP_ARITH,   LUA_OPMOD,  -1,         false, false},    // Lua's %: floor modulo
+    {"**",  OP_ARITH,   LUA_OPPOW,  -1,         false, false},
+    {"&",   OP_ARITH,   LUA_OPBAND, -1,         false, false},
+    {"|",   OP_ARITH,   LUA_OPBOR,  -1,         false, false},
+    {"&&",  OP_ARITH,   LUA_OPBXOR, -1,         false, false},
+    {"\\",  OP_ARITH,   -1,         LUA_OPBNOT, false, false},
+    {"<",   OP_COMPARE, LUA_OPLT,   -1,         false, false},
+    {">",   OP_COMPARE, LUA_OPLT,   -1,         true,  false},    // a > b is b < a
+    {"<=",  OP_COMPARE, LUA_OPLE,   -1,         false, false},
+    {">=",  OP_COMPARE, LUA_OPLE,   -1,         true,  false},
+    {"=",   OP_COMPARE, LUA_OPEQ,   -1,         false, false},
+    {"\\=", OP_COMPARE, LUA_OPEQ,   -1,         false, true},
+    {"<>",  OP_COMPARE, LUA_OPEQ,   -1,         false, true},
+    {"><",  OP_COMPARE, LUA_OPEQ,   -1,         false, true},
+    {"==",  OP_RAW,     0,          -1,         false, false},
+    {"\\==", OP_RAW,    0,          -1,         false, true},
+};
+
+RexxMethod3(RexxObjectPtr, LuaObj_Operator, NAME, message, ARGLIST, args, CSELF, self)
+{
+    PROXY_ENTRY
+    const OpEntry *e = NULL;
+    for (const auto &o : operators) if (strcmp(o.rexx, message) == 0) { e = &o; break; }
+    size_t size = c->ArraySize(args);
+    bool unary = size == 0 || c->ArrayAt(args, 1) == NULLOBJECT;
+    int op = e == NULL ? -1 : unary ? e->unary : e->binary;
+    if (op == -1) {
+        raise(c, std::string("Lua error: operator ") + message + " needs " + (unary ? "two operands" : "one operand"));
+        return NULLOBJECT;
+    }
+    if (op == -2) return context->GetSelf();                        // unary +
+    int top = lua_gettop(L);
+    if (e->kind == OP_RAW) {
+        pushSelf(px);
+        if (!pushValue(st, c->ArrayAt(args, 1))) { raiseTop(st); lua_settop(L, top); return NULLOBJECT; }
+        bool eq = lua_rawequal(L, -1, -2);
+        lua_settop(L, top);
+        return (eq != e->negate) ? c->True() : c->False();
+    }
+    lua_pushinteger(L, op);
+    if (e->swap && !pushValue(st, c->ArrayAt(args, 1))) { raiseTop(st); lua_settop(L, top); return NULLOBJECT; }
+    pushSelf(px);
+    if (!unary && !e->swap && !pushValue(st, c->ArrayAt(args, 1))) { raiseTop(st); lua_settop(L, top); return NULLOBJECT; }
+    if (!protect(st, e->kind == OP_ARITH ? p_arith : p_compare, unary ? 2 : 3)) { lua_settop(L, top); return NULLOBJECT; }
+    RexxObjectPtr r;
+    if (e->kind == OP_COMPARE) r = (lua_toboolean(L, -1) != e->negate) ? c->True() : c->False();
+    else r = toRexx(st, -1);
+    lua_settop(L, top);
+    return r;
+}
+
+// ~hashCode: consistent with "==" (rawequal), for Rexx collections: the
+// address of a table, function, userdata or thread; the value of the rest
+RexxMethod1(RexxObjectPtr, LuaObj_HashCode, CSELF, self)
+{
+    PROXY_ENTRY
+    pushSelf(px);
+    char buf[64];
+    switch (lua_type(L, -1)) {
+    case LUA_TTABLE: case LUA_TFUNCTION: case LUA_TUSERDATA: case LUA_TTHREAD: case LUA_TLIGHTUSERDATA:
+        snprintf(buf, sizeof buf, "%p", lua_topointer(L, -1));
+        break;
+    case LUA_TBOOLEAN:
+        snprintf(buf, sizeof buf, "%s", lua_toboolean(L, -1) ? "true" : "false");
+        break;
+    case LUA_TNUMBER:
+        if (lua_isinteger(L, -1)) snprintf(buf, sizeof buf, "%lld", (long long)lua_tointeger(L, -1));
+        else snprintf(buf, sizeof buf, "%a", (double)lua_tonumber(L, -1));
+        break;
+    case LUA_TSTRING: {
+        size_t n;
+        const char *str = lua_tolstring(L, -1, &n);
+        RexxObjectPtr r = c->NewString(str, n);
+        lua_pop(L, 1);
+        return r;
+    }
+    default:
+        snprintf(buf, sizeof buf, "nil");
+    }
+    lua_pop(L, 1);
+    return c->String(buf);
+}
+
 RexxMethod1(RexxObjectPtr, LuaObj_Type, CSELF, self)
 {
     PROXY_ENTRY
@@ -1202,6 +1329,8 @@ RexxMethodEntry rexxlua_methods[] = {
     REXX_METHOD(LuaObj_String,      LuaObj_String),
     REXX_METHOD(LuaObj_MakeArray,   LuaObj_MakeArray),
     REXX_METHOD(LuaObj_Type,        LuaObj_Type),
+    REXX_METHOD(LuaObj_Operator,    LuaObj_Operator),
+    REXX_METHOD(LuaObj_HashCode,    LuaObj_HashCode),
     REXX_LAST_METHOD()
 };
 
