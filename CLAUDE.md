@@ -12,14 +12,17 @@ documentation are in English.
 ## Build and test
 
 ```bash
-scripts/build.sh        # needs ooRexx 5.3 with headers, liblua5.4-dev
-tests/run.sh            # every examples/*.rex and tests/rexx/*.rex against its .out
+scripts/setup-oorexxunit.sh   # once: ooRexxUnit, next to the clone
+scripts/build.sh        # needs ooRexx 5.3 with headers, liblua5.4-dev (or scripts/setup-lua.sh 5.4)
+tests/run.sh            # the test groups, tests/rexx/*.testGroup (Examples: each example against its .out)
 ```
 
 Any change of behaviour updates the expected output and `docs/design.md`.
 Before a commit that touches `src/`, run the tests with Lua 5.3, 5.4 and 5.5
 (`LUA_VERSION=5.3 BUILD=... scripts/build.sh && LUA_VERSION=5.3 BUILD=...
-tests/run.sh`; 5.5 comes from `scripts/setup-lua.sh`).
+tests/run.sh`; 5.5 comes from `scripts/setup-lua.sh`). The CI runs the same
+on Linux, macOS and Windows: what differs between them is in
+`scripts/platform.sh`.
 
 ## Git attribution
 

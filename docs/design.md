@@ -15,7 +15,8 @@ been decided and implemented. *Not yet done* lists what is left.
 Two directions, of which the first exists:
 
 - **ooRexx → Lua** (Lua embedded in ooRexx): an ooRexx native package,
-  `librexxlua.so` with `lua.cls`, gives Rexx `.lua`, `.LuaState` and
+  `librexxlua` (`.so`, `.dylib`; `rexxlua.dll` on Windows) with
+  `lua.cls`, gives Rexx `.lua`, `.LuaState` and
   `.LuaObject`.
 - **Lua → ooRexx** (ooRexx inside Lua): a Lua C module, `require "oorexx"`,
   that creates ooRexx interpreter instances and runs Rexx code. A spike
@@ -72,7 +73,7 @@ Every method of `.LuaState` and `.LuaObject` but `init` is `UNGUARDED`, as
 in ooRexx/Python: the lock above protects Lua's state, and a guarded method
 would hold the Rexx object while Lua runs.
 
-`tests/rexx/threads.rex` runs several Rexx threads in one state, with
+`tests/rexx/Threads.testGroup` runs several Rexx threads in one state, with
 callbacks, and several threads with states of their own.
 
 ## Lifetime
@@ -125,22 +126,33 @@ reaches Rexx.
 table is a cycle that neither collector can see whole, so it is never freed.
 `s~close` frees it, with everything else in the state.
 
-`tests/rexx/lifetime.rex` checks all of this: references released both
+`tests/rexx/Lifetime.testGroup` checks all of this: references released both
 ways, the counts right, and dropped states closed (2,000 states of 1 MB do
-not grow the process by 2 GB). `tests/rexx/robustness.rex` checks local
+not grow the process by 2 GB). `tests/rexx/Robustness.testGroup` checks local
 references (a million callbacks in one call leave the memory flat) and
 finalized objects.
 
 ## C modules
 
-Lua C modules built the usual way (LuaRocks) are not linked against
-`liblua`: they expect the `lua_*` symbols to be global in the process.
-ooRexx loads `librexxlua.so` with `RTLD_LOCAL`, so the `liblua` it brings in
-is not, and `require` fails with "undefined symbol: lua_setfield". Before
-making its first state, the bridge reopens that `liblua` with
-`RTLD_NOLOAD | RTLD_GLOBAL` (found with `dladdr`), which makes its symbols
-global. `tests/rexx/cmodule.rex` requires such a module, built by
-`tests/run.sh`.
+On Linux and macOS, Lua C modules built the usual way (LuaRocks) are not
+linked against `liblua`: they expect the `lua_*` symbols to be global in the
+process. ooRexx loads `librexxlua` with `RTLD_LOCAL`, so the `liblua` it
+brings in is not, and `require` fails with "undefined symbol:
+lua_setfield". Before making its first state, the bridge reopens that
+`liblua` with `RTLD_NOLOAD | RTLD_GLOBAL` (found with `dladdr`), which makes
+its symbols global. That `liblua` is a shared library (a distribution's) or
+`librexxlua` itself, when a static `liblua.a` was linked into it:
+`build.sh` links the static library whole, so that every `lua_*` a module
+may need is there, and not only those the bridge uses.
+
+Windows has no global symbols: there, every Lua C module is linked against
+the Lua DLL by name (`lua54.dll`), and the bridge must use that same DLL, or
+the module would run with a second Lua of its own. So on Windows Lua is
+always a DLL (`scripts/setup-lua.sh` builds it), and `build.sh` copies it
+next to `rexxlua.dll`.
+
+`tests/rexx/CModule.testGroup` requires such a module, built by
+`tests/run.sh` as LuaRocks builds them on each platform.
 
 ## Values
 
@@ -312,7 +324,7 @@ an Array 200 deep are fine. A Rexx object whose `string` method raises a
 condition (in `tostring(obj)` from Lua, or in `box`) gives that error, not a
 crash.
 
-`tests/rexx/robustness.rex` holds a test for each of these, and for the
+`tests/rexx/Robustness.testGroup` holds a test for each of these, and for the
 other faults that a review of the bridge found.
 
 ## Operators
@@ -360,17 +372,31 @@ as a Rexx condition. It is not worked around.
 The same source builds with Lua 5.3, 5.4 and 5.5 (`LUA_VERSION` in
 `scripts/build.sh`; 5.4 by default), and the tests give the same output with
 the three. 5.3 is needed for LuaTeX; 5.5 is not packaged yet, and
-`scripts/setup-lua.sh` builds it next to the clone. The differences are a
+`scripts/setup-lua.sh` builds it (or any of the three, on any platform)
+next to the clone. The differences are a
 macro (`lua_newuserdatauv` is 5.4's). All three have 64-bit integers, so the
 rules of *Values* are the same.
 
 LuaJIT is not supported: its API is Lua 5.1's, without integers, so the
 rules of *Values* would not hold.
 
+## Platforms
+
+Linux, macOS and Windows, with the same source. What differs is in
+`scripts/platform.sh`: the package's file name (`librexxlua.so`,
+`librexxlua.dylib`, `rexxlua.dll`), where ooRexx finds libraries
+(`LD_LIBRARY_PATH`, `DYLD_LIBRARY_PATH`, `PATH`), and the compiler (MSVC on
+Windows, from Git Bash). In the code, only the C modules (*C modules*)
+differ.
+
+The CI (`.github/workflows/build.yml`) builds and runs every test group on
+Linux x64, macOS arm64 and x64, and Windows x64, each with Lua 5.3, 5.4 and
+5.5, against ooRexx's portable builds pinned to one revision. The tests
+measure memory on each platform (`/proc` on Linux, `ps` on macOS, the
+working set on Windows).
+
 ## Not yet done
 
-- **Platforms:** Linux only. macOS and Windows, with CI as in the sister
-  bridges, once the prototype is stable.
 - **Lua → ooRexx** (`require "oorexx"`), and with it the adoption of a host's
   `lua_State` (LuaTeX) as `.lua` (see *States*).
 - A `lua_State` built with real `lua_lock`, so that threads do not wait for
