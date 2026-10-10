@@ -1,14 +1,17 @@
-/* 03-values.rex -- how values cross: ooRexx/Python's rule, exact floats, box.
+/* 03-values.rex -- how values cross: numbers that lose nothing, exact floats, box.
    Its exact output is 03-values.out.  Run: examples/run-one.sh 03-values.rex  */
 
--- 1. Rexx -> Lua: canonical integers and Rexx numbers with a point or an
---    exponent are Lua numbers; anything else is a string
+-- 1. Rexx -> Lua: canonical integers, and Rexx numbers with a point that a
+--    Lua float writes back the same, are Lua numbers; anything else is a
+--    string, so that nothing is lost
 types = .lua~eval("function(...) local r = {}; for i = 1, select('#', ...) do" -
                   " local v = select(i, ...); r[i] = math.type(v) or type(v) end;" -
                   " return table.concat(r, ' ') end")
-say types~call(42, -7, 0, 3.14, "1E3", ".5")       -- integer integer integer float float float
+say types~call(42, -7, 0, 3.14, 0.5, "100.0")      -- integer integer integer float float float
+say types~call("3.10", "1E3", ".5", 2**100)        -- string string string string
 say types~call("007", " 5", "+5", "abc", "1.2.3")  -- string string string string string
 say types~call(99999999999999999999)               -- string: does not fit in 64 bits
+say .lua~eval("... .. ' EUR'", format(3.1, , 2))   -- 3.10 EUR: Rexx's formatting arrives
 
 -- 2. So Lua can compare them, not only add them
 positive = .lua~eval("function(n) return n > 0 end")

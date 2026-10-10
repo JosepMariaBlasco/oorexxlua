@@ -156,24 +156,31 @@ next to `rexxlua.dll`.
 
 ## Values
 
-Rexx → Lua, with **the same rule as ooRexx/Python** (and the same code, its
-`numberKind`), so that there is only one rule to remember. A Rexx string
+Rexx → Lua, with **a rule that loses nothing**: a Rexx string becomes a Lua
+number only when the number says everything the string said. A Rexx string
 becomes:
 
 - a canonical integer (`0`, `42`, `-7`: no leading zeros, blanks or `+`)
   that fits in 64 bits → a Lua integer;
-- any other valid Rexx number with a decimal point or an exponent (`3.14`,
-  `-0.5`, `1E3`, `.5`) → a Lua float;
-- anything else (`"007"`, `" 5"`, `"+5"`, text, and integers that do not
-  fit in 64 bits, which a float would round silently) → a Lua string.
+- a Rexx number with a decimal point that a Lua float writes back
+  unchanged (`3.14`, `-0.5`, `100.0`, `0.333333333`) → a Lua float. "Writes
+  back" is the Lua → Rexx rule below, so such a number makes the round trip
+  unchanged;
+- anything else → a Lua string: `"007"`, `" 5"`, `"+5"`, text; integers
+  that do not fit in 64 bits, which a float would round silently; and the
+  Rexx numbers a float would write differently, `3.10` (from
+  `format(x, , 2)`), `1E3`, `.5`, `1.26765060E+30` (`2**100`).
 
 Lua converts strings to numbers in arithmetic only: `"10" == 10` is false,
 and `"10" < 20` and `math.max("1", 2)` fail. With strings always, a Lua
-function that compares a number it got from Rexx would fail. The cost is the
-same as in ooRexx/Python: a string that looks like a number arrives as a
-number. `..` and `tostring` usually give it back unchanged; when they do not,
-`box` forces a type (see *Boxing*). The keys of `o[k]` and `o[k] = v`
-follow the same rule, so `t[1]` from Rexx is `t[1]` in Lua.
+function that compares a number it got from Rexx would fail. With numbers
+whenever possible (ooRexx/Python's rule, which this one refines), Rexx's
+formatting would be lost on the way: `3.10` would arrive as `3.1`, which
+matters when Lua is typesetting it (LuaTeX). So a number arrives as a number
+when it can do so unchanged, and as its string otherwise; Lua's arithmetic
+still accepts the string. When the rule does not give the type needed,
+`box` forces one (see *Boxing*). The keys of `o[k]` and `o[k] = v` follow
+the same rule, so `t[1]` from Rexx is `t[1]` in Lua.
 
 | Rexx | Lua |
 |---|---|

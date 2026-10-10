@@ -9,9 +9,10 @@
  *   gives it back; string -> string; a Rexx object passed in earlier -> that
  *   object; anything else -> a .LuaObject proxy.
  * Rexx -> Lua: .nil -> nil; .LuaObject -> its value; Array -> a new sequence
- *   table (copy); a string -> integer, float or string by ooRexx/Python's
- *   rule (numberKind); Routine -> a Lua function; any other object ->
- *   userdata "RexxObject" that Lua can call or send messages to.
+ *   table (copy); a string -> integer, float or string, by a rule that
+ *   loses nothing (numberKind, pushRexxString); Routine -> a Lua function;
+ *   any other object -> userdata "RexxObject" that Lua can call or send
+ *   messages to.
  */
 
 #include <oorexxapi.h>
@@ -164,8 +165,9 @@ static bool isDigits(const char *p, const char *end)
     return true;
 }
 
-// What a Rexx string becomes in Lua (docs/design.md, *Values*): the same rule
-// as ooRexx/Python's, and the same code (its bridge.cpp, numberKind).
+// What a Rexx string may become in Lua (docs/design.md, *Values*): the same
+// test as ooRexx/Python's (its bridge.cpp, numberKind); pushRexxString then
+// keeps a float only if it loses nothing.
 enum NumberKind { NOT_NUMBER, INTEGER_NUMBER, FLOAT_NUMBER };
 
 static NumberKind numberKind(const char *s, size_t n)
@@ -193,8 +195,13 @@ static NumberKind numberKind(const char *s, size_t n)
     return isDigits(x, end) ? FLOAT_NUMBER : NOT_NUMBER;
 }
 
-// Push a Rexx string by that rule.  An integer that does not fit in 64 bits
-// stays a string (a float would lose digits silently).
+static std::string formatFloat(double d);
+
+// Push a Rexx string by that rule, which loses nothing: an integer that does
+// not fit in 64 bits stays a string (a float would lose digits silently), and
+// so does a decimal number that the float would not write back the same
+// ("3.10", "1E3", "1.26765060E+30"; "0.5" and "100.0" are floats), so that
+// Rexx's formatting reaches Lua (docs/design.md, *Values*).
 static void pushRexxString(lua_State *L, const char *d, size_t n)
 {
     std::string s(d, n);                    // NUL-terminated, for strtoll/strtod
@@ -205,9 +212,11 @@ static void pushRexxString(lua_State *L, const char *d, size_t n)
         if (errno == 0) { lua_pushinteger(L, (lua_Integer)v); return; }
         break;
     }
-    case FLOAT_NUMBER:
-        lua_pushnumber(L, (lua_Number)strtod(s.c_str(), NULL));
-        return;
+    case FLOAT_NUMBER: {
+        double v = strtod(s.c_str(), NULL);
+        if (formatFloat(v) == s) { lua_pushnumber(L, (lua_Number)v); return; }
+        break;
+    }
     default:
         break;
     }
