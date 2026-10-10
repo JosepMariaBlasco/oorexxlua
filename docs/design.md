@@ -509,7 +509,11 @@ both macOS architectures), so the module built against Lua 5.3 works. On
 Windows LuaTeX's Lua is a DLL of its own, `lua53w64.dll`, and a module's
 imports are bound by DLL name: `build.sh` also makes `texlive/oorexx.dll`,
 the same module linked against an import library for that name (made from
-the exports of `lua53.dll`: the same Lua 5.3 API). The tests of the module
+the exports of `lua53.dll`: the same Lua 5.3 API). TeX Live also ships an
+older `msvcp140.dll`, which LuaTeX's process loads, and a `std::mutex` built
+by a recent MSVC (whose constructor became `constexpr`) crashes in `lock()`
+with it: the Windows build defines `_DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR`,
+Microsoft's workaround. The tests of the module
 (`tests/lua`) also run in TeX Live's `texlua` (`scripts/setup-luatex.sh`
 fetches it from CTAN), on the three platforms.
 
