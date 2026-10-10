@@ -79,9 +79,11 @@ DIR=$(native_path "$STAGE")
       LUA_CPATH="$(native_path "$TMP/modules")/?.$MODEXT" ORXLUA_CHECK_MODULE=hello \
       rexx "$DIR/check.rex")
 LUA_EXE=$(lua_exe "$V")
+SEP=/; [ "$OS" = Windows ] && SEP='\'
+
 [ -n "$LUA_EXE" ] || { echo "package.sh: no standalone lua $V to check the Lua module (scripts/setup-lua.sh $V)" >&2; exit 2; }
 (cd "$TMP/elsewhere" &&
-  env LUA_CPATH="$DIR$(native_path /)?.$MODEXT" "$LUA_EXE" "$(native_path "$STAGE/check.lua")")
+  env LUA_CPATH="$DIR$SEP?.$MODEXT" "$LUA_EXE" "$(native_path "$STAGE/check.lua")")
 
 mkdir -p "$DEST"
 ZIP=$(cd "$DEST" && pwd)/$NAME.zip
