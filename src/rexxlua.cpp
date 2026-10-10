@@ -58,6 +58,7 @@ struct State {
     RexxThreadContext *tc = NULL;           // the thread inside, while locked
     RexxObjectPtr self = NULLOBJECT;        // its .LuaState, while locked
     RexxObjectPtr keep = NULLOBJECT;        // IdentityTable: Rexx object -> count (*Lifetime*)
+    int depth = 0;                          // entries in progress (nested ones too)
     bool closed = false;
 };
 
@@ -83,9 +84,9 @@ struct Enter {
     {
         owns = tryOnly ? lk.try_lock() : (lk.lock(), true);
         savedTc = st->tc; savedSelf = st->self;
-        if (owns) { st->tc = tc; if (self != NULLOBJECT) st->self = self; }
+        if (owns) { st->tc = tc; if (self != NULLOBJECT) st->self = self; st->depth++; }
     }
-    ~Enter() { if (owns) { st->tc = savedTc; st->self = savedSelf; } }
+    ~Enter() { if (owns) { st->depth--; st->tc = savedTc; st->self = savedSelf; } }
 };
 
 static void raise(RexxThreadContext *c, const std::string &m)
@@ -134,7 +135,8 @@ static void drain(RexxThreadContext *c)
         else {
             State *st = (State *)v;
             Enter e(st, c, NULLOBJECT, true);
-            if (!e.owns) { later.push_back(v); continue; }
+            // another thread's, or running on this one (a callback): later
+            if (!e.owns || st->depth > 1) { later.push_back(v); continue; }
             closeState(c, st);
         }
     }
@@ -395,7 +397,20 @@ static RexxObjectPtr allResults(State *st, int n)
  * because Lua clears a weak entry before running the old userdata's __gc:
  * the object can get a new userdata while the old one still waits for it.
  */
-struct RexxBox { RexxObjectPtr obj; };
+struct RexxBox { RexxObjectPtr obj; };       // obj is NULL once its __gc has run
+
+/*
+ * Local references.  Every Rexx object the API returns is a local reference
+ * of the native method in progress, freed only when it returns.  One eval
+ * whose Lua code calls back into Rexx a million times would hold a million
+ * argument arrays, so what the callbacks make is released as soon as it has
+ * been used.  (The constants .nil, .true and .false are left alone.)
+ */
+static void release(RexxThreadContext *c, RexxObjectPtr o)
+{
+    if (o != NULLOBJECT && o != c->Nil() && o != c->True() && o != c->False())
+        c->ReleaseLocalReference(o);
+}
 
 static void keepAdd(State *st, RexxObjectPtr obj)
 {
@@ -403,7 +418,10 @@ static void keepAdd(State *st, RexxObjectPtr obj)
     RexxObjectPtr n = c->SendMessage1(st->keep, "AT", obj);
     wholenumber_t k = 0;
     if (n != NULLOBJECT && n != c->Nil()) c->WholeNumber(n, &k);
-    c->SendMessage2(st->keep, "PUT", c->WholeNumber(k + 1), obj);
+    release(c, n);
+    RexxObjectPtr count = c->WholeNumber(k + 1);
+    c->SendMessage2(st->keep, "PUT", count, obj);
+    release(c, count);
 }
 
 static void keepRemove(State *st, RexxObjectPtr obj)
@@ -413,8 +431,13 @@ static void keepRemove(State *st, RexxObjectPtr obj)
     RexxObjectPtr n = c->SendMessage1(st->keep, "AT", obj);
     wholenumber_t k = 0;
     if (n != NULLOBJECT && n != c->Nil()) c->WholeNumber(n, &k);
-    if (k <= 1) c->SendMessage1(st->keep, "REMOVE", obj);
-    else c->SendMessage2(st->keep, "PUT", c->WholeNumber(k - 1), obj);
+    release(c, n);
+    if (k <= 1) release(c, c->SendMessage1(st->keep, "REMOVE", obj));
+    else {
+        RexxObjectPtr count = c->WholeNumber(k - 1);
+        c->SendMessage2(st->keep, "PUT", count, obj);
+        release(c, count);
+    }
 }
 
 // A Rexx condition, pending on this thread, as a Lua error (pushes the message;
@@ -430,45 +453,80 @@ static void pushRexxCondition(lua_State *L, RexxThreadContext *c)
     lua_pushstring(L, m.c_str());
 }   // (the strings are gone before lua_error, a longjmp, runs)
 
+// The string value of a Rexx object, or false with a condition pending (its
+// `string` method can raise one: ObjectToString then returns NULL)
+static bool stringValue(RexxThreadContext *c, RexxObjectPtr o, RexxStringObject &s)
+{
+    s = c->ObjectToString(o);
+    return s != NULLOBJECT && !c->CheckCondition();
+}
+
+/*
+ * The Lua C functions below run in some Lua thread L: the main one, or a
+ * coroutine.  Everything the bridge does meanwhile (converting arguments,
+ * pushing results, nested calls from Rexx back into Lua) must use that
+ * thread's stack, so they set st->L = L on entry and put the previous one
+ * back before every return and every lua_error (a longjmp: no RAII here).
+ * docs/design.md, *Coroutines*.
+ */
+#define USE_THREAD(L)  State *st = stateOf(L); lua_State *outerL = st->L; st->L = (L)
+#define END_THREAD()   (st->L = outerL)
+
+// A Rexx object's userdata, refused once its __gc has run (a finalizer can
+// bring a userdata back after that)
+static RexxBox *checkBox(lua_State *L, int idx)
+{
+    RexxBox *b = (RexxBox *)luaL_checkudata(L, idx, REXXOBJ);
+    if (b->obj == NULL) luaL_error(L, "a Rexx object used after Lua finalized it");
+    return b;
+}
+
+static RexxBox *upvalueBox(lua_State *L)
+{
+    RexxBox *b = (RexxBox *)lua_touserdata(L, lua_upvalueindex(1));
+    if (b->obj == NULL) luaL_error(L, "a Rexx object used after Lua finalized it");
+    return b;
+}
+
 static int rexxCallBack(lua_State *L, RexxObjectPtr target, const char *message, int first)
 {
-    State *st = stateOf(L);
+    USE_THREAD(L);
     RexxThreadContext *c = st->tc;
     int n = lua_gettop(L);
     RexxArrayObject args = c->NewArray(n >= first ? n - first + 1 : 0);
     for (int i = first; i <= n; i++) {
         RexxObjectPtr v = toRexx(st, i);
         if (v != c->Nil()) c->ArrayPut(args, v, i - first + 1);
+        release(c, v);                              // the Array holds it
     }
-    // Rexx code called back from Lua that calls Lua again runs in the same Lua
-    // thread (a coroutine, perhaps), not in the main one (docs/design.md,
-    // *Coroutines*)
-    lua_State *outer = st->L;
-    st->L = L;
     RexxObjectPtr r;
     if (message == NULL && c->IsRoutine(target))
         r = c->CallRoutine((RexxRoutineObject)target, args);
     else
         r = c->SendMessage(target, message ? message : "CALL", args);
-    st->L = outer;
+    release(c, args);
     if (c->CheckCondition()) {
         pushRexxCondition(L, c);
+        END_THREAD();
         return lua_error(L);
     }
-    if (r == NULLOBJECT) return 0;
-    if (!pushValue(st, r)) return lua_error(L);
+    if (r == NULLOBJECT) { END_THREAD(); return 0; }
+    bool ok = pushValue(st, r);
+    release(c, r);
+    END_THREAD();
+    if (!ok) return lua_error(L);
     return 1;
 }
 
 static int box_call(lua_State *L)       // rexxobj(...)
 {
-    RexxBox *b = (RexxBox *)luaL_checkudata(L, 1, REXXOBJ);
+    RexxBox *b = checkBox(L, 1);
     return rexxCallBack(L, b->obj, NULL, 2);
 }
 
 static int box_method(lua_State *L)     // closure from __index: rexxobj:name(...)
 {
-    RexxBox *b = (RexxBox *)lua_touserdata(L, lua_upvalueindex(1));
+    RexxBox *b = upvalueBox(L);
     const char *name = lua_tostring(L, lua_upvalueindex(2));
     // obj:name(...) passes obj first: skip it; obj.name(...) does not
     int first = (lua_touserdata(L, 1) == b) ? 2 : 1;
@@ -492,7 +550,7 @@ static void pushUpper(lua_State *L, int idx, const char *suffix)
  * any other key goes to Rexx's [] and []=.                                */
 static int box_index(lua_State *L)      // obj.name: the bound method; obj[k]: obj[k]
 {
-    RexxBox *b = (RexxBox *)luaL_checkudata(L, 1, REXXOBJ);
+    RexxBox *b = checkBox(L, 1);
     if (lua_type(L, 2) == LUA_TSTRING) {
         lua_pushvalue(L, 1);
         pushUpper(L, 2, "");
@@ -505,7 +563,7 @@ static int box_index(lua_State *L)      // obj.name: the bound method; obj[k]: o
 
 static int box_newindex(lua_State *L)   // obj.name = v: NAME=; obj[k] = v: obj[k] = v
 {
-    RexxBox *b = (RexxBox *)luaL_checkudata(L, 1, REXXOBJ);
+    RexxBox *b = checkBox(L, 1);
     lua_settop(L, 3);
     if (lua_type(L, 2) == LUA_TSTRING) {
         pushUpper(L, 2, "=");                               // 4: the message
@@ -522,7 +580,7 @@ static int box_newindex(lua_State *L)   // obj.name = v: NAME=; obj[k] = v: obj[
 
 static int box_len(lua_State *L)        // #obj: obj~items
 {
-    RexxBox *b = (RexxBox *)luaL_checkudata(L, 1, REXXOBJ);
+    RexxBox *b = checkBox(L, 1);
     lua_settop(L, 1);
     return rexxCallBack(L, b->obj, "ITEMS", 2);
 }
@@ -530,19 +588,24 @@ static int box_len(lua_State *L)        // #obj: obj~items
 // pairs(obj): through obj~supplier.  upvalue 1: the supplier, as a userdata.
 static int pairs_next(lua_State *L)
 {
-    RexxBox *sup = (RexxBox *)lua_touserdata(L, lua_upvalueindex(1));
-    State *st = stateOf(L);
+    RexxBox *sup = upvalueBox(L);
+    USE_THREAD(L);
     RexxThreadContext *c = st->tc;
     RexxSupplierObject sp = (RexxSupplierObject)sup->obj;
     if (!c->SupplierAvailable(sp)) {
+        END_THREAD();
         if (c->CheckCondition()) { pushRexxCondition(L, c); return lua_error(L); }
         return 0;
     }
     RexxObjectPtr index = c->SupplierIndex(sp);
     RexxObjectPtr item = c->SupplierItem(sp);
     c->SupplierNext(sp);
-    if (c->CheckCondition()) { pushRexxCondition(L, c); return lua_error(L); }
-    if (!pushValue(st, index) || !pushValue(st, item)) return lua_error(L);
+    if (c->CheckCondition()) { END_THREAD(); pushRexxCondition(L, c); return lua_error(L); }
+    bool ok = pushValue(st, index) && pushValue(st, item);
+    release(c, index);
+    release(c, item);
+    END_THREAD();
+    if (!ok) return lua_error(L);
     return 2;
 }
 
@@ -550,14 +613,18 @@ static void pushBox(State *st, RexxObjectPtr v);
 
 static int box_pairs(lua_State *L)
 {
-    RexxBox *b = (RexxBox *)luaL_checkudata(L, 1, REXXOBJ);
-    State *st = stateOf(L);
+    RexxBox *b = checkBox(L, 1);
+    USE_THREAD(L);
     RexxThreadContext *c = st->tc;
     RexxObjectPtr sup = c->SendMessage0(b->obj, "SUPPLIER");
-    if (c->CheckCondition()) { pushRexxCondition(L, c); return lua_error(L); }
-    if (sup == NULLOBJECT || !c->IsOfType(sup, "SUPPLIER"))
+    if (c->CheckCondition()) { END_THREAD(); pushRexxCondition(L, c); return lua_error(L); }
+    if (sup == NULLOBJECT || !c->IsOfType(sup, "SUPPLIER")) {
+        END_THREAD();
         return luaL_error(L, "pairs: the Rexx object's supplier is not a Supplier");
+    }
     pushBox(st, sup);
+    release(c, sup);                                // the userdata keeps it
+    END_THREAD();
     lua_pushcclosure(L, pairs_next, 1);
     return 1;
 }
@@ -566,7 +633,7 @@ static int box_pairs(lua_State *L)
 // upvalue 1: the box; upvalue 2: true for a predicate (Rexx 1/0 -> boolean)
 static int routine_closure(lua_State *L)
 {
-    RexxBox *b = (RexxBox *)lua_touserdata(L, lua_upvalueindex(1));
+    RexxBox *b = upvalueBox(L);
     bool predicate = lua_toboolean(L, lua_upvalueindex(2));
     int n = rexxCallBack(L, b->obj, NULL, 1);
     if (predicate && n == 1) {
@@ -603,10 +670,16 @@ static void pushRoutine(State *st, RexxObjectPtr v, bool predicate)
 
 static int box_tostring(lua_State *L)
 {
-    RexxBox *b = (RexxBox *)luaL_checkudata(L, 1, REXXOBJ);
+    RexxBox *b = checkBox(L, 1);
     RexxThreadContext *c = stateOf(L)->tc;
-    RexxStringObject s = c->ObjectToString(b->obj);
+    RexxStringObject s;
+    if (!stringValue(c, b->obj, s)) {
+        if (c->CheckCondition()) pushRexxCondition(L, c);
+        else lua_pushstring(L, "the Rexx object has no string value");
+        return lua_error(L);
+    }
     lua_pushlstring(L, c->StringData(s), c->StringLength(s));
+    if ((RexxObjectPtr)s != b->obj) release(c, s);
     return 1;
 }
 
@@ -682,11 +755,18 @@ static void closeState(RexxThreadContext *c, State *st)
 static RexxObjectPtr newProxy(State *st, int idx)
 {
     RexxThreadContext *c = st->tc;
+    if (st->self == NULLOBJECT) return c->Nil();    // no .LuaState at hand (a __gc while drain closes it)
     lua_pushvalue(st->L, idx);
     Proxy *p = new Proxy();
     p->st = st;
     p->ref = luaL_ref(st->L, LUA_REGISTRYINDEX);
-    return c->SendMessage2(c->FindClass("LUAOBJECT"), "NEW", c->NewPointer(p), st->self);
+    RexxObjectPtr o = c->SendMessage2(c->FindClass("LUAOBJECT"), "NEW", c->NewPointer(p), st->self);
+    if (o == NULLOBJECT) {                          // a condition is pending
+        luaL_unref(st->L, LUA_REGISTRYINDEX, p->ref);
+        delete p;
+        return c->Nil();
+    }
+    return o;
 }
 
 static RexxObjectPtr toRexx(State *st, int idx)
@@ -712,7 +792,7 @@ static RexxObjectPtr toRexx(State *st, int idx)
     }
     case LUA_TUSERDATA: {
         RexxBox *b = (RexxBox *)luaL_testudata(L, idx, REXXOBJ);
-        if (b) return b->obj;
+        if (b) return b->obj != NULL ? b->obj : c->Nil();
         return newProxy(st, idx);
     }
     default:
@@ -750,6 +830,7 @@ static bool pushValue(State *st, RexxObjectPtr v)
         RexxArrayObject a = (RexxArrayObject)v;
         size_t n = c->ArrayItems(a);
         size_t size = c->ArraySize(a);
+        if (!lua_checkstack(L, 4)) { lua_pushstring(L, "an Array nested too deeply"); return false; }
         lua_createtable(L, (int)n, 0);
         for (size_t i = 1; i <= size; i++) {
             RexxObjectPtr item = c->ArrayAt(a, i);
@@ -760,8 +841,14 @@ static bool pushValue(State *st, RexxObjectPtr v)
         return true;
     }
     if (c->IsString(v) || c->IsOfType(v, "STRING")) {   // Integers from literals too
-        RexxStringObject s = c->ObjectToString(v);
+        RexxStringObject s;
+        if (!stringValue(c, v, s)) {
+            if (c->CheckCondition()) pushRexxCondition(L, c);
+            else lua_pushstring(L, "a Rexx string with no string value");
+            return false;
+        }
         pushRexxString(L, c->StringData(s), c->StringLength(s));
+        if ((RexxObjectPtr)s != v) release(c, s);   // a new String (from a number): see release
         return true;
     }
     // A Routine: a real Lua function. Any other object: a userdata Lua can
@@ -777,6 +864,15 @@ static void raiseTop(State *st)
     std::string m = std::string("Lua error: ") + lua_tostring(st->L, -1);
     lua_pop(st->L, 1);
     raise(st->tc, m);
+}
+
+// Room on the Lua stack for n more values (Lua guarantees only about 20, and
+// does not check in release builds): false after raising a Rexx error
+static bool room(State *st, int n)
+{
+    if (lua_checkstack(st->L, n + 4)) return true;
+    raise(st->tc, "Lua error: too many arguments");
+    return false;
 }
 
 /* ------------------------------------------------------------------------ */
@@ -825,6 +921,10 @@ RexxMethod1(RexxObjectPtr, LuaState_Close, CSELF, self)
     State *st = (State *)self;
     drain(context->threadContext);
     Enter e(st, context->threadContext, context->GetSelf());
+    if (st->depth > 1) {        // from a callback: Lua code of this state is running
+        raise(context->threadContext, "Lua error: a LuaState cannot be closed while Lua code in it is running");
+        return NULLOBJECT;
+    }
     closeState(context->threadContext, st);
     return NULLOBJECT;
 }
@@ -850,6 +950,7 @@ RexxMethod3(RexxObjectPtr, LuaState_Eval, CSTRING, code, ARGLIST, args, CSELF, s
         }
     }
     size_t size = context->ArraySize(args);
+    if (!room(st, (int)size)) { lua_settop(L, top); return NULLOBJECT; }
     for (size_t i = 2; i <= size; i++)
         if (!pushValue(st, context->ArrayAt(args, i))) {
             raiseTop(st);
@@ -910,8 +1011,9 @@ RexxMethod3(RexxObjectPtr, LuaState_Box, CSTRING, type, RexxObjectPtr, value, CS
         else bad = "a float must be a number";
     }
     else if (t == "string") {
-        RexxStringObject s = c->ObjectToString(value);
-        lua_pushlstring(L, c->StringData(s), c->StringLength(s));
+        RexxStringObject s;
+        if (stringValue(c, value, s)) lua_pushlstring(L, c->StringData(s), c->StringLength(s));
+        else bad = "the value has no string value";
     }
     else if (t == "reference") {
         if (proxyOf(c, value) != NULL || c->IsString(value) || c->IsOfType(value, "STRING"))
@@ -919,11 +1021,15 @@ RexxMethod3(RexxObjectPtr, LuaState_Box, CSTRING, type, RexxObjectPtr, value, CS
         else pushBox(st, value);
     }
     else bad = "the type must be boolean, integer, float, string or reference, not \"" + std::string(type) + "\"";
+    if (c->CheckCondition()) {          // the value's own string method failed: that error
+        if (bad.empty()) lua_pop(L, 1);
+        return NULLOBJECT;
+    }
     if (!bad.empty()) {
-        if (bad.compare(0, 8, "the type") != 0) {
-            RexxStringObject s = c->ObjectToString(value);
+        RexxStringObject s;
+        if (bad.compare(0, 8, "the type") != 0 && stringValue(c, value, s))
             bad += ", not \"" + std::string(c->StringData(s), c->StringLength(s)) + "\"";
-        }
+        if (c->CheckCondition()) return NULLOBJECT;
         raise(c, "Lua error: box: " + bad);
         return NULLOBJECT;
     }
@@ -1061,6 +1167,7 @@ static RexxObjectPtr callField(RexxMethodContext *context, Proxy *px, CSTRING me
         }
         else colon = !raw;
     }
+    if (!room(st, (int)size + 1)) { lua_settop(L, top); return NULLOBJECT; }
     int nargs = 0;
     if (colon) { lua_pushvalue(L, obj); nargs = 1; }
     for (size_t i = 1; i <= size; i++)
@@ -1113,6 +1220,7 @@ static RexxObjectPtr callSelf(RexxMethodContext *context, Proxy *px, RexxArrayOb
     int top = lua_gettop(L);
     pushSelf(px);
     size_t size = args ? c->ArraySize(args) : 0;
+    if (!room(st, (int)size)) { lua_settop(L, top); return NULLOBJECT; }
     for (size_t i = 1; i <= size; i++)
         if (!pushValue(st, c->ArrayAt(args, i))) { raiseTop(st); lua_settop(L, top); return NULLOBJECT; }
     int n = pcallAll(st, (int)size);
@@ -1274,10 +1382,19 @@ RexxMethod1(RexxObjectPtr, LuaObj_HashCode, CSELF, self)
     case LUA_TBOOLEAN:
         snprintf(buf, sizeof buf, "%s", lua_toboolean(L, -1) ? "true" : "false");
         break;
-    case LUA_TNUMBER:
-        if (lua_isinteger(L, -1)) snprintf(buf, sizeof buf, "%lld", (long long)lua_tointeger(L, -1));
+    case LUA_TNUMBER: {             // 1 and 1.0 are rawequal: the same hash
+        lua_Integer i;
+        int isInt = lua_isinteger(L, -1);
+        if (!isInt) {
+            double d = (double)lua_tonumber(L, -1);
+            isInt = d == std::floor(d) && d >= -9.2233720368547758e18 && d < 9.2233720368547758e18;
+            i = isInt ? (lua_Integer)d : 0;
+        }
+        else i = lua_tointeger(L, -1);
+        if (isInt) snprintf(buf, sizeof buf, "%lld", (long long)i);
         else snprintf(buf, sizeof buf, "%a", (double)lua_tonumber(L, -1));
         break;
+    }
     case LUA_TSTRING: {
         size_t n;
         const char *str = lua_tolstring(L, -1, &n);

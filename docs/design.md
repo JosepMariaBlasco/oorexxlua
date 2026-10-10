@@ -45,7 +45,10 @@ s~close
   LuaState"), not a crash.
 - `s~close` is `lua_close`: it frees everything the state held, Rexx objects
   included. Using a closed state, or any of its objects, is an error
-  ("the LuaState is closed"). Closing twice is harmless.
+  ("the LuaState is closed"). Closing twice is harmless. A state cannot be
+  closed from a callback while its own Lua code is running (that Lua code
+  would go on in freed memory): that is an error, and so is not done by the
+  bridge either (a dropped state that is running is closed later).
 - A `.LuaState` that Rexx drops is closed by the bridge (see *Lifetime*).
 
 ## Threads
@@ -98,13 +101,28 @@ is needed because Lua clears a weak entry before running the old userdata's
 `__gc`, so an object can get a new userdata while the old one is still
 waiting for its finalizer.
 
+**Local references.** Every Rexx object the native API returns is a local
+reference of the native method in progress, freed only when that method
+returns. One `eval` whose Lua code calls back into Rexx a million times
+would otherwise hold a million argument arrays (650 MB were measured), so
+the bridge releases what callbacks make as soon as it has been used: the
+arguments, their Array, the result, the strings made from numbers, the
+counts of `keep`.
+
+**Finalized objects.** A Lua finalizer (`__gc`) can bring back a userdata
+whose own finalizer has already run. A Rexx object's userdata is then
+refused ("a Rexx object used after Lua finalized it"), and is `.nil` if it
+reaches Rexx.
+
 **Cycles.** A Lua table that holds a Rexx object that holds a proxy of that
 table is a cycle that neither collector can see whole, so it is never freed.
 `s~close` frees it, with everything else in the state.
 
 `tests/rexx/lifetime.rex` checks all of this: references released both
 ways, the counts right, and dropped states closed (2,000 states of 1 MB do
-not grow the process by 2 GB).
+not grow the process by 2 GB). `tests/rexx/robustness.rex` checks local
+references (a million callbacks in one call leave the memory flat) and
+finalized objects.
 
 ## C modules
 
@@ -280,6 +298,16 @@ error is a Rexx condition like any other. Those functions use only Lua's API,
 with no C++ objects: a Lua error is a `longjmp`, which would not destroy
 them. Only running out of memory while pushing a value can still panic.
 
+Lua guarantees only about 20 free slots on its stack, and does not check
+them in release builds: the bridge makes room (`lua_checkstack`) before
+pushing arguments and at every level of a nested Array, so 300 arguments or
+an Array 200 deep are fine. A Rexx object whose `string` method raises a
+condition (in `tostring(obj)` from Lua, or in `box`) gives that error, not a
+crash.
+
+`tests/rexx/robustness.rex` holds a test for each of these, and for the
+other faults that a review of the bridge found.
+
 ## Operators
 
 Rexx operators on a `.LuaObject` are Lua's, metamethods included, as
@@ -299,7 +327,8 @@ sends the message to it); the right one is converted as any value.
 
 `==` is identity, as Rexx collections expect, and `hashCode` agrees with it
 (the address of a table, function, userdata or thread; the value of
-anything else). So two proxies of one table are `==`, and Lua objects work
+anything else, a float with an integral value hashing as that integer,
+since `1` and `1.0` are `rawequal`). So two proxies of one table are `==`, and Lua objects work
 as keys of Rexx collections. Concatenation (`||`, abuttal, blank) is Rexx's
 own, on the string value (`tostring`): a Lua table needs no `__concat` to be
 shown with `say t "x"`.
@@ -309,10 +338,12 @@ shown with `say t "x"`.
 Lua coroutines are used from Rexx like any function: `coroutine.wrap`
 gives a function, and `coroutine.resume` and friends are ordinary calls.
 
-When Lua code calls back into Rexx, and that Rexx code calls Lua again, the
-inner call runs in the same Lua thread as the callback (a coroutine,
-perhaps), not in the state's main thread: errors and tracebacks then show
-the real stack. A coroutine still cannot yield from inside Rexx code it has
+A callback into Rexx runs in whichever Lua thread called it: the main one,
+or a coroutine. Everything the bridge does during the callback (taking its
+arguments, pushing its result, and any call from that Rexx code back into
+Lua) uses that thread's stack, not the main one's (`USE_THREAD` in
+`rexxlua.cpp`). Using the main thread's stack there gave the callback the
+wrong arguments and, in a long loop, overflowed the main stack. A coroutine still cannot yield from inside Rexx code it has
 called (Lua cannot suspend the C call to Rexx that is in between): that fails
 with Lua's own "attempt to yield across a C-call boundary", which comes back
 as a Rexx condition. It is not worked around.

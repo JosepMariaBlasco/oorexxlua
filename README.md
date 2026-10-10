@@ -86,7 +86,8 @@ LUA_VERSION=5.3 BUILD=build53 oorexxlua/tests/run.sh
   identity), `03-values.rex` (how values cross, `box`), `04-calls.rex`
   (the colon rule, several results, coroutines), `05-rexx-in-lua.rex`
   (Rexx objects used from Lua), `06-operators.rex`; `run-one.sh`.
-- `tests/` — `run.sh`; `rexx/` (lifetime, threads, C modules), `cmodule/`
+- `tests/` — `run.sh`; `rexx/` (lifetime, threads, C modules, and
+  `robustness.rex`, a test for every fault a review found), `cmodule/`
   (a Lua C module built as LuaRocks builds them).
 - `scripts/` — `build.sh` (the build) and `setup-lua.sh` (builds a Lua
   from lua.org, for 5.5).
