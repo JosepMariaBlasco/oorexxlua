@@ -7,6 +7,7 @@
 #   PKG       the ooRexx package's file (not LIB: MSVC's linker uses that): librexxlua.so | librexxlua.dylib |
 #             rexxlua.dll (ooRexx loads lib<name>.so/.dylib, <name>.dll)
 #   MODEXT    the extension of Lua C modules: so | so | dll (LuaRocks's)
+#   MOD       the Lua module (require "oorexx"): oorexx.so | oorexx.so | oorexx.dll
 #   LIBVAR    LD_LIBRARY_PATH | DYLD_LIBRARY_PATH | PATH: where ooRexx finds
 #             external libraries by name (macOS drops DYLD_* variables when
 #             it starts a protected program such as /bin/sh, so a command run
@@ -38,6 +39,7 @@ else
   native_path_list() { local IFS=:; echo "$*"; }
 fi
 
+MOD=oorexx.so; [ "$OS" = Windows ] && MOD=oorexx.dll
 case $OS in
   Darwin)  PKG=librexxlua.dylib MODEXT=so  LIBVAR=DYLD_LIBRARY_PATH CXX=${CXX:-c++} CC=${CC:-cc} ;;
   Windows) PKG=rexxlua.dll      MODEXT=dll LIBVAR=PATH              CXX=${CXX:-cl}  CC=${CC:-cl} ;;
@@ -59,6 +61,14 @@ quiet() {
   [ $rc -eq 0 ] || cat "$log" >&2
   rm -f "$log"
   return $rc
+}
+
+# lua_exe V: the standalone lua that setup-lua.sh built next to the clone
+# (empty if none)
+lua_exe() {
+  local d; d=$(lua_dir "$1")
+  if [ -n "$d" ] && [ -f "$d/lua.exe" ]; then echo "$d/lua.exe"
+  elif [ -n "$d" ] && [ -f "$d/lua" ]; then echo "$d/lua"; fi
 }
 
 # lua_dir V: the src/ of the Lua V (5.3, 5.4, 5.5) that setup-lua.sh built

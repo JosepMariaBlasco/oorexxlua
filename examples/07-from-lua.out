@@ -1,0 +1,11 @@
+42	hello!
+auL
+integer	0.25
+3.10	1.2676506E+30
+1267650600228229401496703205376
+42
+3	Lua
+Rexx	JM	2
+HELLO FROM LUA
+1 2 3
+false	Rexx error 41.1: Nonnumeric value ("a") used in arithmetic operation.

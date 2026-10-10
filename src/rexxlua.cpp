@@ -22,7 +22,7 @@ extern "C" {
 #include <lualib.h>
 }
 #if LUA_VERSION_NUM < 503
-#error "the bridge needs Lua 5.3 or later (integers, lua_getextraspace)"
+#error "the bridge needs Lua 5.3 or later (integers)"
 #endif
 #if LUA_VERSION_NUM < 504                   // Lua 5.3: one user value, always
 #define lua_newuserdatauv(L, size, nuvalue) lua_newuserdata(L, size)
@@ -30,7 +30,13 @@ extern "C" {
 #ifndef _WIN32
 #include <dlfcn.h>
 #endif
+#ifdef _WIN32
+#include <windows.h>
+#endif
+#include <functional>
+#include <map>
 #include <mutex>
+#include <thread>
 #include <string>
 #include <vector>
 #include <cstring>
@@ -39,6 +45,14 @@ extern "C" {
 #include <cmath>
 #include <cerrno>
 #include <cstdlib>
+
+// luaopen_oorexx, the entry point of the Lua module (*Lua → ooRexx*)
+#ifdef _WIN32
+#define MODULE_EXPORT extern "C" __declspec(dllexport)
+#else
+#define MODULE_EXPORT extern "C" __attribute__((visibility("default")))
+#endif
+MODULE_EXPORT int luaopen_oorexx(lua_State *L);
 
 /* strcasecmp, which MSVC does not have: 0 if equal, ignoring ASCII case */
 static int strcmpNoCase(const char *a, const char *b)
@@ -71,6 +85,15 @@ struct State {
     RexxObjectPtr keep = NULLOBJECT;        // IdentityTable: Rexx object -> count (*Lifetime*)
     int depth = 0;                          // entries in progress (nested ones too)
     bool closed = false;
+    // A host's lua_State (Lua -> ooRexx: docs/design.md, *Lua → ooRexx*):
+    bool adopted = false;
+    std::thread::id owner;                  // the host's thread, the only one that may use it
+    struct Inst *inst = NULL;               // the instance that calls from Lua into Rexx
+                                            // attach to (outside any Rexx code)
+    struct Inst *defaultInst = NULL;        // the module's default instance (made at first use)
+    RexxObjectPtr stateObj = NULLOBJECT;    // its .LuaState (a global reference)
+    std::vector<RexxObjectPtr> pending;     // Rexx objects whose userdata Lua finalized outside
+                                            // any Rexx code: let go at the next entry
 };
 
 // One per .LuaObject: a Lua value in a state's registry.
@@ -80,20 +103,33 @@ struct Proxy {
     int ref;
 };
 
-static State *stateOf(lua_State *L) { return *(State **)lua_getextraspace(L); }
+// registry[&STATEKEY]: the State of a lua_State (a light userdata).  Not Lua's
+// extra space, which belongs to the host when the state is adopted.
+static const char STATEKEY = 0;
+static State *stateOf(lua_State *L)
+{
+    lua_rawgetp(L, LUA_REGISTRYINDEX, &STATEKEY);
+    State *st = (State *)lua_touserdata(L, -1);
+    lua_pop(L, 1);
+    return st;
+}
+
+static bool foreignThread(State *st) { return st->adopted && std::this_thread::get_id() != st->owner; }
 
 // Entering a state: its lock, and who is inside (restored on exit, so that
 // entries nest: Rexx -> Lua -> Rexx -> Lua on one thread).
+// mode: LOCK waits for the lock, TRY does not, SKIP does not enter at all.
+enum EnterMode { LOCK, TRY, SKIP };
 struct Enter {
     State *st;
     std::unique_lock<std::recursive_mutex> lk;
     RexxThreadContext *savedTc;
     RexxObjectPtr savedSelf;
     bool owns;
-    Enter(State *s, RexxThreadContext *tc, RexxObjectPtr self, bool tryOnly = false)
+    Enter(State *s, RexxThreadContext *tc, RexxObjectPtr self, EnterMode mode = LOCK)
         : st(s), lk(s->lock, std::defer_lock)
     {
-        owns = tryOnly ? lk.try_lock() : (lk.lock(), true);
+        owns = mode == TRY ? lk.try_lock() : mode == LOCK ? (lk.lock(), true) : false;
         savedTc = st->tc; savedSelf = st->self;
         if (owns) { st->tc = tc; if (self != NULLOBJECT) st->self = self; st->depth++; }
     }
@@ -123,6 +159,9 @@ static void raise(RexxThreadContext *c, const std::string &m)
  */
 static RexxObjectPtr graveyard = NULLOBJECT;
 static std::mutex graveyardLock;
+// .LuaObject (the latest one activated): by name it is found only where
+// lua.cls is visible, and Lua -> ooRexx calls run in no package
+static RexxClassObject luaObjectClass = NULLOBJECT;
 
 static void closeState(RexxThreadContext *c, State *st);
 
@@ -138,14 +177,16 @@ static void drain(RexxThreadContext *c)
         if (*(int *)v == KIND_PROXY) {
             Proxy *px = (Proxy *)v;
             if (px->st->closed) { delete px; continue; }
-            Enter e(px->st, c, NULLOBJECT, true);
+            if (foreignThread(px->st)) { later.push_back(v); continue; }   // the host's thread will
+            Enter e(px->st, c, NULLOBJECT, TRY);
             if (!e.owns) { later.push_back(v); continue; }
             if (!px->st->closed) luaL_unref(px->st->L, LUA_REGISTRYINDEX, px->ref);
             delete px;
         }
         else {
             State *st = (State *)v;
-            Enter e(st, c, NULLOBJECT, true);
+            if (st->adopted) continue;          // closed by its host only
+            Enter e(st, c, NULLOBJECT, TRY);
             // another thread's, or running on this one (a callback): later
             if (!e.owns || st->depth > 1) { later.push_back(v); continue; }
             closeState(c, st);
@@ -459,6 +500,16 @@ static void keepRemove(State *st, RexxObjectPtr obj)
     }
 }
 
+// With st entered: let go of the Rexx objects whose userdata Lua finalized
+// while no Rexx code was running (an adopted state's, see box_gc)
+static void releasePending(State *st)
+{
+    if (st->pending.empty() || st->tc == NULL) return;
+    std::vector<RexxObjectPtr> objs;
+    objs.swap(st->pending);
+    for (RexxObjectPtr o : objs) keepRemove(st, o);
+}
+
 // A Rexx condition, pending on this thread, as a Lua error (pushes the message;
 // the caller then returns lua_error(L))
 static void pushRexxCondition(lua_State *L, RexxThreadContext *c)
@@ -488,8 +539,20 @@ static bool stringValue(RexxThreadContext *c, RexxObjectPtr o, RexxStringObject 
  * back before every return and every lua_error (a longjmp: no RAII here).
  * docs/design.md, *Coroutines*.
  */
-#define USE_THREAD(L)  State *st = stateOf(L); lua_State *outerL = st->L; st->L = (L)
-#define END_THREAD()   (st->L = outerL)
+/*
+ * In a host's state (Lua -> ooRexx), Lua runs outside any Rexx code too, and
+ * may then call a Rexx object it holds: USE_THREAD attaches the thread to an
+ * interpreter instance for the call (attachHost), and END_THREAD detaches it
+ * (docs/design.md, *Lua → ooRexx*).  No Rexx code may be used after
+ * END_THREAD.
+ */
+static bool attachHost(State *st);
+static void detachHost(State *st);
+static const char *noRexx(State *st);
+#define USE_THREAD(L)  State *st = stateOf(L); lua_State *outerL = st->L; st->L = (L);         \
+                       bool attached_ = st->tc == NULL && attachHost(st);                       \
+                       if (st->tc == NULL) { st->L = outerL; return luaL_error(L, "%s", noRexx(st)); }
+#define END_THREAD()   (st->L = outerL, attached_ ? detachHost(st) : (void)0)
 
 // A Rexx object's userdata, refused once its __gc has run (a finalizer can
 // bring a userdata back after that)
@@ -612,14 +675,16 @@ static int pairs_next(lua_State *L)
     RexxThreadContext *c = st->tc;
     RexxSupplierObject sp = (RexxSupplierObject)sup->obj;
     if (!c->SupplierAvailable(sp)) {
+        bool error = c->CheckCondition();
+        if (error) pushRexxCondition(L, c);
         END_THREAD();
-        if (c->CheckCondition()) { pushRexxCondition(L, c); return lua_error(L); }
+        if (error) return lua_error(L);
         return 0;
     }
     RexxObjectPtr index = c->SupplierIndex(sp);
     RexxObjectPtr item = c->SupplierItem(sp);
     c->SupplierNext(sp);
-    if (c->CheckCondition()) { END_THREAD(); pushRexxCondition(L, c); return lua_error(L); }
+    if (c->CheckCondition()) { pushRexxCondition(L, c); END_THREAD(); return lua_error(L); }
     bool ok = pushValue(st, index) && pushValue(st, item);
     release(c, index);
     release(c, item);
@@ -636,7 +701,7 @@ static int box_pairs(lua_State *L)
     USE_THREAD(L);
     RexxThreadContext *c = st->tc;
     RexxObjectPtr sup = c->SendMessage0(b->obj, "SUPPLIER");
-    if (c->CheckCondition()) { END_THREAD(); pushRexxCondition(L, c); return lua_error(L); }
+    if (c->CheckCondition()) { pushRexxCondition(L, c); END_THREAD(); return lua_error(L); }
     if (sup == NULLOBJECT || !c->IsOfType(sup, "SUPPLIER")) {
         END_THREAD();
         return luaL_error(L, "pairs: the Rexx object's supplier is not a Supplier");
@@ -694,21 +759,27 @@ static int box_tostring(lua_State *L)
     RexxThreadContext *c = st->tc;
     RexxStringObject s;
     bool ok = stringValue(c, b->obj, s);
-    END_THREAD();
     if (!ok) {
         if (c->CheckCondition()) pushRexxCondition(L, c);
         else lua_pushstring(L, "the Rexx object has no string value");
-        return lua_error(L);
     }
-    lua_pushlstring(L, c->StringData(s), c->StringLength(s));
-    if ((RexxObjectPtr)s != b->obj) release(c, s);
+    else {
+        lua_pushlstring(L, c->StringData(s), c->StringLength(s));
+        if ((RexxObjectPtr)s != b->obj) release(c, s);
+    }
+    END_THREAD();
+    if (!ok) return lua_error(L);
     return 1;
 }
 
 static int box_gc(lua_State *L)
 {
     RexxBox *b = (RexxBox *)luaL_checkudata(L, 1, REXXOBJ);
-    if (b->obj) keepRemove(stateOf(L), b->obj);
+    if (b->obj) {
+        State *st = stateOf(L);
+        if (st->tc != NULL) keepRemove(st, b->obj);
+        else if (!st->closed) st->pending.push_back(b->obj);   // no Rexx code running: later
+    }
     b->obj = NULL;
     return 0;
 }
@@ -738,17 +809,12 @@ static void makeLuaGlobal()
 #endif
 }
 
-static State *openState(RexxThreadContext *c)
+// What the bridge needs in a Lua state, its own or a host's: its State in the
+// registry, the metatable of Rexx objects, and the cache of their userdata
+static void setupLua(lua_State *L, State *st)
 {
-    makeLuaGlobal();
-    State *st = new State();
-    lua_State *L = luaL_newstate();
-    if (L == NULL) { delete st; return NULL; }
-    st->L = st->main = L;
-    *(State **)lua_getextraspace(L) = st;
-    RexxObjectPtr keep = c->SendMessage0(c->FindClass("IDENTITYTABLE"), "NEW");
-    st->keep = c->RequestGlobalReference(keep);       // one per state, never released (#2100)
-    luaL_openlibs(L);
+    lua_pushlightuserdata(L, st);
+    lua_rawsetp(L, LUA_REGISTRYINDEX, &STATEKEY);
     luaL_newmetatable(L, REXXOBJ);
     static const luaL_Reg mt[] = {
         {"__call", box_call}, {"__index", box_index}, {"__newindex", box_newindex},
@@ -762,6 +828,25 @@ static State *openState(RexxThreadContext *c)
     lua_setfield(L, -2, "__mode");
     lua_setmetatable(L, -2);
     lua_setfield(L, LUA_REGISTRYINDEX, CACHE);
+}
+
+static State *openState(RexxThreadContext *c)
+{
+    makeLuaGlobal();
+    State *st = new State();
+    lua_State *L = luaL_newstate();
+    if (L == NULL) { delete st; return NULL; }
+    st->L = st->main = L;
+    RexxObjectPtr keep = c->SendMessage0(c->FindClass("IDENTITYTABLE"), "NEW");
+    st->keep = c->RequestGlobalReference(keep);       // one per state, never released (#2100)
+    luaL_openlibs(L);
+    setupLua(L, st);
+    // require "oorexx" in it: the instance whose Rexx code is running (no
+    // second copy of this library)
+    luaL_getsubtable(L, LUA_REGISTRYINDEX, LUA_PRELOAD_TABLE);
+    lua_pushcfunction(L, luaopen_oorexx);
+    lua_setfield(L, -2, "oorexx");
+    lua_pop(L, 1);
     return st;
 }
 
@@ -787,10 +872,9 @@ static RexxObjectPtr newProxy(State *st, int idx)
     Proxy *p = new Proxy();
     p->st = st;
     p->ref = luaL_ref(st->L, LUA_REGISTRYINDEX);
-    RexxClassObject cls = c->FindClass("LUAOBJECT");
+    RexxClassObject cls = luaObjectClass;
     RexxPointerObject ptr = c->NewPointer(p);
     RexxObjectPtr o = c->SendMessage2(cls, "NEW", ptr, st->self);
-    release(c, cls);
     release(c, ptr);                                // the proxy holds it
     if (o == NULLOBJECT) {                          // a condition is pending
         luaL_unref(st->L, LUA_REGISTRYINDEX, p->ref);
@@ -834,7 +918,7 @@ static RexxObjectPtr toRexx(State *st, int idx)
 // The Proxy of a .LuaObject (NULL if v is not one).
 static Proxy *proxyOf(RexxThreadContext *c, RexxObjectPtr v)
 {
-    if (!c->IsOfType(v, "LUAOBJECT")) return NULL;
+    if (!c->HasMethod(v, "LUA.REF")) return NULL;     // not by class name: see luaObjectClass
     RexxObjectPtr p = c->SendMessage0(v, "LUA.REF");
     return p == NULLOBJECT ? NULL : (Proxy *)c->PointerValue((RexxPointerObject)p);
 }
@@ -917,9 +1001,16 @@ struct Entry {
     Enter enter;
     bool ok;
     Entry(RexxMethodContext *m, State *s, RexxObjectPtr stateObj)
-        : st(s), enter((drain(m->threadContext), s), m->threadContext, stateObj), ok(true)
+        : st(s), enter((drain(m->threadContext), s), m->threadContext, stateObj, foreignThread(s) ? SKIP : LOCK),
+          ok(true)
     {
-        if (st->closed) { raise(m->threadContext, "Lua error: the LuaState is closed"); ok = false; }
+        if (foreignThread(st)) {
+            raise(m->threadContext, "Lua error: the LuaState of the Lua that runs ooRexx can only be used "
+                                    "from that Lua's thread");
+            ok = false;
+        }
+        else if (st->closed) { raise(m->threadContext, "Lua error: the LuaState is closed"); ok = false; }
+        else releasePending(st);
     }
 };
 
@@ -940,6 +1031,7 @@ RexxMethod0(RexxObjectPtr, LuaState_New)
 RexxMethod0(RexxObjectPtr, Lua_Graveyard)
 {
     std::lock_guard<std::mutex> guard(graveyardLock);
+    luaObjectClass = (RexxClassObject)context->RequestGlobalReference(context->GetSelf());
     if (graveyard == NULLOBJECT) {
         RexxObjectPtr q = context->SendMessage0(context->FindClass("QUEUE"), "NEW");
         if (q != NULLOBJECT) graveyard = context->RequestGlobalReference(q);
@@ -951,6 +1043,11 @@ RexxMethod1(RexxObjectPtr, LuaState_Close, CSELF, self)
 {
     State *st = (State *)self;
     drain(context->threadContext);
+    if (st->adopted) {
+        raise(context->threadContext, "Lua error: the LuaState of the Lua that runs ooRexx is closed by that Lua, "
+                                      "not by Rexx");
+        return NULLOBJECT;
+    }
     Enter e(st, context->threadContext, context->GetSelf());
     if (st->depth > 1) {        // from a callback: Lua code of this state is running
         raise(context->threadContext, "Lua error: a LuaState cannot be closed while Lua code in it is running");
@@ -1450,12 +1547,530 @@ RexxMethod1(RexxObjectPtr, LuaObj_Type, CSELF, self)
 }
 
 /* ------------------------------------------------------------------------ */
+/* Lua -> ooRexx: the Lua module "oorexx" (docs/design.md, *Lua → ooRexx*)     */
+/* ------------------------------------------------------------------------ */
+
+/*
+ *   local rexx = require "oorexx"
+ *   rexx.eval(expr, args...)       the value of a Rexx expression (args: arg(1) ...)
+ *   rexx.run(program, args...)     CALL a program: its result
+ *   rexx.routine(source[, name])   a Rexx routine, as a Lua function
+ *   rexx.interpreter{...}          another instance, with options: a table with
+ *                                  eval, run, routine and close
+ *
+ * In a host's Lua (lua, texlua ...), the module adopts the host's lua_State:
+ * it is the .lua of every instance the module makes, and the module's
+ * functions work on a default instance, made at their first use.  The module
+ * registers this library with each instance as "rexxlua", so lua.cls finds it
+ * without loading librexxlua.  In a state the bridge made (Rexx started, or
+ * .LuaState~new), require "oorexx" is package.preload's (openState): its
+ * functions work on the instance whose Rexx code is running.
+ */
+
+extern RexxPackageEntry rexxlua_package_entry;
+
+// An interpreter instance the module made.  Never freed: Lua functions and
+// states may still point to it after it is closed (they then see `closed`).
+struct Inst {
+    RexxInstance *rexx = NULL;
+    State *host = NULL;                     // whose .lua it is
+    int depth = 0;                          // calls into it in progress
+    bool closed = false;
+};
+static std::mutex instLock;
+static std::map<RexxInstance *, Inst *> instances;     // the live ones
+
+static Inst *instOfContext(RexxThreadContext *c)
+{
+    std::lock_guard<std::mutex> guard(instLock);
+    auto it = instances.find(c->instance);
+    return it == instances.end() ? NULL : it->second;
+}
+
+// The instance that calls from the host's Lua into Rexx objects attach to:
+// any live instance of this host
+static Inst *liveInst(State *st)
+{
+    if (st->inst != NULL && !st->inst->closed) return st->inst;
+    st->inst = NULL;
+    std::lock_guard<std::mutex> guard(instLock);
+    for (auto &e : instances)
+        if (e.second->host == st) { st->inst = e.second; break; }
+    return st->inst;
+}
+
+static Inst *attachedInst = NULL;           // attachHost's, until detachHost (host's thread only)
+
+static bool attachHost(State *st)
+{
+    if (!st->adopted || st->closed || foreignThread(st)) return false;
+    Inst *in = liveInst(st);
+    RexxThreadContext *tc;
+    if (in == NULL || !in->rexx->AttachThread(&tc)) return false;
+    st->tc = tc;
+    st->self = st->stateObj;
+    st->depth++;
+    in->depth++;
+    attachedInst = in;
+    drain(tc);
+    releasePending(st);
+    return true;
+}
+
+static void detachHost(State *st)
+{
+    RexxThreadContext *tc = st->tc;
+    st->tc = NULL;
+    st->self = NULLOBJECT;
+    st->depth--;
+    attachedInst->depth--;
+    attachedInst = NULL;
+    tc->DetachThread();
+}
+
+static const char *noRexx(State *st)
+{
+    if (foreignThread(st)) return "the Lua state that runs ooRexx can only be used from its own thread";
+    return "no Rexx interpreter instance is open";
+}
+
+// Terminate an instance (on the host's thread, which made it)
+static void closeInst(Inst *in)
+{
+    if (in->closed) return;
+    in->closed = true;
+    {
+        std::lock_guard<std::mutex> guard(instLock);
+        instances.erase(in->rexx);
+    }
+    if (in->host->inst == in) in->host->inst = NULL;
+    // the creating thread stayed attached: detaching it makes Terminate wait
+    // forever (ooRexx bug #2107)
+    in->rexx->Terminate();
+}
+
+// The directory this library is in (lua.cls is next to it)
+static std::string moduleDirectory()
+{
+#ifdef _WIN32
+    HMODULE self;
+    char buf[MAX_PATH];
+    if (!GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                            (LPCSTR)&moduleDirectory, &self) ||
+        GetModuleFileNameA(self, buf, sizeof buf) == 0) return ".";
+    std::string path = buf;
+#else
+    Dl_info info;
+    if (dladdr((void *)&moduleDirectory, &info) == 0 || info.dli_fname == NULL) return ".";
+    std::string path = info.dli_fname;
+#endif
+    size_t slash = path.find_last_of("\\/");
+    return slash == std::string::npos ? "." : path.substr(0, slash);
+}
+
+static std::string join(const std::vector<std::string> &v, const char *sep)
+{
+    std::string r;
+    for (const std::string &x : v) { if (!r.empty()) r += sep; r += x; }
+    return r;
+}
+
+static std::string conditionText(RexxThreadContext *tc)
+{
+    RexxCondition cd;
+    tc->DecodeConditionInfo(tc->GetConditionInfo(), &cd);
+    tc->ClearCondition();
+    std::string m = "Rexx error " + std::to_string(cd.code / 1000) + "." + std::to_string(cd.code % 1000);
+    if (cd.message) { m += ": "; m += tc->CString(cd.message); }
+    else if (cd.errortext) { m += ": "; m += tc->CString(cd.errortext); }
+    return m;
+}
+
+struct Options {
+    std::vector<std::string> path, extensions, libraries;
+    std::string address;
+};
+
+// A new instance for the host's state st, or NULL and the reason
+static Inst *newInst(State *st, const Options &o, std::string &error)
+{
+    std::string dir = moduleDirectory();
+    std::vector<std::string> path = o.path;
+    path.push_back(dir);
+#ifdef _WIN32
+    std::string pathText = join(path, ";");
+#else
+    std::string pathText = join(path, ":");
+#endif
+    std::string extText = join(o.extensions, ",");
+    static RexxLibraryPackage library[] = {{"rexxlua", &rexxlua_package_entry}, {NULL, NULL}};
+    std::vector<RexxOption> options;
+    RexxOption opt;
+    opt.optionName = EXTERNAL_CALL_PATH; opt.option = pathText.c_str(); options.push_back(opt);
+    if (!o.extensions.empty()) { opt.optionName = EXTERNAL_CALL_EXTENSIONS; opt.option = extText.c_str(); options.push_back(opt); }
+    if (!o.address.empty()) { opt.optionName = INITIAL_ADDRESS_ENVIRONMENT; opt.option = o.address.c_str(); options.push_back(opt); }
+    for (const std::string &l : o.libraries) { opt.optionName = LOAD_REQUIRED_LIBRARY; opt.option = l.c_str(); options.push_back(opt); }
+    opt.optionName = REGISTER_LIBRARY; opt.option = (POINTER)library; options.push_back(opt);
+    opt.optionName = NULL; options.push_back(opt);
+
+    RexxInstance *rexx;
+    RexxThreadContext *tc;
+    if (!RexxCreateInterpreter(&rexx, &tc, options.data())) {
+        error = "cannot create a Rexx interpreter instance";
+        return NULL;
+    }
+    Inst *in = new Inst();
+    in->rexx = rexx;
+    in->host = st;
+    {
+        std::lock_guard<std::mutex> guard(instLock);
+        instances[rexx] = in;               // before lua.cls asks for its host (Lua_Host)
+    }
+    if (st->keep == NULLOBJECT) {
+        RexxObjectPtr keep = tc->SendMessage0(tc->FindClass("IDENTITYTABLE"), "NEW");
+        st->keep = tc->RequestGlobalReference(keep);  // never released (#2100)
+    }
+    std::string cls = dir + "/lua.cls";
+    RexxPackageObject package = tc->LoadPackage(cls.c_str());
+    if (package == NULLOBJECT || tc->CheckCondition()) {
+        error = tc->CheckCondition() ? conditionText(tc) : "cannot load " + cls;
+        closeInst(in);
+        return NULL;
+    }
+    // .lua: lua.cls sets it when it is loaded; a package already loaded (by
+    // another live instance) is not run again, so for a second instance
+    // it is set here
+    RexxDirectoryObject local = tc->GetLocalEnvironment();
+    RexxObjectPtr lua = tc->DirectoryAt(local, "LUA");
+    if (lua == NULLOBJECT) {
+        lua = tc->SendMessage0(tc->FindPackageClass(package, "LUASTATE"), "LUA.DEFAULT");
+        if (lua != NULLOBJECT) tc->DirectoryPut(local, lua, "LUA");
+    }
+    if (lua == NULLOBJECT || tc->CheckCondition()) {
+        error = tc->CheckCondition() ? conditionText(tc) : "cannot make .lua";
+        closeInst(in);
+        return NULL;
+    }
+    if (st->stateObj == NULLOBJECT) st->stateObj = tc->RequestGlobalReference(lua);
+    if (st->inst == NULL) st->inst = in;
+    return in;
+}
+
+/*
+ * Run op in Rexx for Lua code in L, with the Lua arguments from `first` on as
+ * its arguments.  in: the instance, or NULL for the one whose Rexx code is
+ * running (a state the bridge made).  Pushes the result (nothing for none)
+ * and returns how many values it pushed, or pushes a message and returns -1:
+ * the caller raises it, once the C++ objects here are gone (a Lua error is a
+ * longjmp).
+ */
+typedef std::function<RexxObjectPtr(RexxThreadContext *, RexxArrayObject)> RexxOp;
+
+// A routine from source, which sees lua.cls's public classes (.LuaState,
+// .LuaObject) as if it required it
+static RexxRoutineObject newRoutine(RexxThreadContext *tc, const char *name, const std::string &source)
+{
+    RexxRoutineObject r = tc->NewRoutine(name, source.data(), source.size());
+    if (r == NULLOBJECT || luaObjectClass == NULLOBJECT) return r;
+    RexxObjectPtr lua = tc->SendMessage0(luaObjectClass, "PACKAGE");
+    RexxPackageObject p = tc->GetRoutinePackage(r);
+    if (lua != NULLOBJECT && p != NULLOBJECT) tc->SendMessage1(p, "ADDPACKAGE", lua);
+    return r;
+}
+
+static int intoRexx(lua_State *L, Inst *in, int first, const RexxOp &op)
+{
+    State *st = stateOf(L);
+    if (st->closed) { lua_pushstring(L, "the Lua state is closed"); return -1; }
+    if (foreignThread(st)) { lua_pushstring(L, noRexx(st)); return -1; }
+    RexxThreadContext *tc = NULL;
+    if (in != NULL) {
+        if (in->closed) { lua_pushstring(L, "the Rexx interpreter instance is closed"); return -1; }
+        if (!in->rexx->AttachThread(&tc)) { lua_pushstring(L, "cannot attach to the Rexx interpreter instance"); return -1; }
+        in->depth++;
+    }
+    else if ((tc = st->tc) == NULL) { lua_pushstring(L, "no Rexx code is running"); return -1; }
+    if (!lua_checkstack(L, 8)) { lua_pushstring(L, "Lua stack overflow"); return -1; }
+    lua_State *outerL = st->L;
+    st->L = L;
+    int n;
+    {
+        Enter e(st, tc, st->adopted ? st->stateObj : NULLOBJECT);
+        drain(tc);
+        releasePending(st);
+        int top = lua_gettop(L);
+        RexxArrayObject args = tc->NewArray(top >= first ? top - first + 1 : 0);
+        for (int i = first; i <= top; i++) {
+            RexxObjectPtr v = toRexx(st, i);
+            if (v != tc->Nil()) tc->ArrayPut(args, v, i - first + 1);
+            release(tc, v);                         // the Array holds it
+        }
+        lua_settop(L, top);
+        RexxObjectPtr r = tc->CheckCondition() ? NULLOBJECT : op(tc, args);
+        if (tc->CheckCondition()) { pushRexxCondition(L, tc); n = -1; }
+        else if (r == NULLOBJECT) n = 0;
+        else n = pushValue(st, r) ? 1 : -1;         // its message, if it fails
+    }
+    st->L = outerL;
+    if (in != NULL) { in->depth--; tc->DetachThread(); }
+    return n;
+}
+
+// The instance a module function works on.  Upvalue 1: an Inst (light
+// userdata); false for the host's default instance, made at first use; nil
+// for the one whose Rexx code is running.  False after pushing a message.
+static bool instFor(lua_State *L, Inst **out)
+{
+    int t = lua_type(L, lua_upvalueindex(1));
+    if (t == LUA_TLIGHTUSERDATA) { *out = (Inst *)lua_touserdata(L, lua_upvalueindex(1)); return true; }
+    *out = NULL;
+    if (t == LUA_TNIL) return true;
+    State *st = stateOf(L);
+    if (st->defaultInst == NULL) {
+        if (st->closed) { lua_pushstring(L, "the Lua state is closed"); return false; }
+        if (foreignThread(st)) { lua_pushstring(L, noRexx(st)); return false; }
+        std::string error;
+        st->defaultInst = newInst(st, Options(), error);
+        if (st->defaultInst == NULL) { lua_pushstring(L, error.c_str()); return false; }
+    }
+    *out = st->defaultInst;
+    return true;
+}
+
+// rexx.eval(expression, args...): its value
+static int mod_eval(lua_State *L)
+{
+    size_t len;
+    const char *expr = luaL_checklstring(L, 1, &len);
+    int n;
+    {
+        Inst *in;
+        if (!instFor(L, &in)) n = -1;
+        else {
+            std::string source = std::string("return ") + std::string(expr, len);
+            n = intoRexx(L, in, 2, [&](RexxThreadContext *tc, RexxArrayObject args) -> RexxObjectPtr {
+                RexxRoutineObject r = newRoutine(tc, "EVAL", source);
+                if (r == NULLOBJECT) return NULLOBJECT;
+                return tc->CallRoutine(r, args);
+            });
+        }
+    }
+    if (n < 0) return lua_error(L);
+    return n;
+}
+
+// rexx.run(program, args...): CALL program, its result
+static int mod_run(lua_State *L)
+{
+    const char *program = luaL_checkstring(L, 1);
+    int n;
+    {
+        Inst *in;
+        if (!instFor(L, &in)) n = -1;
+        else {
+            std::string name = program;
+            n = intoRexx(L, in, 2, [&](RexxThreadContext *tc, RexxArrayObject args) -> RexxObjectPtr {
+                return tc->CallProgram(name.c_str(), args);
+            });
+        }
+    }
+    if (n < 0) return lua_error(L);
+    return n;
+}
+
+// rexx.routine(source[, name]): a Rexx Routine, as a Lua function
+static int mod_routine(lua_State *L)
+{
+    size_t len;
+    const char *source = luaL_checklstring(L, 1, &len);
+    const char *name = luaL_optstring(L, 2, "ROUTINE");
+    lua_settop(L, 2);
+    int n;
+    {
+        Inst *in;
+        if (!instFor(L, &in)) n = -1;
+        else {
+            std::string src(source, len), routineName(name);
+            n = intoRexx(L, in, 3, [&](RexxThreadContext *tc, RexxArrayObject) -> RexxObjectPtr {
+                return (RexxObjectPtr)newRoutine(tc, routineName.c_str(), src);
+            });
+        }
+    }
+    if (n < 0) return lua_error(L);
+    return n;
+}
+
+// r.close(): Terminate the instance
+static int mod_close(lua_State *L)
+{
+    Inst *in = (Inst *)lua_touserdata(L, lua_upvalueindex(1));
+    if (in->closed) return 0;
+    if (foreignThread(in->host)) return luaL_error(L, "%s", noRexx(in->host));
+    if (in->depth > 0) return luaL_error(L, "a Rexx interpreter instance cannot be closed while its Rexx code is running");
+    closeInst(in);
+    return 0;
+}
+
+static void pushModuleFunctions(lua_State *L)        // upvalue on top: popped
+{
+    static const luaL_Reg fns[] = {{"eval", mod_eval}, {"run", mod_run}, {"routine", mod_routine}, {NULL, NULL}};
+    luaL_setfuncs(L, fns, 1);
+}
+
+// An option that is a string or a sequence of strings (checked: no error later)
+static void checkStrings(lua_State *L, int opts, const char *key)
+{
+    int t = lua_getfield(L, opts, key);
+    if (t == LUA_TTABLE) {
+        for (lua_Integer i = 1; ; i++) {
+            int u = lua_rawgeti(L, -1, i);
+            lua_pop(L, 1);
+            if (u == LUA_TNIL) break;
+            if (u != LUA_TSTRING) luaL_error(L, "interpreter: %s[%d] must be a string", key, (int)i);
+        }
+    }
+    else if (t != LUA_TNIL && t != LUA_TSTRING) luaL_error(L, "interpreter: %s must be a string or a list of strings", key);
+    lua_pop(L, 1);
+}
+
+static void readStrings(lua_State *L, int opts, const char *key, std::vector<std::string> &out)
+{
+    if (lua_getfield(L, opts, key) == LUA_TTABLE) {
+        for (lua_Integer i = 1; lua_rawgeti(L, -1, i) == LUA_TSTRING; i++) {
+            out.push_back(lua_tostring(L, -1));
+            lua_pop(L, 1);
+        }
+        lua_pop(L, 1);
+    }
+    else if (lua_type(L, -1) == LUA_TSTRING) out.push_back(lua_tostring(L, -1));
+    lua_pop(L, 1);
+}
+
+// rexx.interpreter{rexx_path=, extensions=, initial_address=, load_libraries=}
+static int mod_interpreter(lua_State *L)
+{
+    if (lua_isnoneornil(L, 1)) { lua_settop(L, 0); lua_newtable(L); }
+    luaL_checktype(L, 1, LUA_TTABLE);
+    lua_settop(L, 1);
+    // checked first, so that no Lua error happens once there are C++ objects
+    static const char *known[] = {"rexx_path", "extensions", "initial_address", "load_libraries", NULL};
+    lua_pushnil(L);
+    while (lua_next(L, 1)) {
+        lua_pop(L, 1);
+        bool ok = false;
+        if (lua_type(L, -1) == LUA_TSTRING)
+            for (int i = 0; known[i]; i++) if (strcmp(lua_tostring(L, -1), known[i]) == 0) ok = true;
+        if (!ok) return luaL_error(L, "interpreter: unknown option %s (rexx_path, extensions, "
+                                      "initial_address, load_libraries)", luaL_tolstring(L, -1, NULL));
+    }
+    checkStrings(L, 1, "rexx_path");
+    checkStrings(L, 1, "extensions");
+    checkStrings(L, 1, "load_libraries");
+    int t = lua_getfield(L, 1, "initial_address");
+    if (t != LUA_TNIL && t != LUA_TSTRING) return luaL_error(L, "interpreter: initial_address must be a string");
+    lua_pop(L, 1);
+    State *st = stateOf(L);
+    if (st->closed) return luaL_error(L, "the Lua state is closed");
+    if (foreignThread(st)) return luaL_error(L, "%s", noRexx(st));
+    Inst *in;
+    {
+        Options o;
+        readStrings(L, 1, "rexx_path", o.path);
+        readStrings(L, 1, "extensions", o.extensions);
+        readStrings(L, 1, "load_libraries", o.libraries);
+        if (lua_getfield(L, 1, "initial_address") == LUA_TSTRING) o.address = lua_tostring(L, -1);
+        lua_pop(L, 1);
+        std::string error;
+        in = newInst(st, o, error);
+        if (in == NULL) lua_pushstring(L, error.c_str());
+    }
+    if (in == NULL) return lua_error(L);
+    lua_newtable(L);
+    lua_pushlightuserdata(L, in);
+    pushModuleFunctions(L);
+    lua_pushlightuserdata(L, in);
+    lua_pushcclosure(L, mod_close, 1);
+    lua_setfield(L, -2, "close");
+    return 1;
+}
+
+// The host's state, closing (the __gc of a userdata in its registry, made
+// when it was adopted, so finalized after every Rexx object's userdata):
+// its instances are terminated, and Rexx's proxies of its Lua values dead
+struct HostSentinel { State *st; };
+static const char SENTINELKEY = 0;
+
+static int host_gc(lua_State *L)
+{
+    State *st = ((HostSentinel *)lua_touserdata(L, 1))->st;
+    if (st->closed) return 0;
+    st->closed = true;
+    st->pending.clear();
+    std::vector<Inst *> mine;
+    {
+        std::lock_guard<std::mutex> guard(instLock);
+        for (auto &e : instances) if (e.second->host == st) mine.push_back(e.second);
+    }
+    RexxThreadContext *tc;
+    if (!mine.empty() && st->keep != NULLOBJECT && mine[0]->rexx->AttachThread(&tc)) {
+        tc->SendMessage0(st->keep, "EMPTY");
+        tc->DetachThread();
+    }
+    for (Inst *in : mine) closeInst(in);
+    st->L = st->main = NULL;
+    st->inst = NULL;
+    return 0;
+}
+
+MODULE_EXPORT int luaopen_oorexx(lua_State *L)
+{
+    luaL_checkversion(L);
+    State *st = stateOf(L);
+    if (st == NULL) {                       // a host's Lua: adopt its state
+        st = new State();
+        st->adopted = true;
+        st->owner = std::this_thread::get_id();
+        lua_rawgeti(L, LUA_REGISTRYINDEX, LUA_RIDX_MAINTHREAD);
+        st->L = st->main = lua_tothread(L, -1);
+        lua_pop(L, 1);
+        setupLua(L, st);
+        HostSentinel *h = (HostSentinel *)lua_newuserdatauv(L, sizeof(HostSentinel), 0);
+        h->st = st;
+        lua_newtable(L);
+        lua_pushcfunction(L, host_gc);
+        lua_setfield(L, -2, "__gc");
+        lua_setmetatable(L, -2);
+        lua_rawsetp(L, LUA_REGISTRYINDEX, &SENTINELKEY);
+    }
+    else if (st->closed) return luaL_error(L, "the Lua state is closed");
+    lua_newtable(L);
+    if (st->adopted) lua_pushboolean(L, 0);     // the default instance
+    else lua_pushnil(L);                        // the one whose Rexx code is running
+    pushModuleFunctions(L);
+    if (st->adopted) {
+        lua_pushcfunction(L, mod_interpreter);
+        lua_setfield(L, -2, "interpreter");
+    }
+    return 1;
+}
+
+// .LuaState~"LUA.HOST" (lua.cls): the host's State of the current instance,
+// as a Pointer, or .nil if it was not made by the Lua module
+RexxMethod0(RexxObjectPtr, Lua_Host)
+{
+    Inst *in = instOfContext(context->threadContext);
+    if (in == NULL || in->host == NULL || in->host->closed) return context->Nil();
+    return context->NewPointer(in->host);
+}
+
+/* ------------------------------------------------------------------------ */
 /* Package                                                                    */
 /* ------------------------------------------------------------------------ */
 
 RexxMethodEntry rexxlua_methods[] = {
     REXX_METHOD(LuaState_New,       LuaState_New),
     REXX_METHOD(Lua_Graveyard,      Lua_Graveyard),
+    REXX_METHOD(Lua_Host,           Lua_Host),
     REXX_METHOD(LuaState_Close,     LuaState_Close),
     REXX_METHOD(LuaState_IsClosed,  LuaState_IsClosed),
     REXX_METHOD(LuaState_Eval,      LuaState_Eval),

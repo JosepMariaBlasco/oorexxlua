@@ -3,7 +3,9 @@
  * it works and why.
  *
  *   .LuaState~new              a new, independent Lua
- *   .lua                       the default .LuaState, made when lua.cls loads
+ *   .lua                       the default .LuaState, made when lua.cls loads;
+ *                              in Rexx run from Lua (require "oorexx"), the
+ *                              state of that Lua
  *     s~eval(code, args...)    "return code" (or code as a chunk); args are ...
  *     s~global(name)           a global (string, math, table, _G ...)
  *     s~require(name)          require(name)
@@ -37,14 +39,21 @@
  * while Lua runs, so another thread using the same object would wait for it.
  */
 
-.local~lua = .LuaState~new
+.local~lua = .LuaState~"LUA.DEFAULT"
 
 ::requires "rexxlua" LIBRARY
 
 ::class LuaState public
 ::method init
   expose cself
-  cself = self~"LUA.NEW"
+  use strict arg cself = (self~"LUA.NEW")   -- a .Pointer: the host's state (LUA.DEFAULT)
+-- .lua: the state of the Lua that runs this instance of ooRexx (the Lua
+-- module, docs/design.md, *Lua → ooRexx*), or a new one
+::method "LUA.DEFAULT" class unguarded
+  host = self~"LUA.HOST"
+  if host == .nil then return self~new
+  return self~new(host)
+::method "LUA.HOST" class unguarded external "LIBRARY rexxlua Lua_Host"
 -- uninit is Rexx, not native: it only queues the pointer, and the bridge
 -- closes the state at its next call (rexxlua.cpp, drain: ooRexx bug #2101)
 ::method uninit unguarded

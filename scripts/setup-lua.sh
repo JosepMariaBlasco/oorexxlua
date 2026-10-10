@@ -6,6 +6,9 @@
 #   Windows       luaXY.dll and its import library luaXY.lib, built with MSVC
 #                 (Git Bash with cl on the PATH): Windows has no global
 #                 symbols, so the package and the C modules must share one DLL
+# and the standalone interpreter, lua (lua.exe), which tests/run.sh uses to
+# test the Lua module oorexx (it exports the lua_* symbols, as Lua's own
+# Makefile builds it; no readline).
 # Needed where no distribution packages the Lua (5.5 anywhere; every Lua on
 # macOS and Windows).
 #   scripts/setup-lua.sh [5.3|5.4|5.5|X.Y.Z]      (default 5.5)
@@ -20,7 +23,7 @@ case $V in                      # the latest release of each version
 esac
 XY=${V%.*}; XY=${XY/./}                                     # 5.4.8 -> 54
 DIR=$WORK/lua-$V
-if [ "$OS" = Windows ]; then OUT=$DIR/src/lua$XY.dll; else OUT=$DIR/src/liblua.a; fi
+if [ "$OS" = Windows ]; then OUT=$DIR/src/lua$XY.dll EXE=$DIR/src/lua.exe; else OUT=$DIR/src/liblua.a EXE=$DIR/src/lua; fi
 if [ ! -f "$OUT" ]; then
   mkdir -p "$WORK"
   curl -sSfL --retry 3 --retry-all-errors "https://www.lua.org/ftp/lua-$V.tar.gz" | tar xz -C "$WORK"
@@ -39,4 +42,16 @@ if [ ! -f "$OUT" ]; then
   esac
   [ -f "$OUT" ] || { echo "setup-lua.sh: the build of Lua $V made no $OUT" >&2; exit 1; }
 fi
-echo "setup-lua.sh: $DIR/src ($(basename "$OUT"), headers)"
+if [ ! -f "$EXE" ]; then
+  cd "$DIR/src"
+  case $OS in
+    Windows)
+      export MSYS2_ARG_CONV_EXCL='*'
+      quiet cl -nologo -O2 -MD -W3 -DLUA_BUILD_AS_DLL lua.c -Felua.exe -link "lua$XY.lib"
+      rm -f ./lua.obj ;;
+    Darwin) "${CC:-cc}" -O2 -DLUA_USE_POSIX -DLUA_USE_DLOPEN lua.c liblua.a -o lua ;;
+    *)      "${CC:-cc}" -O2 -DLUA_USE_POSIX -DLUA_USE_DLOPEN lua.c liblua.a -o lua -Wl,-E -ldl -lm ;;
+  esac
+  [ -f "$EXE" ] || { echo "setup-lua.sh: the build of Lua $V made no $EXE" >&2; exit 1; }
+fi
+echo "setup-lua.sh: $DIR/src ($(basename "$OUT"), $(basename "$EXE"), headers)"

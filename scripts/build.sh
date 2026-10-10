@@ -5,6 +5,11 @@
 #                   (librexxlua.dylib on macOS; rexxlua.dll on Windows, with
 #                   the luaXY.dll it uses copied next to it)
 #   lua.cls         the Rexx side (.lua, .LuaState, .LuaObject)
+#   oorexx.so       the Lua module, require "oorexx" (Lua -> ooRexx): the same
+#                   source, not linked against any Lua, so that it uses the
+#                   Lua that loads it (on Windows, oorexx.dll: a copy of
+#                   rexxlua.dll, since there every Lua module is linked
+#                   against the Lua DLL anyway)
 # ooRexx: the installation of the `rexx` on the PATH (OOREXX_HOME to choose
 # another), which must have include/oorexxapi.h and lib/librexx.* (rexx.lib
 # on Windows); an installation outside /usr and /usr/local is also recorded
@@ -49,6 +54,7 @@ if [ "$OS" = Windows ]; then
       -link -LIBPATH:"$(W "$OOREXX_HOME/lib")" -LIBPATH:"$(W "$LUADIR")" rexx.lib rexxapi.lib "$LUALIB.lib"
   rm -f "$BUILD"/*.exp "$BUILD"/*.lib
   cp "$LUADIR/$LUALIB.dll" "$BUILD/"
+  cp "$BUILD/$PKG" "$BUILD/$MOD"
 else
   if [ -z "${LUA_CFLAGS:-}${LUA_LIBS:-}" ]; then
     if [ "$OS" = Linux ] && [ "${LUA_STATIC:-}" != 1 ]; then
@@ -73,6 +79,9 @@ else
   # shellcheck disable=SC2086
   "$CXX" $CXXFLAGS $LDFLAGS $LUA_CFLAGS $ORX "$SRC/rexxlua.cpp" \
       -o "$BUILD/$PKG" -lrexx -lrexxapi $LUA_LIBS
+  if [ "$OS" = Darwin ]; then MODFLAGS="-bundle -undefined dynamic_lookup"; else MODFLAGS="-shared"; fi
+  # shellcheck disable=SC2086
+  "$CXX" $CXXFLAGS $MODFLAGS $LUA_CFLAGS $ORX "$SRC/rexxlua.cpp" -o "$BUILD/$MOD" -lrexx -lrexxapi
 fi
 cp "$SRC/lua.cls" "$BUILD/"
-echo "build.sh: $BUILD/$PKG, $BUILD/lua.cls (Lua $V; ooRexx: $OOREXX_HOME)"
+echo "build.sh: $BUILD/$PKG, $BUILD/$MOD, $BUILD/lua.cls (Lua $V; ooRexx: $OOREXX_HOME)"

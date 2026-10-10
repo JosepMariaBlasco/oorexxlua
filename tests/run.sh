@@ -2,7 +2,10 @@
 # Run the test groups (tests/rexx/*.testGroup, ooRexxUnit:
 # scripts/setup-oorexxunit.sh) against the build, each in its own process
 # under a timeout (a deadlock is a failure).  Examples.testGroup runs every
-# example and compares its output with the NAME.out next to it.
+# example and compares its output with the NAME.out next to it.  Then the
+# tests of the Lua module (tests/lua/*.test.lua), each run by a standalone
+# lua of the build's version: LUA_EXE, else the one scripts/setup-lua.sh
+# built next to the clone.
 #
 # Builds the test C module (tests/cmodule) first, as LuaRocks builds them,
 # with the same Lua as the build's (scripts/build-cmodule.sh: LUA_VERSION,
@@ -16,14 +19,18 @@ WORK=${ORXLUA_WORK:-$(cd "$HERE/../.." && pwd)}
 BUILD=${BUILD:-$WORK/build}
 mkdir -p "$BUILD" && BUILD=$(cd "$BUILD" && pwd)          # absolute: the tests run in their own directories
 UNIT=${OOREXXUNIT_DIR:-$WORK/oorexxunit}
-TESTS=${TESTS:-$(cd "$HERE/rexx" && ls ./*.testGroup | sed 's|^\./||')}
+TESTS=${TESTS:-$(cd "$HERE/rexx" && ls ./*.testGroup | sed 's|^\./||'; cd "$HERE/lua" && ls ./*.test.lua | sed 's|^\./||')}
 [ -f "$UNIT/testOORexx.rex" ] || { echo "run.sh: ooRexxUnit missing: run scripts/setup-oorexxunit.sh" >&2; exit 2; }
 [ -f "$BUILD/$PKG" ] || { echo "run.sh: no $BUILD/$PKG: run scripts/build.sh" >&2; exit 2; }
 
 CMOD=$BUILD/test-cmodules
 V=${LUA_VERSION:-5.4}
 "$HERE/../scripts/build-cmodule.sh" "$CMOD" || { echo "run.sh: cannot build tests/cmodule/hello.c" >&2; exit 2; }
-export LUA_CPATH="$(native_path "$CMOD")/?.$MODEXT;;"
+# the Lua module first, then the test C module
+export LUA_CPATH="$(native_path "$BUILD")/?.$MODEXT;$(native_path "$CMOD")/?.$MODEXT;;"
+LUA_EXE=${LUA_EXE:-$(lua_exe "$V")}
+export ORXLUA_LUA=$LUA_EXE                                  # for Examples.testGroup's .lua examples
+export ORXLUA_HARNESS=$(native_path "$HERE/lua/harness.lua") ORXLUA_TESTS=$(native_path "$HERE/lua")
 
 export ORXLUA_BUILD=$(native_path "$BUILD")
 export $LIBVAR="$BUILD${!LIBVAR:+:${!LIBVAR}}"
@@ -32,8 +39,16 @@ OUT=${OUT:-/tmp/orxlua-tests}; mkdir -p "$OUT"
 status=0
 for t in $TESTS; do
   log="$OUT/${t%.*}-lua$V.log"
-  (cd "$OUT" && timeout -s KILL "${TIMEOUT:-300}" rexx "$(native_path "$UNIT/testOORexx.rex")" \
-      -f "$(native_path "$HERE/rexx/$t")" -O -U) > "$log" 2>&1
+  case $t in
+    *.lua)
+      if [ -z "$LUA_EXE" ]; then
+        echo "FAIL lua$V $t: no standalone lua $V (scripts/setup-lua.sh $V, or LUA_EXE)"; status=1; continue
+      fi
+      (cd "$OUT" && timeout -s KILL "${TIMEOUT:-300}" "$LUA_EXE" "$(native_path "$HERE/lua/$t")") > "$log" 2>&1 ;;
+    *)
+      (cd "$OUT" && timeout -s KILL "${TIMEOUT:-300}" rexx "$(native_path "$UNIT/testOORexx.rex")" \
+          -f "$(native_path "$HERE/rexx/$t")" -O -U) > "$log" 2>&1 ;;
+  esac
   rc=$?
   n() { grep -E "^$1:" "$log" | tail -1 | awk '{print $NF}'; }
   summary="$(n 'Tests ran') tests, $(n Assertions) assertions, $(n Failures) failures, $(n Errors) errors"

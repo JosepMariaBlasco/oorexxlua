@@ -2,7 +2,8 @@
 /*----------------------------------------------------------------------------*/
 /* Examples.testGroup: every example (each .rex file in examples) runs in     */
 /* its own process and prints exactly what the NAME.out next to it says.      */
-/* So the examples cannot rot.                                                */
+/* So the examples cannot rot.  The .lua examples (the Lua module) run with   */
+/* the standalone lua in ORXLUA_LUA.                                          */
 /*                                                                            */
 /* Environment: what tests/run.sh sets (REXX_PATH and the library path, so    */
 /* that `rexx` finds lua.cls and librexxlua); ORXLUA_BUILD, the build         */
@@ -41,10 +42,11 @@ return testResult
 
   names = .array~new
   do f over .File~new(dir)~listFiles
-    if f~name~endsWith(".rex") then names~append(f~absolutePath)
+    if f~name~endsWith(".rex") | f~name~endsWith(".lua") then names~append(f~absolutePath)
   end
   names = names~sort
-  self~assertTrue(names~items >= 6, "examples found in" dir)
+  self~assertTrue(names~items >= 7, "examples found in" dir)
+  lua = value("ORXLUA_LUA", , "ENVIRONMENT")
 
   failures = .array~new
   do path over names
@@ -56,10 +58,18 @@ return testResult
     s = .stream~new(outFile)
     expected = s~arrayIn~makeString("L", "0a"x)
     s~close
+    runner = "rexx"
+    if path~endsWith(".lua") then do
+      if lua == "" then do
+        failures~append(path": no standalone lua (ORXLUA_LUA)")
+        iterate
+      end
+      runner = '"'lua'"'
+    end
     if windows then                    -- cmd.exe
-      cmd = 'cd /d "'dir'" && rexx "'path'" 2>&1'
+      cmd = 'cd /d "'dir'" && 'runner '"'path'" 2>&1'
     else
-      cmd = 'cd "'dir'" && 'libvar'rexx "'path'" 2>&1'
+      cmd = 'cd "'dir'" && 'libvar || runner '"'path'" 2>&1'
     out = .array~new
     address system cmd with output using (out)
     do i = 1 to out~items              -- Windows: lines may end in CR
