@@ -43,7 +43,7 @@ if [ "$OS" = Windows ]; then
   W() { cygpath -w "$1"; }
   OBJ=$(mktemp -d); trap 'rm -rf "$OBJ"' EXIT
   quiet "$CXX" -nologo -LD -EHsc -O2 -MD -std:c++17 -W3 -Fo"$(W "$OBJ")\\" -DLUA_BUILD_AS_DLL \
-      -I"$(W "$LUADIR")" -I"$(W "$OOREXX_HOME/include")" "$(W "$SRC/rexxlua.cpp")" -Fe"$(W "$BUILD/$LIB")" \
+      -I"$(W "$LUADIR")" -I"$(W "$OOREXX_HOME/include")" "$(W "$SRC/rexxlua.cpp")" -Fe"$(W "$BUILD/$PKG")" \
       -link -LIBPATH:"$(W "$OOREXX_HOME/lib")" -LIBPATH:"$(W "$LUADIR")" rexx.lib rexxapi.lib "$LUALIB.lib"
   rm -f "$BUILD"/*.exp "$BUILD"/*.lib
   cp "$LUADIR/$LUALIB.dll" "$BUILD/"
@@ -67,10 +67,10 @@ else
   ORX="-I$OOREXX_HOME/include -L$OOREXX_HOME/lib"
   case $OOREXX_HOME in /usr|/usr/local) ;; *) ORX="$ORX -Wl,-rpath,$OOREXX_HOME/lib" ;; esac
   CXXFLAGS="-O2 -g -fPIC -Wall -Wno-unused-parameter -std=c++17"
-  if [ "$OS" = Darwin ]; then LDFLAGS="-dynamiclib -Wl,-install_name,$LIB"; else LDFLAGS="-shared"; fi
+  if [ "$OS" = Darwin ]; then LDFLAGS="-dynamiclib -Wl,-install_name,$PKG"; else LDFLAGS="-shared"; fi
   # shellcheck disable=SC2086
   "$CXX" $CXXFLAGS $LDFLAGS $LUA_CFLAGS $ORX "$SRC/rexxlua.cpp" \
-      -o "$BUILD/$LIB" -lrexx -lrexxapi $LUA_LIBS
+      -o "$BUILD/$PKG" -lrexx -lrexxapi $LUA_LIBS
 fi
 cp "$SRC/lua.cls" "$BUILD/"
-echo "build.sh: $BUILD/$LIB, $BUILD/lua.cls (Lua $V; ooRexx: $OOREXX_HOME)"
+echo "build.sh: $BUILD/$PKG, $BUILD/lua.cls (Lua $V; ooRexx: $OOREXX_HOME)"

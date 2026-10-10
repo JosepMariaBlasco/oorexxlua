@@ -18,7 +18,7 @@ mkdir -p "$BUILD" && BUILD=$(cd "$BUILD" && pwd)          # absolute: the tests 
 UNIT=${OOREXXUNIT_DIR:-$WORK/oorexxunit}
 TESTS=${TESTS:-$(cd "$HERE/rexx" && ls ./*.testGroup | sed 's|^\./||')}
 [ -f "$UNIT/testOORexx.rex" ] || { echo "run.sh: ooRexxUnit missing: run scripts/setup-oorexxunit.sh" >&2; exit 2; }
-[ -f "$BUILD/$LIB" ] || { echo "run.sh: no $BUILD/$LIB: run scripts/build.sh" >&2; exit 2; }
+[ -f "$BUILD/$PKG" ] || { echo "run.sh: no $BUILD/$PKG: run scripts/build.sh" >&2; exit 2; }
 
 # The C module: on Linux and macOS not linked against liblua (the lua_*
 # symbols come from whoever loads it); on Windows linked against the luaXY.dll

@@ -4,7 +4,7 @@
 # `. "$(dirname "$0")/../scripts/platform.sh"`). Sets:
 #
 #   OS        Linux | Darwin | Windows
-#   LIB       the ooRexx package's file: librexxlua.so | librexxlua.dylib |
+#   PKG       the ooRexx package's file (not LIB: MSVC's linker uses that): librexxlua.so | librexxlua.dylib |
 #             rexxlua.dll (ooRexx loads lib<name>.so/.dylib, <name>.dll)
 #   MODEXT    the extension of Lua C modules: so | so | dll (LuaRocks's)
 #   LIBVAR    LD_LIBRARY_PATH | DYLD_LIBRARY_PATH | PATH: where ooRexx finds
@@ -39,9 +39,9 @@ else
 fi
 
 case $OS in
-  Darwin)  LIB=librexxlua.dylib MODEXT=so  LIBVAR=DYLD_LIBRARY_PATH CXX=${CXX:-c++} CC=${CC:-cc} ;;
-  Windows) LIB=rexxlua.dll      MODEXT=dll LIBVAR=PATH              CXX=${CXX:-cl}  CC=${CC:-cl} ;;
-  *)       LIB=librexxlua.so    MODEXT=so  LIBVAR=LD_LIBRARY_PATH   CXX=${CXX:-g++} CC=${CC:-cc} ;;
+  Darwin)  PKG=librexxlua.dylib MODEXT=so  LIBVAR=DYLD_LIBRARY_PATH CXX=${CXX:-c++} CC=${CC:-cc} ;;
+  Windows) PKG=rexxlua.dll      MODEXT=dll LIBVAR=PATH              CXX=${CXX:-cl}  CC=${CC:-cl} ;;
+  *)       PKG=librexxlua.so    MODEXT=so  LIBVAR=LD_LIBRARY_PATH   CXX=${CXX:-g++} CC=${CC:-cc} ;;
 esac
 
 if ! command -v timeout >/dev/null 2>&1; then
