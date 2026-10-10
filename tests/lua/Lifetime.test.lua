@@ -57,6 +57,17 @@ T.test("many calls leave the memory flat", function()
   T.ok(grown < 100, "grew " .. grown .. " MB")
 end)
 
+T.test("nested calls in a state Rexx made leave the memory flat", function()
+  local run = rexx.routine([[
+    .LuaState~new~eval("local r = require 'oorexx'; for i = 1, 100000 do r.eval('arg(1)', i) end")
+  ]])
+  run()                                            -- warm up
+  local before = T.rss(rexx)
+  run(); run()
+  local grown = (T.rss(rexx) - before) // 1024
+  T.ok(grown < 60, "grew " .. grown .. " MB")
+end)
+
 -- A Lua that closes its state (os.exit(code, true); lua.c also does at the
 -- end of a script): the instances are terminated, so Rexx uninits run
 T.test("the host closing its state terminates the instances", function()

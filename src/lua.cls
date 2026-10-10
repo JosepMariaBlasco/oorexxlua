@@ -46,14 +46,14 @@
 ::class LuaState public
 ::method init
   expose cself
-  use strict arg cself = (self~"LUA.NEW")   -- a .Pointer: the host's state (LUA.DEFAULT)
+  cself = self~"LUA.NEW"
 -- .lua: the state of the Lua that runs this instance of ooRexx (the Lua
--- module, docs/design.md, *Lua → ooRexx*), or a new one
+-- module, docs/design.md, *Lua → ooRexx*: LUA.ADOPTNEXT makes LUA.NEW adopt
+-- it), or a new one
 ::method "LUA.DEFAULT" class unguarded
-  host = self~"LUA.HOST"
-  if host == .nil then return self~new
-  return self~new(host)
-::method "LUA.HOST" class unguarded external "LIBRARY rexxlua Lua_Host"
+  self~"LUA.ADOPTNEXT"
+  return self~new
+::method "LUA.ADOPTNEXT" class unguarded external "LIBRARY rexxlua Lua_AdoptNext"
 -- uninit is Rexx, not native: it only queues the pointer, and the bridge
 -- closes the state at its next call (rexxlua.cpp, drain: ooRexx bug #2101)
 ::method uninit unguarded

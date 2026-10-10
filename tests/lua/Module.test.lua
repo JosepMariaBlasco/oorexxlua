@@ -153,6 +153,46 @@ T.test("interpreter: other instances, with options, and close", function()
   r2.close()
 end)
 
+T.test("calls from Lua run in the instance that made the routine or object", function()
+  local other = rexx.interpreter{initial_address = "OTHER"}
+  local where = rexx.routine("return address()")
+  local mine = rexx.routine(".local~mark = 'default'")
+  mine()
+  T.ok(rexx.eval("address()") ~= "OTHER")
+  T.eq(where(), rexx.eval("address()"))
+  T.eq(rexx.eval(".local~mark"), "default")
+  T.eq(other.routine("return address()")(), "OTHER")
+  T.eq(rexx.eval("arg(1)~'LUA.STATE' == .lua", {}), 1)
+  other.close()
+  T.eq(where(), rexx.eval("address()"))                 -- its instance is alive
+end)
+
+T.test("after a Lua error inside a call, the instance is not left busy", function()
+  local r = rexx.interpreter()
+  T.ok(not pcall(r.routine("x = 1 + 'a'")))
+  local o = r.eval(".object~new")
+  T.ok(not pcall(function() o:nosuchmessage() end))
+  if _VERSION == "Lua 5.3" then                          -- 5.3 raises a finalizer's error in the allocation
+    local f = r.routine("return .array~new(100000)~fill(1)")
+    setmetatable({}, {__gc = function() error("finalizer failed") end})
+    for _ = 1, 3 do pcall(f) end
+  end
+  r.close()                                              -- not "while its Rexx code is running"
+  T.ok(true)
+end)
+
+T.test(".LuaState~new ignores its arguments", function()
+  T.eq(rexx.eval(".LuaState~new(42)~eval('1 + 1')"), 2)
+  T.eq(rexx.eval(".LuaState~new(.nil)~eval('1 + 1')"), 2)
+end)
+
+T.test("interpreter options are read raw (an __index never runs)", function()
+  local opts = setmetatable({}, {__index = function() error("__index ran") end})
+  local r = rexx.interpreter(opts)
+  T.eq(r.eval("6 * 7"), 42)
+  r.close()
+end)
+
 T.test("another Rexx thread cannot use the host's state; a state of its own, yes", function()
   T.eq(rexx.routine([[
     m = .Message~new(.lua, "EVAL", "I", "return 1")

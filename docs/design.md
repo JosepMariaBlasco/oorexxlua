@@ -336,7 +336,9 @@ Lua API"). So every such operation is a small C function run with
 `lua_pcall` (`protect` and the `p_*` functions in `rexxlua.cpp`), and its
 error is a Rexx condition like any other. Those functions use only Lua's API,
 with no C++ objects: a Lua error is a `longjmp`, which would not destroy
-them. Only running out of memory while pushing a value can still panic.
+them. Only running out of memory while pushing a value can still panic (and,
+in Lua 5.3, an error in a finalizer that a garbage collection step runs
+then; in a host's Lua, *Lua → ooRexx* deals with both).
 
 **No C++ object where a Lua error is raised.** The bridge's own Lua C
 functions (the callbacks into Rexx, the Lua module's functions) raise Lua
@@ -463,16 +465,40 @@ Rexx when it likes: the module's functions, and also any Rexx object or
 routine it holds (`d:put(v, k)`, `f(6, 7)`). Each such call attaches the
 thread to an instance (`AttachThread`; the host's thread made the instances
 and stays attached to them, as ooRexx bug #2107 requires) and detaches it
-after, which frees the local references the call made. A Rexx object's
-userdata that Lua finalizes outside any Rexx code cannot let go of its
-object then (no thread context): it is queued, and let go at the next entry
-into Rexx.
+after, which frees the local references the call made. The instance is the
+call's own (a module function's), or for a Rexx object or routine the one
+whose Rexx code made its userdata, so that it runs with its own `.local`,
+`.lua` and `ADDRESS` (another live one if that instance has been closed).
+Every instance has its own `.lua` object for the host's state, and Lua
+values reaching Rexx get the one of the instance they reach.
+
+Between attaching and detaching, Lua can raise an error of its own (out of
+memory, or in Lua 5.3, LuaTeX's, an error in some finalizer, which a
+garbage collection step started by an allocation raises there), and a
+`longjmp` past the detach would leave the thread attached and the instance
+busy forever. So `hostRun` attaches, runs the same C function again inside
+`lua_pcall` (with a marker as its first argument, which tells it that it is
+that protected run), and then, whatever happened, puts the `State` back
+and detaches before raising the error. `hostRun` itself holds no C++
+object (*Errors*).
+
+A Rexx object's userdata that Lua finalizes outside any Rexx code cannot let
+go of its object then (no thread context): it is queued, and let go at the
+next entry into Rexx.
 
 **Nesting.** In a state the bridge makes (`.LuaState~new`, and `.lua` when
 Rexx started), `package.preload.oorexx` gives the module of the instance
 whose Rexx code is running: Lua code that does `require "oorexx"` there
 gets that instance, with no new instance and no second copy of the library.
-It has no `interpreter`.
+It has no `interpreter`. What its calls make is released at once, as in
+callbacks (*Lifetime*): a loop of a million of them inside one Rexx call
+stays flat.
+
+**Adopting.** `lua.cls` makes `.lua` with `.LuaState~"LUA.DEFAULT"`, which
+asks the bridge (`LUA.ADOPTNEXT`) whether the current instance is one the
+module made; if so, the `.LuaState~new` that follows on that thread gets the
+host's state instead of a new one. `init` takes no pointer that Rexx code
+could pass.
 
 **LuaTeX.** `lualatex --shell-escape` (LuaTeX loads no C module without it),
 with the module on `package.cpath`: `\directlua{rexx = require "oorexx"}`,
