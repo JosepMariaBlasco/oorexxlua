@@ -31,8 +31,8 @@ if [ ! -f "$OUT" ]; then
       # cl -LD runs MSVC's link (Git Bash has a link of its own); it also
       # makes the import library, lua$XY.lib
       # shellcheck disable=SC2046
-      cl -nologo -O2 -MD -W3 -LD -DLUA_BUILD_AS_DLL $(ls ./*.c | grep -v -e '/lua\.c$' -e '/luac\.c$') \
-         -Fe"lua$XY.dll" >/dev/null
+      quiet cl -nologo -O2 -MD -W3 -LD -DLUA_BUILD_AS_DLL $(ls ./*.c | grep -v -e '/lua\.c$' -e '/luac\.c$') \
+         -Fe"lua$XY.dll"
       rm -f ./*.obj ./*.exp ;;
     Darwin) make -s liblua.a SYSCFLAGS=-DLUA_USE_MACOSX MYCFLAGS=-fPIC 2>&1 >/dev/null | grep -v "modifier ignored" >&2 || true ;;
     *)      make -s liblua.a SYSCFLAGS=-DLUA_USE_LINUX  MYCFLAGS=-fPIC 2>&1 >/dev/null | grep -v "modifier ignored" >&2 || true ;;

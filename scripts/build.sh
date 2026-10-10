@@ -42,9 +42,9 @@ if [ "$OS" = Windows ]; then
   export MSYS2_ARG_CONV_EXCL='*'
   W() { cygpath -w "$1"; }
   OBJ=$(mktemp -d); trap 'rm -rf "$OBJ"' EXIT
-  "$CXX" -nologo -LD -EHsc -O2 -MD -std:c++17 -W3 -Fo"$(W "$OBJ")\\" -DLUA_BUILD_AS_DLL \
+  quiet "$CXX" -nologo -LD -EHsc -O2 -MD -std:c++17 -W3 -Fo"$(W "$OBJ")\\" -DLUA_BUILD_AS_DLL \
       -I"$(W "$LUADIR")" -I"$(W "$OOREXX_HOME/include")" "$(W "$SRC/rexxlua.cpp")" -Fe"$(W "$BUILD/$LIB")" \
-      -link -LIBPATH:"$(W "$OOREXX_HOME/lib")" -LIBPATH:"$(W "$LUADIR")" rexx.lib rexxapi.lib "$LUALIB.lib" >/dev/null
+      -link -LIBPATH:"$(W "$OOREXX_HOME/lib")" -LIBPATH:"$(W "$LUADIR")" rexx.lib rexxapi.lib "$LUALIB.lib"
   rm -f "$BUILD"/*.exp "$BUILD"/*.lib
   cp "$LUADIR/$LUALIB.dll" "$BUILD/"
 else

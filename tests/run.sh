@@ -30,8 +30,8 @@ if [ "$OS" = Windows ]; then
   LUADIR=$(lua_dir "$V")
   [ -n "$LUADIR" ] || { echo "run.sh: no Lua $V next to the clone (scripts/setup-lua.sh $V)" >&2; exit 2; }
   (export MSYS2_ARG_CONV_EXCL='*'; cd "$CMOD" &&
-   cl -nologo -O2 -MD -LD -DLUA_BUILD_AS_DLL -I"$(native_path "$LUADIR")" "$(native_path "$HERE/cmodule/hello.c")" \
-      -Fehello.dll -link -LIBPATH:"$(native_path "$LUADIR")" "lua${V/./}.lib" -EXPORT:luaopen_hello >/dev/null &&
+   quiet cl -nologo -O2 -MD -LD -DLUA_BUILD_AS_DLL -I"$(native_path "$LUADIR")" "$(native_path "$HERE/cmodule/hello.c")" \
+      -Fehello.dll -link -LIBPATH:"$(native_path "$LUADIR")" "lua${V/./}.lib" -EXPORT:luaopen_hello &&
    rm -f hello.obj hello.exp hello.lib) ||
     { echo "run.sh: cannot build tests/cmodule/hello.c" >&2; exit 2; }
 else

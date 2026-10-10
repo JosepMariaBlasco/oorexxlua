@@ -50,6 +50,17 @@ if ! command -v timeout >/dev/null 2>&1; then
   fi
 fi
 
+# quiet CMD...: runs CMD with its output kept, shown only if it fails (cl
+# writes its errors to stdout, among the names of the files it compiles)
+quiet() {
+  local log rc=0
+  log=$(mktemp)
+  "$@" >"$log" 2>&1 || rc=$?
+  [ $rc -eq 0 ] || cat "$log" >&2
+  rm -f "$log"
+  return $rc
+}
+
 # lua_dir V: the src/ of the Lua V (5.3, 5.4, 5.5) that setup-lua.sh built
 # next to the clone, the newest if there are several; empty if none
 lua_dir() {
