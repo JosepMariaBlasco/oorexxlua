@@ -71,7 +71,7 @@ end)
 -- A Lua that closes its state (os.exit(code, true); lua.c also does at the
 -- end of a script): the instances are terminated, so Rexx uninits run
 T.test("the host closing its state terminates the instances", function()
-  local lua = arg[-1]
+  local lua = os.getenv("ORXLUA_LUA") or arg[-1]   -- (texlua's arg[-1] is not its path)
   local script = T.tmpname("orxlua-close.lua")
   local f = io.open(script, "w")
   f:write([[

@@ -31,7 +31,7 @@ V=${LUA_VERSION:-5.4}
 MODDIR=${ORXLUA_MODDIR:-$BUILD}
 export LUA_CPATH="$(native_path "$MODDIR")/?.$MODEXT;$(native_path "$CMOD")/?.$MODEXT;;"
 LUA_EXE=${LUA_EXE:-$(lua_exe "$V")}
-export ORXLUA_LUA=$LUA_EXE                                  # for Examples.testGroup's .lua examples
+export ORXLUA_LUA=${LUA_EXE:+$(native_path "$LUA_EXE")}     # for the .lua examples, and tests/lua
 export ORXLUA_HARNESS=$(native_path "$HERE/lua/harness.lua") ORXLUA_TESTS=$(native_path "$HERE/lua")
 
 export ORXLUA_BUILD=$(native_path "$BUILD")
