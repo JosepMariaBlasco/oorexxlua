@@ -16,8 +16,11 @@
  *     s~isClosed
  *
  *   .LuaObject                 a Lua value by reference, in one .LuaState
- *     o~name(args...)          field (any case), called if a function:
- *                              o:name(...) if o has a metatable, else o.name(...)
+ *     o~name(args...)          field (any case), called if a function, as
+ *                              o:name(...) or o.name(...): o:name if it is a
+ *                              Lua function whose first parameter is self, or
+ *                              a C function found through the metatable
+ *     o~all(name, args...)     the same, every result as an Array
  *     o~method(name, args...)  o:name(...)      o~func(name, args...)  o.name(...)
  *     o~get(name)              the field, never called
  *     o~name = v               set field
@@ -80,6 +83,7 @@
 ::method unknown unguarded      external "LIBRARY rexxlua LuaObj_Unknown"
 ::method method unguarded       external "LIBRARY rexxlua LuaObj_Method"
 ::method func unguarded         external "LIBRARY rexxlua LuaObj_Func"
+::method all unguarded          external "LIBRARY rexxlua LuaObj_All"
 ::method call unguarded         external "LIBRARY rexxlua LuaObj_Call"
 ::method callAll unguarded      external "LIBRARY rexxlua LuaObj_CallAll"
 ::method get unguarded          external "LIBRARY rexxlua LuaObj_Get"

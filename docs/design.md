@@ -205,45 +205,69 @@ class before the `.local` entry.)
 
 ## Calls
 
-`o~name(args)` gets the field and, if it is callable, calls it. With no
-arguments it still calls: as in ooRexx/Python, a function value needs
-`o~get(name)`. The first result is returned; `~callAll` returns them all as
-an Array. Lua errors become SYNTAX 98.900 "Lua error: ...", with Lua's
-traceback. A Rexx condition raised inside a callback becomes a Lua error, and
-so it can come back to Rexx, nested.
+`o~name(args)` gets the field (see *Names*) and, if it is callable, calls
+it. With no arguments it still calls, as in ooRexx/Python: a function value
+needs `o~get(name)`.
+
+**The colon rule.** Lua has two ways to call a field, `o.name(...)` and
+`o:name(...)` (which passes `o` first), and nothing in the object says which
+one a function expects. The bridge looks at the function:
+
+- A **Lua function** whose first parameter is `self` gets the object:
+  `o:name(...)`. Every `function X:m()` has that parameter, implicitly. Any
+  other Lua function: `o.name(...)`. The name comes from
+  `lua_getlocal(L, NULL, 1)`, which Lua 5.3, 5.4 and 5.5 all have.
+- A **C function** has no parameter names. Found in the object itself, it is
+  a module function (`string.rep`): `o.name(...)`. Found through the
+  metatable's `__index`, it is a method (a file's `read`, a string's
+  `upper`): `o:name(...)`.
+
+This is right for modules, for *Programming in Lua*'s classes
+(`Account:new`, where the class itself has no metatable), for objects with
+metatables, and for objects made of closures (`function o:inc()` on a plain
+table), which a rule based on the object (does it have a metatable?) gets
+wrong. The rule would fail only for a function written `function M.f(self,
+x)` and meant to be called with a dot. `o~func(name, ...)` (`o.name(...)`)
+and `o~method(name, ...)` (`o:name(...)`) force one form or the other.
+
+**Several results.** A call returns the first result (`.nil` if none).
+`o~all(name, args...)`, which follows the colon rule, and `o~callAll(args...)`
+return them all, as an Array with one item per result: `nil` is `.nil` in
+its place, with no holes, so `items` is the number of results, `return nil`
+(one item) differs from `return` (none), and in `nil, message` (`io.open`
+and friends) the message is always `r[2]`.
+
+## Errors
+
+Lua errors become SYNTAX 98.900 "Lua error: ...", with Lua's traceback. A
+Rexx condition raised inside a callback becomes a Lua error, and so it can
+come back to Rexx, nested.
+
+Getting a field, indexing, `tostring` and `#` can all run Lua code
+(metamethods), and a Lua error outside a protected call does not come back
+at all: Lua aborts the whole process ("PANIC: unprotected error in call to
+Lua API"). So every such operation is a small C function run with
+`lua_pcall` (`protect` and the `p_*` functions in `rexxlua.cpp`), and its
+error is a Rexx condition like any other. Those functions use only Lua's API,
+with no C++ objects: a Lua error is a `longjmp`, which would not destroy
+them. Only running out of memory while pushing a value can still panic.
 
 ## Decided, not yet implemented
 
 Each of these changes or extends the sections above.
 
-1. **The colon problem.** The choice between `o:name(...)` and
-   `o.name(...)` will depend on the function, not on the object. A Lua
-   function whose first parameter is `self` (`lua_getlocal(L, NULL, 1)`;
-   every `function X:m()` has it) is called with `:`, any other with `.`.
-   This is right for modules, for *Programming in Lua*'s classes
-   (`Account:new`, with no metatable on the class), for objects with
-   metatables and for objects made of closures. A C function, which has no
-   parameter names, is called with `.` when it was found in the object
-   itself (`string.rep`) and with `:` when it was found through its
-   metatable's `__index` (`file:read`, `("abc"):upper()`). `~method(name,
-   ...)` and `~func(name, ...)` still force one form or the other.
-2. **Calling vs getting** stays as it is (`~get(name)` for a function value).
-3. **Several results.** The first one by default. `~callAll(args...)` and a
-   new `~all(name, args...)` (which follows the colon rule) return an Array
-   with one item per result, `nil` as `.nil` in its place: no holes, `items`
-   is the number of results, and `return nil` differs from `return`.
-4. **Rexx objects in Lua.** `obj.name = v` sends `NAME=`; keys that are
+1. **Rexx objects in Lua.** `obj.name = v` sends `NAME=`; keys that are
    strings are messages, keys of any other type use Rexx's `[]` (`a[1]`,
    `ipairs(a)` on a Rexx Array); `#obj` sends `items`; `pairs(obj)` goes
    through its `supplier`. Only Arrays are copied, as in ooRexx/Python;
    `.lua~table(d)` copies a Directory.
-5. **Operators on proxies**, as in ooRexx/Python: Lua's arithmetic (with
+2. **Operators on proxies**, as in ooRexx/Python: Lua's arithmetic (with
    metamethods); `=` is Lua's `==`, `==` is `rawequal`; `hashCode`
    consistent with `=`.
-6. **Lua versions:** 5.3, 5.4 and 5.5 from the same source (5.3 is needed
+3. **Lua versions:** 5.3, 5.4 and 5.5 from the same source (5.3 is needed
    for LuaTeX); 5.4 by default. Not LuaJIT (Lua 5.1's API, no integers).
-7. **Coroutines** are used like any function. A `yield` across a callback
+4. **Coroutines** are used like any function. A `yield` across a callback
    into Rexx fails with Lua's own "attempt to yield across a C-call
    boundary": to be documented, not worked around.
-8. **Platforms:** Linux first; macOS and Windows, with CI as in the sister
+5. **Platforms:** Linux first; macOS and Windows, with CI as in the sister
    bridges, once the prototype is stable.

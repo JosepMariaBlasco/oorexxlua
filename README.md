@@ -34,9 +34,9 @@ program, LuaTeX included) will come later.
 
 **Status: becoming a prototype.** It works and is tested on Linux x86_64
 with ooRexx 5.3.0 and Lua 5.4.6. Every design question is decided, and the
-decisions are being implemented: states, threads, object lifetime and
-values are done; calls are next (`docs/design.md`, *Decided, not yet
-implemented*). The API will change.
+decisions are being implemented: states, threads, object lifetime, values
+and calls are done; Rexx objects inside Lua are next (`docs/design.md`,
+*Decided, not yet implemented*). The API will change.
 
 ## Getting started
 
@@ -77,7 +77,8 @@ the small Lua C module the tests load, so it needs `pkg-config`'s `lua5.4`
     header gives the API).
 - `examples/` — short programs, each with its exact output: `01-tour.rex`
   (one feature per section), `02-states.rex` (several Luas, closing,
-  identity), `03-values.rex` (how values cross, `box`); `run-one.sh`.
+  identity), `03-values.rex` (how values cross, `box`), `04-calls.rex`
+  (the colon rule, several results); `run-one.sh`.
 - `tests/` — `run.sh`; `rexx/` (lifetime, threads, C modules), `cmodule/`
   (a Lua C module built as LuaRocks builds them).
 - `scripts/build.sh` — the build.

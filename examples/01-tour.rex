@@ -26,14 +26,13 @@ t[4] = "four"
 do x over t; say ">" x; end
 say .lua~global("table")~concat(t, "+")            -- one+two+three+four
 
--- 5. Objects with a metatable: the colon problem
+-- 5. Objects: o~name is o:name(...) when the function has a self parameter
 .lua~eval("Counter = {}; Counter.__index = Counter;" -
   "function Counter.new(n) return setmetatable({n = n or 0}, Counter) end;" -
   "function Counter:inc(k) self.n = self.n + (k or 1); return self.n end")
-c = .lua~global("Counter")~new(10)                 -- Counter has no metatable: '.'
-say c~inc c~inc(5) c~n                             -- 11 16 16 (c has one: ':')
--- but Lua strings have a metatable too ('abc':upper() exists)
-s = .lua~eval("'abc'")                             -- comes back as a Rexx string, no proxy
+c = .lua~global("Counter")~new(10)                 -- Counter.new(n): no self, '.'
+say c~inc c~inc(5) c~n                             -- 11 16 16 (Counter:inc: ':')
+s = .lua~eval("'abc'")                             -- a Lua string comes back as a Rexx string
 
 -- 6. Booleans: in Lua, 0 is true
 say .lua~eval("(...) and 'true' or 'false'", 0)            -- true!

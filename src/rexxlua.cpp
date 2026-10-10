@@ -243,6 +243,104 @@ static int pcallAll(State *st, int nargs)
     return lua_gettop(L) - base + 1;
 }
 
+/*
+ * Protected operations (docs/design.md, *Errors*).  Getting a field, indexing,
+ * tostring, # ... can run Lua code (metamethods), and a Lua error outside a
+ * protected call aborts the whole process ("PANIC: unprotected error").  So
+ * every such operation is a small C function run with lua_pcall: its error
+ * becomes a Rexx condition.  These functions use the Lua API only (no C++
+ * objects, which a Lua error, a longjmp, would not destroy).
+ */
+static bool protect(State *st, lua_CFunction f, int nargs)
+{
+    lua_pushcfunction(st->L, f);
+    lua_insert(st->L, -(nargs + 1));
+    return pcallAll(st, nargs) >= 0;
+}
+
+static void pushLower(lua_State *L, int idx)
+{
+    size_t n;
+    const char *s = lua_tolstring(L, idx, &n);
+    luaL_Buffer b;
+    char *p = luaL_buffinitsize(L, &b, n);
+    for (size_t i = 0; i < n; i++) p[i] = (char)tolower((unsigned char)s[i]);
+    luaL_pushresultsize(&b, n);
+}
+
+// Is key (at k) a field of the object (at 1) itself, not through __index?
+static int isRaw(lua_State *L, int k)
+{
+    if (lua_type(L, 1) != LUA_TTABLE) return 0;
+    lua_pushvalue(L, k);
+    int raw = lua_rawget(L, 1) != LUA_TNIL;
+    lua_pop(L, 1);
+    return raw;
+}
+
+/* p_resolve(obj, name) -> value, raw.  Rexx uppercases names (docs/design.md,
+ * *Names*): try the name in lowercase, then as written, then (tables only) a
+ * scan of the keys, ignoring case.  raw: found in the object itself.       */
+static int p_resolve(lua_State *L)
+{
+    pushLower(L, 2);                                    // 3
+    for (int k = 3; k >= 2; k--) {
+        lua_pushvalue(L, k);
+        if (lua_gettable(L, 1) != LUA_TNIL) { lua_pushboolean(L, isRaw(L, k)); return 2; }
+        lua_pop(L, 1);
+    }
+    if (lua_type(L, 1) == LUA_TTABLE) {
+        const char *name = lua_tostring(L, 2);
+        lua_pushnil(L);
+        while (lua_next(L, 1)) {
+            if (lua_type(L, -2) == LUA_TSTRING && strcasecmp(lua_tostring(L, -2), name) == 0) {
+                lua_remove(L, -2);
+                lua_pushboolean(L, 1);
+                return 2;
+            }
+            lua_pop(L, 1);
+        }
+    }
+    lua_pushnil(L);
+    lua_pushboolean(L, 0);
+    return 2;
+}
+
+/* p_assign(obj, name, value): obj[key] = value, where key is the existing
+ * key that matches name ignoring case (as p_resolve finds it), or else the
+ * name in lowercase.                                                       */
+static int p_assign(lua_State *L)
+{
+    pushLower(L, 2);                                    // 4
+    int key = 4;
+    lua_pushvalue(L, 4);
+    if (lua_gettable(L, 1) == LUA_TNIL) {
+        lua_pushvalue(L, 2);
+        if (lua_gettable(L, 1) != LUA_TNIL) key = 2;
+        else if (lua_type(L, 1) == LUA_TTABLE) {
+            const char *name = lua_tostring(L, 2);
+            lua_pushnil(L);
+            while (lua_next(L, 1)) {
+                lua_pop(L, 1);
+                if (lua_type(L, -1) == LUA_TSTRING && strcasecmp(lua_tostring(L, -1), name) == 0) {
+                    key = lua_gettop(L);
+                    break;
+                }
+            }
+        }
+    }
+    lua_pushvalue(L, key);
+    lua_pushvalue(L, 3);
+    lua_settable(L, 1);
+    return 0;
+}
+
+static int p_gettable(lua_State *L) { lua_gettable(L, 1); return 1; }          // obj, key -> obj[key]
+static int p_settable(lua_State *L) { lua_settable(L, 1); return 0; }          // obj, key, value
+static int p_tostring(lua_State *L) { luaL_tolstring(L, 1, NULL); return 1; }  // v -> tostring(v)
+static int p_len(lua_State *L) { lua_pushinteger(L, luaL_len(L, 1)); return 1; }   // v -> #v
+static int p_getglobal(lua_State *L) { lua_getglobal(L, lua_tostring(L, 1)); return 1; }
+
 /* First result as a Rexx object (.nil if none); pops all results. */
 static RexxObjectPtr firstResult(State *st, int n)
 {
@@ -569,31 +667,6 @@ static void raiseTop(State *st)
     raise(st->tc, m);
 }
 
-/* Case-insensitive name resolution on the value at the top of the stack.
- * Rexx uppercases names: try lowercase, then as written, then (tables only)
- * a scan of the keys. Pushes the value found (possibly nil).             */
-static void resolveName(lua_State *L, const char *name)
-{
-    std::string lower(name);
-    for (auto &ch : lower) ch = (char)tolower((unsigned char)ch);
-    int obj = lua_gettop(L);
-    lua_getfield(L, obj, lower.c_str());
-    if (!lua_isnil(L, -1)) return;
-    lua_pop(L, 1);
-    lua_getfield(L, obj, name);
-    if (!lua_isnil(L, -1) || lua_type(L, obj) != LUA_TTABLE) return;
-    lua_pop(L, 1);
-    lua_pushnil(L);
-    while (lua_next(L, obj)) {
-        if (lua_type(L, -2) == LUA_TSTRING && strcasecmp(lua_tostring(L, -2), name) == 0) {
-            lua_remove(L, -2);      // keep value
-            return;
-        }
-        lua_pop(L, 1);
-    }
-    lua_pushnil(L);
-}
-
 /* ------------------------------------------------------------------------ */
 /* Entering, from a native method                                             */
 /* ------------------------------------------------------------------------ */
@@ -680,7 +753,8 @@ RexxMethod2(RexxObjectPtr, LuaState_Global, CSTRING, name, CSELF, self)
 {
     Entry en(context, (State *)self, context->GetSelf());
     if (!en.ok) return NULLOBJECT;
-    lua_getglobal(en.st->L, name);
+    lua_pushstring(en.st->L, name);
+    if (!protect(en.st, p_getglobal, 1)) return NULLOBJECT;
     RexxObjectPtr r = toRexx(en.st, -1);
     lua_pop(en.st->L, 1);
     return r;
@@ -691,7 +765,8 @@ RexxMethod2(RexxObjectPtr, LuaState_Require, CSTRING, name, CSELF, self)
 {
     Entry en(context, (State *)self, context->GetSelf());
     if (!en.ok) return NULLOBJECT;
-    lua_getglobal(en.st->L, "require");
+    lua_pushstring(en.st->L, "require");
+    if (!protect(en.st, p_getglobal, 1)) return NULLOBJECT;
     lua_pushstring(en.st->L, name);
     return firstResult(en.st, pcallAll(en.st, 1));
 }
@@ -820,48 +895,59 @@ RexxMethod1(RexxObjectPtr, LuaState_Stats, CSELF, self)
 
 static void pushSelf(Proxy *px) { lua_rawgeti(px->st->L, LUA_REGISTRYINDEX, px->ref); }
 
-// o~name(args...): the field (any case); if a function, called.
-//   SPIKE HEURISTIC for the colon problem: when o has a metatable the call is
-//   o:name(...) (self passed), otherwise o.name(...). ~method and ~func force.
-// o~name=v: sets the field.
+/*
+ * o~name(args...): the field (any case, see p_resolve); if it is callable, it
+ * is called, as o:name(...) or o.name(...) by the colon rule (docs/design.md,
+ * *Calls*): a Lua function whose first parameter is `self` gets o; a C
+ * function (no parameter names) gets it when it was found through the
+ * metatable, not in o itself.  colon: -1 by that rule, 0 or 1 forced
+ * (~func, ~method).  all: every result, as an Array (~all).
+ * o~name = v: sets the field (p_assign).
+ */
 static RexxObjectPtr callField(RexxMethodContext *context, Proxy *px, CSTRING message,
-                               RexxArrayObject args, int colon /* -1 auto, 0, 1 */, bool all)
+                               RexxArrayObject args, int colon, bool all)
 {
     State *st = px->st; lua_State *L = st->L;
     RexxThreadContext *c = context->threadContext;
-    std::string name = message;
     size_t size = args ? c->ArraySize(args) : 0;
+    size_t len = strlen(message);
     int top = lua_gettop(L);
     pushSelf(px);
     int obj = lua_gettop(L);
-    if (name.size() > 1 && name.back() == '=' && colon == -1) {      // assignment
-        name.pop_back();
-        std::string lower(name);
-        for (auto &ch : lower) ch = (char)tolower((unsigned char)ch);
-        lua_getfield(L, obj, name.c_str());                         // keep an existing case
-        const char *key = lua_isnil(L, -1) ? lower.c_str() : name.c_str();
-        lua_pop(L, 1);
+    if (len > 1 && message[len - 1] == '=' && colon == -1 && !all) {   // assignment
+        lua_pushvalue(L, obj);
+        lua_pushlstring(L, message, len - 1);
         if (!pushValue(st, size ? c->ArrayAt(args, 1) : NULLOBJECT)) { raiseTop(st); lua_settop(L, top); return NULLOBJECT; }
-        lua_setfield(L, obj, key);
+        protect(st, p_assign, 3);
         lua_settop(L, top);
         return NULLOBJECT;
     }
-    resolveName(L, name.c_str());
-    bool callable = lua_type(L, -1) == LUA_TFUNCTION;
-    if (!callable && luaL_getmetafield(L, -1, "__call") != LUA_TNIL) { lua_pop(L, 1); callable = true; }
+    lua_pushvalue(L, obj);
+    lua_pushstring(L, message);
+    if (!protect(st, p_resolve, 2)) { lua_settop(L, top); return NULLOBJECT; }
+    bool raw = lua_toboolean(L, -1);
+    lua_pop(L, 1);
+    int fn = lua_gettop(L);
+    bool callable = lua_type(L, fn) == LUA_TFUNCTION;
+    if (!callable && luaL_getmetafield(L, fn, "__call") != LUA_TNIL) { lua_pop(L, 1); callable = true; }
     if (!callable) {
-        if (size > 0) {
+        if (size > 0 || all) {
             lua_settop(L, top);
-            raise(c, "Lua error: field '" + name + "' is not callable");
+            raise(c, std::string("Lua error: field '") + message + "' is not callable");
             return NULLOBJECT;
         }
-        RexxObjectPtr r = toRexx(st, -1);
+        RexxObjectPtr r = toRexx(st, fn);
         lua_settop(L, top);
         return r;
     }
     if (colon == -1) {
-        colon = lua_getmetatable(L, obj) ? 1 : 0;
-        if (colon) lua_pop(L, 1);
+        if (lua_type(L, fn) == LUA_TFUNCTION && !lua_iscfunction(L, fn)) {
+            lua_pushvalue(L, fn);
+            const char *first = lua_getlocal(L, NULL, 1);   // its first parameter's name
+            lua_pop(L, 1);
+            colon = first != NULL && strcmp(first, "self") == 0;
+        }
+        else colon = !raw;
     }
     int nargs = 0;
     if (colon) { lua_pushvalue(L, obj); nargs = 1; }
@@ -900,6 +986,13 @@ RexxMethod3(RexxObjectPtr, LuaObj_Func, CSTRING, name, ARGLIST, args, CSELF, sel
     return callField(context, px, name, rest(context, args), 0, false);
 }
 
+// o~all(name, args...): as o~name(args...), but every result, as an Array
+RexxMethod3(RexxObjectPtr, LuaObj_All, CSTRING, name, ARGLIST, args, CSELF, self)
+{
+    PROXY_ENTRY
+    return callField(context, px, name, rest(context, args), -1, true);
+}
+
 // o~call(args...): o(...), first result. o~callAll(args...): all results, as an Array
 static RexxObjectPtr callSelf(RexxMethodContext *context, Proxy *px, RexxArrayObject args, bool all)
 {
@@ -922,8 +1015,9 @@ RexxMethod2(RexxObjectPtr, LuaObj_Get, CSTRING, name, CSELF, self)
 {
     PROXY_ENTRY
     pushSelf(px);
-    resolveName(L, name);
-    RexxObjectPtr r = toRexx(st, -1);
+    lua_pushstring(L, name);
+    if (!protect(st, p_resolve, 2)) return NULLOBJECT;
+    RexxObjectPtr r = toRexx(st, -2);
     lua_pop(L, 2);
     return r;
 }
@@ -935,7 +1029,7 @@ RexxMethod2(RexxObjectPtr, LuaObj_At, RexxObjectPtr, key, CSELF, self)
     int top = lua_gettop(L);
     pushSelf(px);
     if (!pushValue(st, key)) { raiseTop(st); lua_settop(L, top); return NULLOBJECT; }
-    lua_gettable(L, -2);
+    if (!protect(st, p_gettable, 2)) { lua_settop(L, top); return NULLOBJECT; }
     RexxObjectPtr r = toRexx(st, -1);
     lua_settop(L, top);
     return r;
@@ -947,7 +1041,7 @@ RexxMethod3(RexxObjectPtr, LuaObj_Put, RexxObjectPtr, value, RexxObjectPtr, key,
     int top = lua_gettop(L);
     pushSelf(px);
     if (!pushValue(st, key) || !pushValue(st, value)) { raiseTop(st); lua_settop(L, top); return NULLOBJECT; }
-    lua_settable(L, -3);
+    protect(st, p_settable, 3);
     lua_settop(L, top);
     return NULLOBJECT;
 }
@@ -956,10 +1050,11 @@ RexxMethod1(RexxObjectPtr, LuaObj_String, CSELF, self)
 {
     PROXY_ENTRY
     pushSelf(px);
+    if (!protect(st, p_tostring, 1)) return NULLOBJECT;
     size_t len;
-    const char *s = luaL_tolstring(L, -1, &len);
+    const char *s = lua_tolstring(L, -1, &len);
     RexxObjectPtr r = c->NewString(s, len);
-    lua_pop(L, 2);
+    lua_pop(L, 1);
     return r;
 }
 
@@ -967,15 +1062,22 @@ RexxMethod1(RexxObjectPtr, LuaObj_String, CSELF, self)
 RexxMethod1(RexxObjectPtr, LuaObj_MakeArray, CSELF, self)
 {
     PROXY_ENTRY
+    int top = lua_gettop(L);
     pushSelf(px);
-    lua_Integer n = luaL_len(L, -1);
-    RexxArrayObject a = c->NewArray((size_t)n);
+    int obj = lua_gettop(L);
+    lua_pushvalue(L, obj);
+    if (!protect(st, p_len, 1)) { lua_settop(L, top); return NULLOBJECT; }
+    lua_Integer n = lua_tointeger(L, -1);
+    lua_pop(L, 1);
+    RexxArrayObject a = c->NewArray(n > 0 ? (size_t)n : 0);
     for (lua_Integer i = 1; i <= n; i++) {
-        lua_geti(L, -1, i);
+        lua_pushvalue(L, obj);
+        lua_pushinteger(L, i);
+        if (!protect(st, p_gettable, 2)) { lua_settop(L, top); return NULLOBJECT; }
         c->ArrayPut(a, toRexx(st, -1), (size_t)i);
         lua_pop(L, 1);
     }
-    lua_pop(L, 1);
+    lua_settop(L, top);
     return a;
 }
 
@@ -1007,6 +1109,7 @@ RexxMethodEntry rexxlua_methods[] = {
     REXX_METHOD(LuaObj_Unknown,     LuaObj_Unknown),
     REXX_METHOD(LuaObj_Method,      LuaObj_Method),
     REXX_METHOD(LuaObj_Func,        LuaObj_Func),
+    REXX_METHOD(LuaObj_All,         LuaObj_All),
     REXX_METHOD(LuaObj_Call,        LuaObj_Call),
     REXX_METHOD(LuaObj_CallAll,     LuaObj_CallAll),
     REXX_METHOD(LuaObj_Get,         LuaObj_Get),
