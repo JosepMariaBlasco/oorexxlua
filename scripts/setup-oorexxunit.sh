@@ -17,7 +17,7 @@ REV=${OOREXXUNIT_REV:-13268}
 DIR=${OOREXXUNIT_DIR:-$WORK/oorexxunit}
 SVN="https://svn.code.sf.net/p/oorexx/code-0/!svn/bc/$REV/test/trunk"
 mkdir -p "$DIR"
-get() { curl -sSfL --retry 3 -o "$DIR/$(basename "$1")" "$SVN/$1"; }
+get() { curl -sSfL --retry 3 --retry-all-errors -o "$DIR/$(basename "$1")" "$SVN/$1"; }
 get framework/OOREXXUNIT.CLS
 for f in ooTest.frm worker.rex testOORexx.rex CPLv1.0.txt; do get "$f"; done
 echo "ooRexxUnit r$REV in $DIR"

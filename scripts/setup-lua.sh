@@ -23,7 +23,7 @@ DIR=$WORK/lua-$V
 if [ "$OS" = Windows ]; then OUT=$DIR/src/lua$XY.dll; else OUT=$DIR/src/liblua.a; fi
 if [ ! -f "$OUT" ]; then
   mkdir -p "$WORK"
-  curl -sSfL --retry 3 "https://www.lua.org/ftp/lua-$V.tar.gz" | tar xz -C "$WORK"
+  curl -sSfL --retry 3 --retry-all-errors "https://www.lua.org/ftp/lua-$V.tar.gz" | tar xz -C "$WORK"
   cd "$DIR/src"
   case $OS in
     Windows)

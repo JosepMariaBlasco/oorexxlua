@@ -52,7 +52,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: ooRexx r${{ env.OOREXX_REV }} (portable)
         run: |
-          curl -sSfL --retry 3 -o "$RUNNER_TEMP/oorexx.zip" \
+          curl -sSfL --retry 3 --retry-all-errors -o "$RUNNER_TEMP/oorexx.zip" \
             "$OOREXX_URL/oorexx-5.3.0-$OOREXX_REV.${{ matrix.platform.oorexx }}-portable-release.zip"
           unzip -q "$RUNNER_TEMP/oorexx.zip" -d "$RUNNER_TEMP"
           echo "$RUNNER_TEMP/oorexx-5.3.0-$OOREXX_REV.${{ matrix.platform.oorexx }}-portable-release/bin" >> "$GITHUB_PATH"
@@ -122,7 +122,7 @@ jobs:
       - uses: ilammy/msvc-dev-cmd@v1
       - name: ooRexx r${{ env.OOREXX_REV }} (portable)
         run: |
-          curl -sSfL --retry 3 -o "$RUNNER_TEMP/oorexx.zip" \
+          curl -sSfL --retry 3 --retry-all-errors -o "$RUNNER_TEMP/oorexx.zip" \
             "$OOREXX_URL/oorexx-5.3.0-$OOREXX_REV.windows.x86_64-portable-release.zip"
           unzip -q "$RUNNER_TEMP/oorexx.zip" -d "$RUNNER_TEMP"
           cygpath -w "$RUNNER_TEMP/oorexx-5.3.0-$OOREXX_REV.windows.x86_64-portable-release/bin" >> "$GITHUB_PATH"
