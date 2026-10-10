@@ -1,0 +1,3 @@
+# local builds (the scripts write next to the clone, not inside it; just in case)
+build/
+*.so

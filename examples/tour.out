@@ -1,0 +1,23 @@
+1024.0
+1024
+hello!
+3
+ab-ab-ab
+LUA
+3.1415926535898 9223372036854775807
+5
+5,7
+two table
+> one
+> two
+> three
+> four
+one+two+three+four
+11 16 16
+true
+false
+Without predicate: Lua error: invalid order function for sorting
+a bb ccc dddd
+JM / a Directory
+Rexx catches: Lua error: eval:1: boom
+Rexx catches: Lua error: Rexx error 41.1: Nonnumeric value ("a") used in arithmetic operation.
