@@ -1,0 +1,9 @@
+3,4 25
+100
+6 8
+1=one 2=two 3=three
+4 four
+LANG:Rexx NAME:JM
+JM 2
+Rexx catches: Lua error: Rexx error 93.907: Method argument 1 must be a positive whole number; found "0".
+Rexx catches: Lua error: Rexx error 97.1: Object "a POINT" does not understand message "NONSENSE".

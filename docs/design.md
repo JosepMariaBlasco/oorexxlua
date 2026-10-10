@@ -146,7 +146,7 @@ follow the same rule, so `t[1]` from Rexx is `t[1]` in Lua.
 | Array | a new sequence table (a copy), each item by this rule |
 | a string (literal numbers included) | integer, float or string, by the rule above |
 | Routine | a real Lua function (a C closure) |
-| any other object | a `RexxObject` userdata: `obj:name(...)` sends a message, `obj(...)` sends `CALL` |
+| any other object | a `RexxObject` userdata, by reference (see *Rexx objects in Lua*) |
 
 Lua → Rexx:
 
@@ -165,6 +165,35 @@ Floats are written as Python's `repr` writes them: `2^10` is `1024.0`,
 lose digits (`0.3`), and a float that went from Lua to Rexx and back would no
 longer be the same number. `inf`, `-inf` and `nan` come as those strings,
 which are not Rexx numbers.
+
+## Rexx objects in Lua
+
+A Rexx Routine goes to Lua as a real Lua function: `table.sort` and others
+check the type and reject anything else that can be called. Any other Rexx
+object that is not a string or an Array goes by reference, as a userdata
+(one per object and state: see *Lifetime*):
+
+| In Lua | In Rexx |
+|---|---|
+| `obj:name(args)`, `obj.name(args)` | `obj~name(args)` |
+| `obj.name` | the method bound to `obj` (not an attribute's value: `obj:name()`) |
+| `obj.name = v` | `obj~name = v` (the message `NAME=`) |
+| `obj[k]`, `obj[k] = v` with `k` not a string | `obj[k]`, `obj[k] = v` |
+| `#obj` | `obj~items` |
+| `pairs(obj)` | `obj~supplier`: index, item |
+| `obj(args)` | `obj~call(args)` |
+| `tostring(obj)` | `obj~string` |
+
+In Lua, `obj.k` and `obj["k"]` are the same thing, so a key cannot be both a
+message and an index: string keys are messages, every other key is Rexx's
+`[]`. So `a[1]`, `#a` and `ipairs(a)` work on a Rexx Array, and a collection
+with string keys is used as in Rexx: `d:at("NAME")`, `d:put(v, "NAME")`.
+Message names go to Rexx in uppercase. A Rexx condition inside any of these
+is a Lua error, which can come back to Rexx (*Errors*).
+
+Only Arrays are copied (to a sequence table), as ooRexx/Python copies them to
+lists; `s~box("reference", array)` passes one by reference instead, and
+`s~table(d)` copies a Directory or a StringTable to a table.
 
 ## Boxing
 
@@ -256,18 +285,13 @@ them. Only running out of memory while pushing a value can still panic.
 
 Each of these changes or extends the sections above.
 
-1. **Rexx objects in Lua.** `obj.name = v` sends `NAME=`; keys that are
-   strings are messages, keys of any other type use Rexx's `[]` (`a[1]`,
-   `ipairs(a)` on a Rexx Array); `#obj` sends `items`; `pairs(obj)` goes
-   through its `supplier`. Only Arrays are copied, as in ooRexx/Python;
-   `.lua~table(d)` copies a Directory.
-2. **Operators on proxies**, as in ooRexx/Python: Lua's arithmetic (with
+1. **Operators on proxies**, as in ooRexx/Python: Lua's arithmetic (with
    metamethods); `=` is Lua's `==`, `==` is `rawequal`; `hashCode`
    consistent with `=`.
-3. **Lua versions:** 5.3, 5.4 and 5.5 from the same source (5.3 is needed
+2. **Lua versions:** 5.3, 5.4 and 5.5 from the same source (5.3 is needed
    for LuaTeX); 5.4 by default. Not LuaJIT (Lua 5.1's API, no integers).
-4. **Coroutines** are used like any function. A `yield` across a callback
+3. **Coroutines** are used like any function. A `yield` across a callback
    into Rexx fails with Lua's own "attempt to yield across a C-call
    boundary": to be documented, not worked around.
-5. **Platforms:** Linux first; macOS and Windows, with CI as in the sister
+4. **Platforms:** Linux first; macOS and Windows, with CI as in the sister
    bridges, once the prototype is stable.

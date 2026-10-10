@@ -395,6 +395,19 @@ static void keepRemove(State *st, RexxObjectPtr obj)
     else c->SendMessage2(st->keep, "PUT", c->WholeNumber(k - 1), obj);
 }
 
+// A Rexx condition, pending on this thread, as a Lua error (pushes the message;
+// the caller then returns lua_error(L))
+static void pushRexxCondition(lua_State *L, RexxThreadContext *c)
+{
+    RexxCondition cd;
+    c->DecodeConditionInfo(c->GetConditionInfo(), &cd);
+    c->ClearCondition();
+    std::string m = "Rexx error " + std::to_string(cd.code / 1000) + "." + std::to_string(cd.code % 1000);
+    if (cd.message) { m += ": "; m += c->CString(cd.message); }
+    else if (cd.errortext) { m += ": "; m += c->CString(cd.errortext); }
+    lua_pushstring(L, m.c_str());
+}   // (the strings are gone before lua_error, a longjmp, runs)
+
 static int rexxCallBack(lua_State *L, RexxObjectPtr target, const char *message, int first)
 {
     State *st = stateOf(L);
@@ -411,15 +424,7 @@ static int rexxCallBack(lua_State *L, RexxObjectPtr target, const char *message,
     else
         r = c->SendMessage(target, message ? message : "CALL", args);
     if (c->CheckCondition()) {
-        {   // no C++ object may live across lua_error (a longjmp)
-            RexxCondition cd;
-            c->DecodeConditionInfo(c->GetConditionInfo(), &cd);
-            c->ClearCondition();
-            std::string m = "Rexx error " + std::to_string(cd.code / 1000) + "." + std::to_string(cd.code % 1000);
-            if (cd.message) { m += ": "; m += c->CString(cd.message); }
-            else if (cd.errortext) { m += ": "; m += c->CString(cd.errortext); }
-            lua_pushstring(L, m.c_str());
-        }
+        pushRexxCondition(L, c);
         return lua_error(L);
     }
     if (r == NULLOBJECT) return 0;
@@ -442,12 +447,90 @@ static int box_method(lua_State *L)     // closure from __index: rexxobj:name(..
     return rexxCallBack(L, b->obj, name, first);
 }
 
-static int box_index(lua_State *L)
+// Message names are uppercase in Rexx (pushes the name in uppercase)
+static void pushUpper(lua_State *L, int idx, const char *suffix)
 {
-    luaL_checkudata(L, 1, REXXOBJ);
-    lua_pushvalue(L, 1);
+    size_t n;
+    const char *s = lua_tolstring(L, idx, &n);
+    luaL_Buffer b;
+    luaL_buffinit(L, &b);
+    for (size_t i = 0; i < n; i++) luaL_addchar(&b, (char)toupper((unsigned char)s[i]));
+    luaL_addstring(&b, suffix);
+    luaL_pushresult(&b);
+}
+
+/* Indexing a Rexx object (docs/design.md, *Rexx objects in Lua*).  In Lua,
+ * obj.k and obj["k"] are the same thing, so: a string key is a message,
+ * any other key goes to Rexx's [] and []=.                                */
+static int box_index(lua_State *L)      // obj.name: the bound method; obj[k]: obj[k]
+{
+    RexxBox *b = (RexxBox *)luaL_checkudata(L, 1, REXXOBJ);
+    if (lua_type(L, 2) == LUA_TSTRING) {
+        lua_pushvalue(L, 1);
+        pushUpper(L, 2, "");
+        lua_pushcclosure(L, box_method, 2);
+        return 1;
+    }
+    lua_settop(L, 2);
+    return rexxCallBack(L, b->obj, "[]", 2);
+}
+
+static int box_newindex(lua_State *L)   // obj.name = v: NAME=; obj[k] = v: obj[k] = v
+{
+    RexxBox *b = (RexxBox *)luaL_checkudata(L, 1, REXXOBJ);
+    lua_settop(L, 3);
+    if (lua_type(L, 2) == LUA_TSTRING) {
+        pushUpper(L, 2, "=");                               // 4: the message
+        lua_pushvalue(L, 3);                                // 5: the value
+        const char *msg = lua_tostring(L, 4);
+        rexxCallBack(L, b->obj, msg, 5);
+        return 0;
+    }
+    lua_pushvalue(L, 3);                                    // Rexx's []= takes value, index
     lua_pushvalue(L, 2);
-    lua_pushcclosure(L, box_method, 2);
+    rexxCallBack(L, b->obj, "[]=", 4);
+    return 0;
+}
+
+static int box_len(lua_State *L)        // #obj: obj~items
+{
+    RexxBox *b = (RexxBox *)luaL_checkudata(L, 1, REXXOBJ);
+    lua_settop(L, 1);
+    return rexxCallBack(L, b->obj, "ITEMS", 2);
+}
+
+// pairs(obj): through obj~supplier.  upvalue 1: the supplier, as a userdata.
+static int pairs_next(lua_State *L)
+{
+    RexxBox *sup = (RexxBox *)lua_touserdata(L, lua_upvalueindex(1));
+    State *st = stateOf(L);
+    RexxThreadContext *c = st->tc;
+    RexxSupplierObject sp = (RexxSupplierObject)sup->obj;
+    if (!c->SupplierAvailable(sp)) {
+        if (c->CheckCondition()) { pushRexxCondition(L, c); return lua_error(L); }
+        return 0;
+    }
+    RexxObjectPtr index = c->SupplierIndex(sp);
+    RexxObjectPtr item = c->SupplierItem(sp);
+    c->SupplierNext(sp);
+    if (c->CheckCondition()) { pushRexxCondition(L, c); return lua_error(L); }
+    if (!pushValue(st, index) || !pushValue(st, item)) return lua_error(L);
+    return 2;
+}
+
+static void pushBox(State *st, RexxObjectPtr v);
+
+static int box_pairs(lua_State *L)
+{
+    RexxBox *b = (RexxBox *)luaL_checkudata(L, 1, REXXOBJ);
+    State *st = stateOf(L);
+    RexxThreadContext *c = st->tc;
+    RexxObjectPtr sup = c->SendMessage0(b->obj, "SUPPLIER");
+    if (c->CheckCondition()) { pushRexxCondition(L, c); return lua_error(L); }
+    if (sup == NULLOBJECT || !c->IsOfType(sup, "SUPPLIER"))
+        return luaL_error(L, "pairs: the Rexx object's supplier is not a Supplier");
+    pushBox(st, sup);
+    lua_pushcclosure(L, pairs_next, 1);
     return 1;
 }
 
@@ -540,7 +623,8 @@ static State *openState(RexxThreadContext *c)
     luaL_openlibs(L);
     luaL_newmetatable(L, REXXOBJ);
     static const luaL_Reg mt[] = {
-        {"__call", box_call}, {"__index", box_index},
+        {"__call", box_call}, {"__index", box_index}, {"__newindex", box_newindex},
+        {"__len", box_len}, {"__pairs", box_pairs},
         {"__tostring", box_tostring}, {"__gc", box_gc}, {NULL, NULL}};
     luaL_setfuncs(L, mt, 0);
     lua_pop(L, 1);
