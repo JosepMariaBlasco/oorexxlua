@@ -52,7 +52,11 @@ if [ "$OS" = Windows ]; then
   export MSYS2_ARG_CONV_EXCL='*'
   W() { cygpath -w "$1"; }
   OBJ=$(mktemp -d); trap 'rm -rf "$OBJ"' EXIT
-  quiet "$CXX" -nologo -LD -EHsc -O2 -MD -Zi -std:c++17 -W3 -Fo"$(W "$OBJ")\\" -Fd"$(W "$OBJ")\\" -DLUA_BUILD_AS_DLL \
+  # _DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR: std::mutex made by the constexpr
+  # constructor of a recent MSVC crashes with an older msvcp140.dll, and a host
+  # may have loaded one (TeX Live ships its own): Microsoft's workaround
+  MSVCFLAGS="-nologo -LD -EHsc -O2 -MD -Zi -std:c++17 -W3 -Fo$(W "$OBJ")\\ -Fd$(W "$OBJ")\\ -DLUA_BUILD_AS_DLL -D_DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR"
+  quiet "$CXX" $MSVCFLAGS \
       -I"$(W "$LUADIR")" -I"$(W "$OOREXX_HOME/include")" "$(W "$SRC/rexxlua.cpp")" -Fe"$(W "$BUILD/$PKG")" \
       -link -DEBUG -OPT:REF -OPT:ICF -LIBPATH:"$(W "$OOREXX_HOME/lib")" -LIBPATH:"$(W "$LUADIR")" rexx.lib rexxapi.lib "$LUALIB.lib"
   rm -f "$BUILD"/*.exp "$BUILD"/*.lib
@@ -68,7 +72,7 @@ if [ "$OS" = Windows ]; then
     } > "$OBJ/lua53w64.def"
     quiet lib -nologo -def:"$(W "$OBJ/lua53w64.def")" -machine:x64 -out:"$(W "$OBJ/lua53w64.lib")"
     mkdir -p "$BUILD/texlive"
-    quiet "$CXX" -nologo -LD -EHsc -O2 -MD -Zi -std:c++17 -W3 -Fo"$(W "$OBJ")\\" -Fd"$(W "$OBJ")\\" -DLUA_BUILD_AS_DLL \
+    quiet "$CXX" $MSVCFLAGS \
         -I"$(W "$LUADIR")" -I"$(W "$OOREXX_HOME/include")" "$(W "$SRC/rexxlua.cpp")" -Fe"$(W "$BUILD/texlive/$MOD")" \
         -link -DEBUG -OPT:REF -OPT:ICF -LIBPATH:"$(W "$OOREXX_HOME/lib")" rexx.lib rexxapi.lib "$(W "$OBJ/lua53w64.lib")"
     rm -f "$BUILD"/texlive/*.exp "$BUILD"/texlive/*.lib
