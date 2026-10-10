@@ -135,16 +135,6 @@ jobs:
         run: scripts/setup-oorexxunit.sh
       - name: Build
         run: scripts/build.sh
-      - name: Probe (temporary)
-        run: |
-          B=$(cd .. && pwd)/build
-          export LUA_CPATH="$(cygpath -w "$B")\\?.dll;;" PATH="$B:$PATH"
-          L=$(ls -d ../lua-*/src | head -1)/lua.exe
-          K="/c/Program Files (x86)/Windows Kits/10/Debuggers/x64"
-          ls "$K" | head -3 || true
-          "$K/gflags.exe" -p -enable lua.exe -full || true
-          "$K/cdb.exe" -y "$(cygpath -w "$B")" -c "g; .ecxr; kv 40; !heap -p -a @rcx; q" "$(cygpath -w "$L")" tests/probe/probe.lua || true
-          "$K/gflags.exe" -p -disable lua.exe || true
       - name: Tests
         run: OUT=$RUNNER_TEMP/tests tests/run.sh
       - name: Package
