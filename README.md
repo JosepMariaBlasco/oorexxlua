@@ -53,13 +53,17 @@ greeting = "hello"
 print(rexx.eval(".lua~global('greeting')~upper"))        -- HELLO
 ```
 
-In LuaLaTeX (`lualatex --shell-escape`, with the module on `package.cpath`):
+In LuaLaTeX (`lualatex --shell-escape`, with the module where LuaLaTeX finds
+it: `examples/latex/README.md`):
 
 ```latex
 \directlua{rexx = require "oorexx"}
-\newcommand\rexx[1]{\directlua{tex.sprint(rexx.eval("\luaescapestring{#1}"))}}
+\newcommand\rexx[1]{\directlua{tex.sprint(rexx.eval("\luaescapestring{\detokenize{#1}}"))}}
 $2^{100}$ is \rexx{2**100}, and a price: \rexx{format(3.1, , 2)} EUR.
 ```
+
+`examples/latex/` has a whole document, where a Rexx program writes a table
+into the page through `ADDRESS LUA`.
 
 **Status: prototype.** It works and is tested, by the CI on every push, on
 Linux x64, macOS (arm64 and x64) and Windows x64, with ooRexx 5.3.0 and Lua
@@ -154,7 +158,9 @@ LUA_VERSION=5.3 BUILD=build53 TESTS="Module.test.lua" oorexxlua/tests/run.sh`.
   identity), `03-values.rex` (how values cross, `box`), `04-calls.rex`
   (the colon rule, several results, coroutines), `05-rexx-in-lua.rex`
   (Rexx objects used from Lua), `06-operators.rex`, `07-from-lua.lua` (the
-  Lua module); `run-one.sh`.
+  Lua module); `run-one.sh`. `latex/`: a LuaLaTeX document with Rexx in it
+  (`\rexx{...}`, and a Rexx program that writes into the page through
+  `ADDRESS LUA`), not run by the tests.
 - `tests/` — `run.sh`; `rexx/`, the ooRexxUnit test groups (examples,
   lifetime, threads, C modules, and `Robustness`, a test for every fault a
   review found) with their base class `LuaTestCase.cls`; `lua/`, the tests

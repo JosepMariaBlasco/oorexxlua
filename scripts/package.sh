@@ -64,6 +64,7 @@ case $OS in
 esac
 cp "$ROOT/dist/README.md" "$ROOT/dist/check.rex" "$ROOT/dist/check.lua" "$ROOT/LICENSE" "$STAGE/"
 cp "$ROOT"/examples/*.rex "$ROOT"/examples/*.lua "$ROOT"/examples/*.out "$STAGE/examples/"
+mkdir -p "$STAGE/examples/latex" && cp "$ROOT"/examples/latex/* "$STAGE/examples/latex/"
 { echo "This package contains Lua $RELEASE (https://www.lua.org), under this licence:"
   echo
   sed -n '/^\* Copyright/,/^\*\*\*\*/p' "$LUADIR/lua.h" | sed -e '$d' -e 's/^\* \{0,1\}//'

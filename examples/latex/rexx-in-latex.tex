@@ -1,0 +1,37 @@
+% rexx-in-latex.tex -- ooRexx inside LuaLaTeX, through the Lua module
+% (require "oorexx").  How to run it: README.md, next to this file:
+%   lualatex --shell-escape rexx-in-latex.tex
+% with oorexx.so (oorexx.dll) and lua.cls where LuaTeX's Lua finds them.
+\documentclass{article}
+\usepackage{booktabs}
+
+% The module, once.  Then \rexx{expression}: a Rexx expression, evaluated by
+% rexx.eval; its value goes into the page.  \detokenize keeps the expression
+% as it is written (a ~ stays a ~, not LaTeX's tie).
+\directlua{rexx = require "oorexx"}
+\newcommand\rexx[1]{\directlua{tex.sprint(rexx.eval("\luaescapestring{\detokenize{#1}}"))}}
+
+\begin{document}
+
+\section*{ooRexx in Lua\LaTeX}
+
+\paragraph{Inline.} Rexx's decimal arithmetic in the text: with Rexx's
+default nine digits, $2^{100}$ is \rexx{2**100} and $1/7$ is \rexx{1/7}. A
+price keeps its zero: \rexx{format(3.1, , 2)} euros. And the word ``bridge''
+backwards is \rexx{'bridge'~reverse}.
+
+\paragraph{A program.} \texttt{powers.rex} writes the table below into this
+document: each of its lines of \TeX\ goes out through \texttt{ADDRESS LUA},
+as Lua code that calls \texttt{tex.sprint} in Lua\TeX's own Lua. With
+\texttt{NUMERIC DIGITS 40}, every value is exact.
+
+\begin{center}
+\directlua{luatexVersion = rexx.run("powers.rex", 40)}
+\end{center}
+
+\paragraph{Both ways.} \texttt{powers.rex} also asked Lua\TeX\ for its
+version (\texttt{ADDRESS LUA} returns what the Lua code returns, in
+\texttt{RESULT}) and gave it back to this document: Lua\TeX\
+\directlua{tex.sprint(luatexVersion)}.
+
+\end{document}

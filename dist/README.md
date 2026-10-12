@@ -90,16 +90,22 @@ needs its `lib` directory on `LD_LIBRARY_PATH` (`DYLD_LIBRARY_PATH`).
 in `examples/07-from-lua.lua`.
 
 **LuaTeX** (LuaLaTeX...) is Lua 5.3: use a `lua5.3` zip, and run with
-`--shell-escape` (LuaTeX loads no C module without it). LuaTeX may not use
-`LUA_CPATH`: set `package.cpath` in the document. On Windows, TeX Live's
-LuaTeX needs the module in `texlive\` (its Lua is `lua53w64.dll`):
+`--shell-escape` (LuaTeX loads no C module without it). On Windows, TeX
+Live's LuaTeX needs the module in `texlive\` (its Lua is `lua53w64.dll`).
+LaTeX replaces Lua's searchers with kpathsea's, so LuaLaTeX ignores
+`LUA_CPATH` and `package.cpath`: give the module's directory in
+`CLUAINPUTS` (`CLUAINPUTS=/path/to/oorexxlua lualatex --shell-escape doc.tex`),
+or put the module and `lua.cls` next to the document, or load it by its path
+in the document:
 
 ```latex
-\directlua{package.cpath = "/path/to/oorexxlua/?.so;" .. package.cpath
-           rexx = require "oorexx"}
-\newcommand\rexx[1]{\directlua{tex.sprint(rexx.eval("\luaescapestring{#1}"))}}
+\directlua{rexx = package.loadlib("/path/to/oorexxlua/oorexx.so", "luaopen_oorexx")()}
+\newcommand\rexx[1]{\directlua{tex.sprint(rexx.eval("\luaescapestring{\detokenize{#1}}"))}}
 $2^{100}$ is \rexx{2**100}; a price: \rexx{format(3.1, , 2)} EUR.
 ```
+
+A whole example, with a Rexx program that writes into the document through
+`ADDRESS LUA`, is in `examples/latex/`.
 
 `texlua check.lua` checks it (with `LUA_CPATH` set as above).
 
