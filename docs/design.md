@@ -327,7 +327,8 @@ and friends) the message is always `r[2]`.
 
 Lua errors become SYNTAX 98.900 "Lua error: ...", with Lua's traceback. A
 Rexx condition raised inside a callback becomes a Lua error, and so it can
-come back to Rexx, nested.
+come back to Rexx, nested. Messages cross whole both ways: a NUL in one
+does not cut it short.
 
 Getting a field, indexing, `tostring` and `#` can all run Lua code
 (metamethods), and a Lua error outside a protected call does not come back

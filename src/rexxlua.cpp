@@ -152,7 +152,7 @@ struct Enter {
 
 static void raise(RexxThreadContext *c, const std::string &m)
 {
-    c->RaiseException1(Rexx_Error_Execution_user_defined, c->String(m.c_str()));
+    c->RaiseException1(Rexx_Error_Execution_user_defined, c->NewString(m.data(), m.size()));   // a NUL stays
 }
 
 /* ------------------------------------------------------------------------ */
@@ -549,13 +549,13 @@ static NOINLINE void pushRexxCondition(lua_State *L, RexxThreadContext *c)
     c->DecodeConditionInfo(c->GetConditionInfo(), &cd);
     c->ClearCondition();
     std::string m = "Rexx error " + std::to_string(cd.code / 1000) + "." + std::to_string(cd.code % 1000);
-    if (cd.message) { m += ": "; m += c->CString(cd.message); }
-    else if (cd.errortext) { m += ": "; m += c->CString(cd.errortext); }
+    if (cd.message) { m += ": "; m.append(c->StringData(cd.message), c->StringLength(cd.message)); }
+    else if (cd.errortext) { m += ": "; m.append(c->StringData(cd.errortext), c->StringLength(cd.errortext)); }
     if (cd.code / 1000 == 4) {              // HALT (Error 4): ADDRESS LUA raises it again
         State *st = stateOf(L);
         if (st != NULL) st->halted = true;
     }
-    lua_pushstring(L, m.c_str());
+    lua_pushlstring(L, m.data(), m.size());                 // a NUL stays
 }   // (the strings are gone before lua_error, a longjmp, runs)
 
 // The string value of a Rexx object, or false with a condition pending (its
@@ -1040,7 +1040,10 @@ static NOINLINE bool pushValue(State *st, RexxObjectPtr v)
 // After a failed pushValue: raise its message as a Rexx error and pop it.
 static void raiseTop(State *st)
 {
-    std::string m = std::string("Lua error: ") + lua_tostring(st->L, -1);
+    size_t length;
+    const char *s = lua_tolstring(st->L, -1, &length);
+    std::string m = "Lua error: ";
+    if (s != NULL) m.append(s, length); else m += "(error object)";     // a NUL stays
     lua_pop(st->L, 1);
     raise(st->tc, m);
 }
@@ -1778,8 +1781,8 @@ static std::string conditionText(RexxThreadContext *tc)
     tc->DecodeConditionInfo(tc->GetConditionInfo(), &cd);
     tc->ClearCondition();
     std::string m = "Rexx error " + std::to_string(cd.code / 1000) + "." + std::to_string(cd.code % 1000);
-    if (cd.message) { m += ": "; m += tc->CString(cd.message); }
-    else if (cd.errortext) { m += ": "; m += tc->CString(cd.errortext); }
+    if (cd.message) { m += ": "; m.append(tc->StringData(cd.message), tc->StringLength(cd.message)); }
+    else if (cd.errortext) { m += ": "; m.append(tc->StringData(cd.errortext), tc->StringLength(cd.errortext)); }
     return m;
 }
 
@@ -1919,7 +1922,7 @@ static NOINLINE bool instFor(lua_State *L, Inst **out)
     if (st->defaultInst == NULL) {
         std::string error;
         st->defaultInst = newInst(st, Options(), error);
-        if (st->defaultInst == NULL) { lua_pushstring(L, error.c_str()); return false; }
+        if (st->defaultInst == NULL) { lua_pushlstring(L, error.data(), error.size()); return false; }
     }
     *out = st->defaultInst;
     return true;
@@ -2068,7 +2071,7 @@ static NOINLINE Inst *interpreter_body(lua_State *L, State *st)
     lua_pop(L, 1);
     std::string error;
     Inst *in = newInst(st, o, error);
-    if (in == NULL) lua_pushstring(L, error.c_str());
+    if (in == NULL) lua_pushlstring(L, error.data(), error.size());
     return in;
 }
 

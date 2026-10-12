@@ -22,6 +22,13 @@ return testResult
 ::class "Robustness.testGroup" subclass LuaTestCase public
 
 -- Callbacks from a coroutine use the coroutine's stack (*Coroutines*)
+::method test_a_NUL_in_a_Lua_error_message
+  signal on syntax
+  .lua~eval('error("x\0y")')
+  self~fail("no error")
+syntax:
+  self~assertTrue(condition("O")~message~pos("x" || "00"x || "y") > 0, "the whole message")
+
 ::method test_callbacks_in_a_coroutine
   add = .routine~new("add", "use arg a, b; return a + b")
   co = .lua~eval("coroutine.wrap(function(f) return f(1, 2) end)")

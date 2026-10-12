@@ -98,6 +98,8 @@ T.test("Rexx conditions are Lua errors", function()
   T.fails("Rexx error 43.1", rexx.eval, "nosuchfunction(1)")
   local ok, err = pcall(rexx.routine("raise syntax 98.900 array ('mine')"))
   T.ok(not ok); T.ok(tostring(err):find("mine", 1, true), err)
+  ok, err = pcall(rexx.routine("raise syntax 98.900 array ('a' || '00'x || 'b')"))
+  T.ok(not ok); T.ok(tostring(err):find("a\0b", 1, true), "a NUL in the message stays")
   -- and Lua errors inside Rexx come back as Lua errors
   T.fails("boom", rexx.eval, ".lua~eval(\"error('boom')\")")
 end)
