@@ -29,6 +29,17 @@ say .lua~global("table")~concat(words, " ")        -- a bb ccc
 ::requires "lua.cls"
 ```
 
+`ADDRESS LUA` runs commands as Lua code in `.lua`: RC says whether they
+worked (ERROR or FAILURE, with Lua's message as `condition('A')`, if not),
+and their results go to RESULT.
+
+```rexx
+address lua
+'n = 0'
+'for i = 1, 10 do n = n + i end'
+'n'; say result                                    -- 55
+```
+
 **ooRexx inside Lua**: a Lua C module, `require "oorexx"`, runs Rexx in a
 Lua program (any Lua 5.3, 5.4 or 5.5, and LuaTeX, TeX Live's included). In
 Rexx, `.lua` is then that same Lua, so the two sides share everything.

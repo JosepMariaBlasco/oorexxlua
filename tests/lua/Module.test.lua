@@ -208,4 +208,37 @@ T.test("another Rexx thread cannot use the host's state; a state of its own, yes
   ]])(), 42)
 end)
 
+T.test("ADDRESS LUA runs in the host's state, in every instance", function()
+  addressCount = 0
+  T.eq(rexx.routine([[
+    address lua 'addressCount = addressCount + 1'
+    address lua 'return addressCount * 10'; r = result
+    return rc r
+  ]])(), "0 10")
+  T.eq(addressCount, 1)
+  local other = rexx.interpreter{initial_address = "LUA"}
+  T.eq(other.routine("'addressCount = 100'; return rc")(), 0)
+  T.eq(addressCount, 100)
+  T.eq(other.routine([[
+    signal on error name e
+    'error("boom")'
+    return "no ERROR"
+    e: return rc condition('A')~makeArray('0a'x)[1]
+  ]])(), "1 ADDRESS LUA:1: boom")
+  other.close()
+  T.eq(rexx.routine([[
+    m = .Message~new(.Address, "RUN")
+    m~start
+    m~wait
+    return m~result
+    ::class Address
+    ::method run class
+      signal on failure name f
+      address lua '1'
+      return "no FAILURE"
+      f: return rc condition('A')
+  ]])(), "-2 the LuaState of the Lua that runs ooRexx can only be used from that Lua's thread")
+  addressCount = nil
+end)
+
 T.done()

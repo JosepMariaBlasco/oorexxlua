@@ -403,6 +403,59 @@ called (Lua cannot suspend the C call to Rexx that is in between): that fails
 with Lua's own "attempt to yield across a C-call boundary", which comes back
 as a Rexx condition. It is not worked around.
 
+## ADDRESS LUA
+
+`LUA` is an `ADDRESS` environment: its commands are Lua code, run in `.lua`
+(whichever `.LuaState` `.local~lua` is at the time; in Rexx run from Lua,
+the host's state). It is classic Rexx for what `.LuaObject` does with
+objects: a line of Lua is written as it is, and Rexx builds it by
+concatenation.
+
+```rexx
+address lua 'tex.sprint("hello")'          -- in LuaLaTeX
+address lua
+'n = 0'
+'for i = 1, 10 do n = n + i end'
+'n'                                        -- RESULT = 55
+'return 1, nil, "m"'                       -- RESULT = an Array of 3 items
+```
+
+As `~eval`, a command is `return command` if that compiles, and the command
+as a chunk otherwise, so an expression gives its value.
+
+**RC says whether the command worked; the results go to RESULT.**
+
+| The command | RC | Condition | RESULT |
+|---|---|---|---|
+| ran, no results | 0 | | dropped, as `CALL` does |
+| ran, one result | 0 | | the value, converted as any (*Values*) |
+| ran, several results | 0 | | an Array, as `o~all` gives (*Calls*) |
+| does not compile | -1 | FAILURE | unchanged |
+| no usable `.lua` (not a `.LuaState`, closed, the host's from another thread) | -2 | FAILURE | unchanged |
+| a Lua error while running | 1 | ERROR | unchanged |
+
+The sign follows ADDRESS FETCH and DOM of ooRexx/WASM: negative, the program
+is wrong (FAILURE); positive, the command was right but did not succeed
+(ERROR). `return nil, "message"`, Lua's way to report a failure as values,
+is a success (RC 0, `result[2]` is the message). With an error,
+`condition('A')` is Lua's message with its traceback, and
+`condition('D')` the command, as for any command. A Rexx condition inside a
+callback that the command makes is a Lua error, and so an ERROR. Commands
+do not set RESULT in the language; this environment does, and
+documents it.
+
+**Registration.** An instance the Lua module makes has `LUA` from the start
+(the `DIRECT_ENVIRONMENTS` option of `RexxCreateInterpreter`). Elsewhere
+`lua.cls` adds it when it is loaded (`AddCommandEnvironment`, `Lua_Address`
+in `rexxlua.cpp`), once, and never removes or replaces it: the work on
+command handlers in ooRexx/WASM found that `AddCommandEnvironment` changes
+the instance's table of handlers without the interpreter's lock, and that a
+command sent to an environment before it is registered can cache a handler
+that the garbage collector may free (both reported to ooRexx, 2026-10).
+Registering before any command, from the thread that loads `lua.cls`,
+avoids both. It is a plain (not redirecting) handler, so `WITH` is not
+supported yet: the redirector's queries had a bug of their own.
+
 ## Lua → ooRexx
 
 ```lua
@@ -569,8 +622,8 @@ taken from the `lua.h` of the Lua inside.
 
 ## Not yet done
 
-- `ADDRESS LUA`: an `ADDRESS` environment that runs its commands as Lua
-  code (`address lua 'tex.sprint("hello")'` in LuaLaTeX), as ooRexx/Python
-  has Python callables as environments. Decided for later.
+- `ADDRESS LUA ... WITH` (input, output and error redirected; `print`
+  into an output stem), and maybe Rexx variables seen from the command's Lua
+  code (see *ADDRESS LUA*).
 - A `lua_State` built with real `lua_lock`, so that threads do not wait for
   each other during callbacks (see *Threads*), if a real need appears.

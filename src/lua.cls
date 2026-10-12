@@ -17,6 +17,10 @@
  *     s~close                  lua_close: frees everything; its objects are dead
  *     s~isClosed
  *
+ *   ADDRESS LUA                commands are Lua code, run in .lua: RC 0 and
+ *                              the results in RESULT, or ERROR / FAILURE with
+ *                              Lua's message as condition('A')
+ *
  *   .LuaObject                 a Lua value by reference, in one .LuaState
  *     o~name(args...)          field (any case), called if a function, as
  *                              o:name(...) or o.name(...): o:name if it is a
@@ -40,6 +44,7 @@
  */
 
 .local~lua = .LuaState~"LUA.DEFAULT"
+.LuaState~"LUA.ADDRESS"                 -- ADDRESS LUA (in rexxlua.cpp)
 
 ::requires "rexxlua" LIBRARY
 
@@ -54,6 +59,7 @@
   self~"LUA.ADOPTNEXT"
   return self~new
 ::method "LUA.ADOPTNEXT" class unguarded external "LIBRARY rexxlua Lua_AdoptNext"
+::method "LUA.ADDRESS" class unguarded  external "LIBRARY rexxlua Lua_Address"
 -- uninit is Rexx, not native: it only queues the pointer, and the bridge
 -- closes the state at its next call (rexxlua.cpp, drain: ooRexx bug #2101)
 ::method uninit unguarded

@@ -308,9 +308,9 @@ static int msgh(lua_State *L)
 }
 
 /* Run the function and nargs arguments on top of the stack, protected.
- * Leaves all results on the stack and returns their count, or -1 after
- * raising a Rexx SYNTAX 98.900 with Lua's message and traceback.          */
-static int pcallAll(State *st, int nargs)
+ * Leaves all results on the stack and returns their count, or -1 with
+ * Lua's message and traceback in `error` (nothing raised).                */
+static int pcallQuiet(State *st, int nargs, std::string &error)
 {
     lua_State *L = st->L;
     int base = lua_gettop(L) - nargs;       // index of the function
@@ -319,13 +319,22 @@ static int pcallAll(State *st, int nargs)
     int rc = lua_pcall(L, nargs, LUA_MULTRET, base);
     lua_remove(L, base);
     if (rc != LUA_OK) {
-        std::string m = "Lua error: ";
-        m += lua_tostring(L, -1) ? lua_tostring(L, -1) : "(error object)";
+        error = lua_tostring(L, -1) ? lua_tostring(L, -1) : "(error object)";
         lua_pop(L, 1);
-        raise(st->tc, m);
         return -1;
     }
     return lua_gettop(L) - base + 1;
+}
+
+/* The same, raising a Rexx SYNTAX 98.900 with Lua's message and traceback.
+ * Leaves all results on the stack and returns their count, or -1 after
+ * raising a Rexx SYNTAX 98.900 with Lua's message and traceback.          */
+static int pcallAll(State *st, int nargs)
+{
+    std::string error;
+    int n = pcallQuiet(st, nargs, error);
+    if (n < 0) raise(st->tc, "Lua error: " + error);
+    return n;
 }
 
 /*
@@ -735,6 +744,7 @@ static int pairs_next(lua_State *L)
 
 static void pushBox(State *st, RexxObjectPtr v);
 static struct Inst *instOfContext(RexxThreadContext *c);
+static RexxObjectPtr RexxEntry addressLua(RexxExitContext *c, RexxStringObject address, RexxStringObject command);
 
 static int box_pairs(lua_State *L)
 {
@@ -1789,6 +1799,9 @@ static Inst *newInst(State *st, const Options &o, std::string &error)
     if (!o.address.empty()) { opt.optionName = INITIAL_ADDRESS_ENVIRONMENT; opt.option = o.address.c_str(); options.push_back(opt); }
     for (const std::string &l : o.libraries) { opt.optionName = LOAD_REQUIRED_LIBRARY; opt.option = l.c_str(); options.push_back(opt); }
     opt.optionName = REGISTER_LIBRARY; opt.option = (POINTER)library; options.push_back(opt);
+    // ADDRESS LUA, from the start (not AddCommandEnvironment: docs/design.md, *ADDRESS LUA*)
+    static RexxContextEnvironment environments[] = {{addressLua, "LUA"}, {NULL, NULL}};
+    opt.optionName = DIRECT_ENVIRONMENTS; opt.option = (POINTER)environments; options.push_back(opt);
     opt.optionName = NULL; options.push_back(opt);
 
     RexxInstance *rexx;
@@ -2161,6 +2174,79 @@ RexxMethod0(logical_t, Lua_AdoptNext)
 }
 
 /* ------------------------------------------------------------------------ */
+/* ADDRESS LUA (docs/design.md, *ADDRESS LUA*)                                */
+/* ------------------------------------------------------------------------ */
+
+// RC of a command that could not run (FAILURE) or failed (ERROR)
+enum { ADDRESS_COMPILE = -1, ADDRESS_NOSTATE = -2, ADDRESS_RUNTIME = 1 };
+
+static RexxObjectPtr addressCondition(RexxExitContext *c, RexxStringObject command, int rc,
+                                      const std::string &message)
+{
+    c->RaiseCondition(rc < 0 ? "FAILURE" : "ERROR", command, c->String(message.c_str()),
+                      c->WholeNumber(rc));
+    return c->WholeNumber(rc);
+}
+
+// The command runs in .lua: "return command" if that compiles, else the
+// command as a chunk (as ~eval).  RC 0, the results in RESULT (dropped if
+// none, the value if one, an Array if several); an error raises FAILURE
+// (cannot compile, RC -1; no usable .lua, RC -2) or ERROR (a Lua error while
+// running, RC 1), with Lua's message (and traceback) as condition('A').
+static RexxObjectPtr RexxEntry addressLua(RexxExitContext *c, RexxStringObject address,
+                                           RexxStringObject command)
+{
+    RexxThreadContext *tc = c->threadContext;
+    drain(tc);
+    RexxObjectPtr lua = tc->DirectoryAt(tc->GetLocalEnvironment(), "LUA");
+    State *st = lua == NULLOBJECT ? NULL : (State *)tc->ObjectToCSelf(lua);
+    if (st == NULL || st->kind != KIND_STATE)
+        return addressCondition(c, command, ADDRESS_NOSTATE, ".lua is not a LuaState");
+    if (foreignThread(st))
+        return addressCondition(c, command, ADDRESS_NOSTATE, "the LuaState of the Lua that runs ooRexx "
+                                "can only be used from that Lua's thread");
+    Enter e(st, tc, lua);
+    if (st->closed) return addressCondition(c, command, ADDRESS_NOSTATE, "the LuaState is closed");
+    releasePending(st);
+    lua_State *L = st->L;
+    int top = lua_gettop(L);
+    const char *code = c->StringData(command);
+    size_t length = c->StringLength(command);
+    std::string ret = std::string("return ") + std::string(code, length);
+    if (luaL_loadbuffer(L, ret.data(), ret.size(), "=ADDRESS LUA") != LUA_OK) {
+        lua_pop(L, 1);
+        if (luaL_loadbuffer(L, code, length, "=ADDRESS LUA") != LUA_OK) {
+            std::string m = lua_tostring(L, -1) ? lua_tostring(L, -1) : "(error object)";
+            lua_settop(L, top);
+            return addressCondition(c, command, ADDRESS_COMPILE, m);
+        }
+    }
+    std::string error;
+    int n = pcallQuiet(st, 0, error);
+    if (n < 0) {
+        lua_settop(L, top);
+        return addressCondition(c, command, ADDRESS_RUNTIME, error);
+    }
+    if (n == 0) { c->DropContextVariable("RESULT"); return c->WholeNumber(0); }
+    RexxObjectPtr r = n == 1 ? firstResult(st, 1) : allResults(st, n);
+    lua_settop(L, top);
+    if (r == NULLOBJECT) return NULLOBJECT;     // a conversion raised a Rexx error
+    c->SetContextVariable("RESULT", r);
+    return c->WholeNumber(0);
+}
+
+// .LuaState~"LUA.ADDRESS" (lua.cls, when it is loaded): the LUA environment,
+// in an instance the Lua module did not make (those have it from the start,
+// newInst).  Once, before any command: AddCommandEnvironment does not take
+// the interpreter's lock (docs/design.md, *ADDRESS LUA*).
+RexxMethod0(RexxObjectPtr, Lua_Address)
+{
+    if (instOfContext(context->threadContext) == NULL)
+        context->threadContext->AddCommandEnvironment("LUA", (REXXPFN)addressLua, DIRECT_COMMAND_ENVIRONMENT);
+    return NULLOBJECT;
+}
+
+/* ------------------------------------------------------------------------ */
 /* Package                                                                    */
 /* ------------------------------------------------------------------------ */
 
@@ -2168,6 +2254,7 @@ RexxMethodEntry rexxlua_methods[] = {
     REXX_METHOD(LuaState_New,       LuaState_New),
     REXX_METHOD(Lua_Graveyard,      Lua_Graveyard),
     REXX_METHOD(Lua_AdoptNext,      Lua_AdoptNext),
+    REXX_METHOD(Lua_Address,        Lua_Address),
     REXX_METHOD(LuaState_Close,     LuaState_Close),
     REXX_METHOD(LuaState_IsClosed,  LuaState_IsClosed),
     REXX_METHOD(LuaState_Eval,      LuaState_Eval),
