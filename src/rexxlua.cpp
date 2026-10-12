@@ -105,6 +105,7 @@ struct State {
     struct Inst *defaultInst = NULL;        // the module's default instance (made at first use)
     std::vector<RexxObjectPtr> pending;     // Rexx objects whose userdata Lua finalized outside
                                             // any Rexx code: let go at the next entry
+    bool halted = false;                    // a Rexx HALT became a Lua error (ADDRESS LUA)
 };
 
 // One per .LuaObject: a Lua value in a state's registry.
@@ -301,9 +302,11 @@ static bool pushValue(State *st, RexxObjectPtr v);
 
 static int msgh(lua_State *L)
 {
-    const char *m = lua_tostring(L, 1);
-    if (m == NULL) m = luaL_tolstring(L, 1, NULL);
-    luaL_traceback(L, L, m, 1);
+    // message "\n" traceback, by lua_concat: the message may hold a NUL
+    if (lua_tostring(L, 1) == NULL) luaL_tolstring(L, 1, NULL); else lua_pushvalue(L, 1);
+    lua_pushliteral(L, "\n");
+    luaL_traceback(L, L, NULL, 1);
+    lua_concat(L, 3);
     return 1;
 }
 
@@ -319,7 +322,9 @@ static int pcallQuiet(State *st, int nargs, std::string &error)
     int rc = lua_pcall(L, nargs, LUA_MULTRET, base);
     lua_remove(L, base);
     if (rc != LUA_OK) {
-        error = lua_tostring(L, -1) ? lua_tostring(L, -1) : "(error object)";
+        size_t length;
+        const char *m = lua_tolstring(L, -1, &length);
+        if (m != NULL) error.assign(m, length); else error = "(error object)";
         lua_pop(L, 1);
         return -1;
     }
@@ -546,6 +551,10 @@ static NOINLINE void pushRexxCondition(lua_State *L, RexxThreadContext *c)
     std::string m = "Rexx error " + std::to_string(cd.code / 1000) + "." + std::to_string(cd.code % 1000);
     if (cd.message) { m += ": "; m += c->CString(cd.message); }
     else if (cd.errortext) { m += ": "; m += c->CString(cd.errortext); }
+    if (cd.code / 1000 == 4) {              // HALT (Error 4): ADDRESS LUA raises it again
+        State *st = stateOf(L);
+        if (st != NULL) st->halted = true;
+    }
     lua_pushstring(L, m.c_str());
 }   // (the strings are gone before lua_error, a longjmp, runs)
 
@@ -2183,7 +2192,7 @@ enum { ADDRESS_COMPILE = -1, ADDRESS_NOSTATE = -2, ADDRESS_RUNTIME = 1 };
 static RexxObjectPtr addressCondition(RexxExitContext *c, RexxStringObject command, int rc,
                                       const std::string &message)
 {
-    c->RaiseCondition(rc < 0 ? "FAILURE" : "ERROR", command, c->String(message.c_str()),
+    c->RaiseCondition(rc < 0 ? "FAILURE" : "ERROR", command, c->NewString(message.data(), message.size()),
                       c->WholeNumber(rc));
     return c->WholeNumber(rc);
 }
@@ -2199,7 +2208,8 @@ static RexxObjectPtr RexxEntry addressLua(RexxExitContext *c, RexxStringObject a
     RexxThreadContext *tc = c->threadContext;
     drain(tc);
     RexxObjectPtr lua = tc->DirectoryAt(tc->GetLocalEnvironment(), "LUA");
-    State *st = lua == NULLOBJECT ? NULL : (State *)tc->ObjectToCSelf(lua);
+    // a .LuaState (by a method of its own, not by class name: see luaObjectClass)
+    State *st = lua == NULLOBJECT || !tc->HasMethod(lua, "LUA.STATS") ? NULL : (State *)tc->ObjectToCSelf(lua);
     if (st == NULL || st->kind != KIND_STATE)
         return addressCondition(c, command, ADDRESS_NOSTATE, ".lua is not a LuaState");
     if (foreignThread(st))
@@ -2216,21 +2226,29 @@ static RexxObjectPtr RexxEntry addressLua(RexxExitContext *c, RexxStringObject a
     if (luaL_loadbuffer(L, ret.data(), ret.size(), "=ADDRESS LUA") != LUA_OK) {
         lua_pop(L, 1);
         if (luaL_loadbuffer(L, code, length, "=ADDRESS LUA") != LUA_OK) {
-            std::string m = lua_tostring(L, -1) ? lua_tostring(L, -1) : "(error object)";
+            size_t len;
+            const char *s = lua_tolstring(L, -1, &len);
+            std::string m = s != NULL ? std::string(s, len) : std::string("(error object)");
             lua_settop(L, top);
             return addressCondition(c, command, ADDRESS_COMPILE, m);
         }
     }
     std::string error;
+    st->halted = false;
     int n = pcallQuiet(st, 0, error);
     if (n < 0) {
         lua_settop(L, top);
+        if (st->halted) {                       // a HALT in a callback: Error 4.1, as ~eval
+            st->halted = false;                 // (a HALT raised here would be ignored
+            c->RaiseException1(Rexx_Error_Program_interrupted_condition, c->String("HALT"));
+            return NULLOBJECT;                  // when not trapped)
+        }
         return addressCondition(c, command, ADDRESS_RUNTIME, error);
     }
     if (n == 0) { c->DropContextVariable("RESULT"); return c->WholeNumber(0); }
     RexxObjectPtr r = n == 1 ? firstResult(st, 1) : allResults(st, n);
     lua_settop(L, top);
-    if (r == NULLOBJECT) return NULLOBJECT;     // a conversion raised a Rexx error
+    if (r == NULLOBJECT || tc->CheckCondition()) return NULLOBJECT;    // a conversion raised a Rexx error
     c->SetContextVariable("RESULT", r);
     return c->WholeNumber(0);
 }
@@ -2239,10 +2257,17 @@ static RexxObjectPtr RexxEntry addressLua(RexxExitContext *c, RexxStringObject a
 // in an instance the Lua module did not make (those have it from the start,
 // newInst).  Once, before any command: AddCommandEnvironment does not take
 // the interpreter's lock (docs/design.md, *ADDRESS LUA*).
+// Once per instance, even if called again (it is a public method): marked in
+// .local, which belongs to the instance and ends with it.  (The kernel lock
+// is held from the test to the mark.)
 RexxMethod0(RexxObjectPtr, Lua_Address)
 {
-    if (instOfContext(context->threadContext) == NULL)
-        context->threadContext->AddCommandEnvironment("LUA", (REXXPFN)addressLua, DIRECT_COMMAND_ENVIRONMENT);
+    RexxThreadContext *tc = context->threadContext;
+    if (instOfContext(tc) != NULL) return NULLOBJECT;
+    RexxDirectoryObject local = tc->GetLocalEnvironment();
+    if (tc->DirectoryAt(local, "LUA.ADDRESS") != NULLOBJECT) return NULLOBJECT;
+    tc->DirectoryPut(local, tc->True(), "LUA.ADDRESS");
+    tc->AddCommandEnvironment("LUA", (REXXPFN)addressLua, DIRECT_COMMAND_ENVIRONMENT);
     return NULLOBJECT;
 }
 

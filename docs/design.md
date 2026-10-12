@@ -440,14 +440,19 @@ is wrong (FAILURE); positive, the command was right but did not succeed
 is a success (RC 0, `result[2]` is the message). With an error,
 `condition('A')` is Lua's message with its traceback, and
 `condition('D')` the command, as for any command. A Rexx condition inside a
-callback that the command makes is a Lua error, and so an ERROR. Commands
+callback that the command makes is a Lua error, and so an ERROR, except a
+HALT: that one is SYNTAX 4.1 after the command, which stops the program
+unless trapped, as under `~eval` (a HALT condition raised by a command
+handler is ignored when not trapped, so it would be lost). A NUL in Lua's
+message is kept. Commands
 do not set RESULT in the language; this environment does, and
 documents it.
 
 **Registration.** An instance the Lua module makes has `LUA` from the start
 (the `DIRECT_ENVIRONMENTS` option of `RexxCreateInterpreter`). Elsewhere
 `lua.cls` adds it when it is loaded (`AddCommandEnvironment`, `Lua_Address`
-in `rexxlua.cpp`), once, and never removes or replaces it: the work on
+in `rexxlua.cpp`), once per instance (marked in `.local`, even if
+`LUA.ADDRESS` is called again), and never removes or replaces it: the work on
 command handlers in ooRexx/WASM found that `AddCommandEnvironment` changes
 the instance's table of handlers without the interpreter's lock, and that a
 command sent to an environment before it is registered can cache a handler

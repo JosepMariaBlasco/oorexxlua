@@ -158,9 +158,48 @@ trapped:
   self~assertSame(.nil, saved~global("where"))
   s~close
 
+::method test_halt_in_a_callback_is_Error_4_1
+  .lua~global("_G")["addressHalt"] = .routines~halts
+  signal on syntax
+  address lua 'addressHalt()'
+  self~fail("a HALT in a callback was lost")
+syntax:
+  .lua~global("_G")["addressHalt"] = .nil
+  self~assertEquals(4.1, condition("O")~code, "as ~eval: the program stops unless SYNTAX is trapped")
+
+::method test_message_with_a_NUL
+  trace off
+  call on error name trapped
+  address lua 'error("x\0y")'
+  self~assertTrue(self~additional~pos("x" || "00"x || "y") > 0, "the whole message")
+  return
+trapped:
+  self~additional = condition("A")
+  return
+
+::method test_a_LuaObject_as_dot_lua
+  trace off
+  saved = .lua
+  call on failure name trapped
+  .local~lua = saved~global("_G")
+  address lua '1'
+  .local~lua = saved
+  self~assertEquals(-2, rc)
+  return
+trapped:
+  return
+
+::method test_registered_once
+  .LuaState~"LUA.ADDRESS"                   -- again: nothing happens
+  address lua 'return 6 * 7'; r = result
+  self~assertEquals(42, r)
+
 ::attribute caught
 ::attribute description
 ::attribute additional
 
 ::routine twice public
   return 2 * arg(1)
+
+::routine halts public
+  raise halt
