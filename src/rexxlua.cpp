@@ -2313,7 +2313,7 @@ RexxPackageEntry rexxlua_package_entry = {
     STANDARD_PACKAGE_HEADER
     REXX_INTERPRETER_5_0_0,
     "rexxlua",
-    "0.1.0",
+    "0.2.0",
     NULL, NULL,
     NULL,
     rexxlua_methods
