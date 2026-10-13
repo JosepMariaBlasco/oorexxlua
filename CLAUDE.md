@@ -29,6 +29,13 @@ A Lua C function of the bridge that raises a Lua error (`lua_error`,
 a helper: MSVC's `longjmp` would destroy it again (`docs/design.md`,
 *Errors*). Keep such objects in `NOINLINE` functions.
 
+ooRexx: on Linux the CI builds the bridge with an ooRexx built by
+`scripts/setup-oorexx.sh`, with the fixes in `patches/oorexx/` (ooRexx bugs
+not yet in trunk), and sets `ORXLUA_OOREXX_FIXES=1`; tests that need those
+fixes run only then. The other platforms use the portable builds, unless
+the workflow is run by hand with `oorexx_fixes` (`gh workflow run build.yml
+-f oorexx_fixes=true`).
+
 Any change of behaviour updates the expected output and `docs/design.md`.
 Before a commit that touches `src/`, run the tests with Lua 5.3, 5.4 and 5.5
 (`LUA_VERSION=5.3 BUILD=... scripts/build.sh && LUA_VERSION=5.3 BUILD=...

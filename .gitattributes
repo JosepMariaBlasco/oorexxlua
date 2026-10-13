@@ -1,2 +1,4 @@
 # shell scripts keep LF line endings on every checkout (bash on Windows)
 *.sh text eol=lf
+# the fixes for ooRexx apply byte for byte (scripts/setup-oorexx.sh)
+*.diff -text

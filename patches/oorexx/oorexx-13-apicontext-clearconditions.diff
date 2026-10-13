@@ -1,0 +1,12 @@
+Index: interpreter/api/ContextApi.hpp
+===================================================================
+--- interpreter/api/ContextApi.hpp	(revision 13269)
++++ interpreter/api/ContextApi.hpp	(working copy)
+@@ -195,6 +195,7 @@
+      {
+          // we need to cleanup on exit
+          releaseLock = blocking;
++         clearConditions = false;
+          activity = contextToActivity(c);
+          context = contextToActivation(c);
+          context->enableConditionTraps();

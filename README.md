@@ -172,7 +172,10 @@ LUA_VERSION=5.3 BUILD=build53 TESTS="Module.test.lua" oorexxlua/tests/run.sh`.
   its standalone `lua`), `setup-luatex.sh` (fetches TeX Live's LuaTeX),
   `build-cmodule.sh` (the test C module), `package.sh` (the zip of
   binaries), `setup-oorexxunit.sh` (fetches ooRexxUnit) and
-  `setup-oorexx.sh` (builds ooRexx from its sources, on Linux).
+  `setup-oorexx.sh` (builds ooRexx from its sources, with the fixes in
+  `patches/oorexx/`, on Linux, macOS and Windows).
+- `patches/oorexx/` — fixes for ooRexx bugs that are reported but not yet in
+  trunk, that the bridge needs; the CI uses them on Linux (its README).
 - `dist/` — what goes into the zip besides the binaries: its `README.md`,
   `check.rex` and `check.lua`.
 - `.github/workflows/build.yml` — the CI, the packages and the releases.
