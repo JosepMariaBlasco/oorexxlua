@@ -41,6 +41,15 @@ address lua
 'n'; say result                                    -- 55
 ```
 
+With `WITH`, Lua's `print`, `io.write` and `io.read` use the redirection
+(this needs an ooRexx with the fixes in `patches/oorexx/`):
+
+```rexx
+in.0 = 2; in.1 = 3; in.2 = 4
+address lua 'for l in io.lines() do print(l * l) end' with input stem in. output stem out.
+say out.1 out.2                                    -- 9 16
+```
+
 **ooRexx inside Lua**: a Lua C module, `require "oorexx"`, runs Rexx in a
 Lua program (any Lua 5.3, 5.4 or 5.5, and LuaTeX, TeX Live's included). In
 Rexx, `.lua` is then that same Lua, so the two sides share everything.

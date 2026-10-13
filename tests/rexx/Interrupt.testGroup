@@ -38,6 +38,26 @@ return testResult
 halt:
   return .true
 
+-- ADDRESS LUA ... WITH (needs ORXLUA_OOREXX_FIXES=1, tests/run.sh): after a
+-- Ctrl-C, print and io.write are Lua's again, and the output so far stays
+::method test_with_restores_after_a_ctrl_c
+  if value("ORXLUA_OOREXX_FIXES", , "ENVIRONMENT") \= 1 then return
+  .lua~eval('withOrigPrint, withOrigWrite = print, io.write')
+  halted = .false
+  signal on halt
+  address lua 'print("before"); hello.interrupt(); while true do end' with output stem out.
+  signal off halt
+after:
+  self~assertTrue(halted, "a HALT")
+  self~assertEquals(1, out.0)
+  self~assertEquals("before", out.1)
+  self~assertTrue(.lua~eval('return print == withOrigPrint and io.write == withOrigWrite'), "restored")
+  .lua~eval('withOrigPrint, withOrigWrite = nil')
+  return
+halt:
+  halted = .true
+  signal after
+
 ::method test_a_loop_stops
   self~assertTrue(self~halts('hello.interrupt(); while true do end'))
   self~assertEquals(.nil, .local~interruptValue, "the call returned .nil")

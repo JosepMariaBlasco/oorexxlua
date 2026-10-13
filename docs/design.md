@@ -552,8 +552,72 @@ the instance's table of handlers without the interpreter's lock, and that a
 command sent to an environment before it is registered can cache a handler
 that the garbage collector may free (both reported to ooRexx, 2026-10).
 Registering before any command, from the thread that loads `lua.cls`,
-avoids both. It is a plain (not redirecting) handler, so `WITH` is not
-supported yet: the redirector's queries had a bug of their own.
+avoids both. It is a redirecting handler (`REDIRECTING_ENVIRONMENTS`,
+`REDIRECTING_COMMAND_ENVIRONMENT`), for `WITH`.
+
+### WITH
+
+```rexx
+in.0 = 2; in.1 = 3; in.2 = 4
+address lua 'for l in io.lines() do print(l * l) end' with input stem in. output stem out.
+say out.1 out.2                                    -- 9 16
+```
+
+While a command with `WITH` runs, Lua functions of the bridge stand in, in
+`.lua`'s globals, for what is redirected, and nothing else:
+
+| Redirected | Stand-ins |
+|---|---|
+| `OUTPUT` | `print`, `io.write`, `io.stdout` |
+| `ERROR` | `io.stderr` |
+| `INPUT` | `io.read`, `io.lines` (with no file name; with one, it is Lua's), `io.stdin` |
+
+`NORMAL` is not redirected. The stand-ins of the files are tables with the
+methods that make sense: `read` and `lines` for input, `write` for output
+and error, and `flush` (returns the file), `setvbuf` (`true`), `close` and
+`seek` (`nil` and a message) for all. `io.type` says `nil` of them, and
+`io.input()` and `io.output()` are still Lua's own files, which a command
+that wants the redirection does not use.
+
+**Output** goes through the redirector's `WriteOutputBuffer` and
+`WriteErrorBuffer`, which cut it into lines at its line ends and join a
+line written in several pieces: `io.write("a"); io.write("b\n")` is one
+line, `ab`, and a last line without a line end is a line too. `print` is
+one write per call, so its line is never cut (in Lua 5.3, through the
+global `tostring`, as 5.3's `print`). Numbers are written as that Lua's
+`io.write` writes them.
+
+**Input** is read a line at a time (`ReadInput`), when a read needs it;
+each line ends in `\n` for Lua. The formats are Lua's: `"l"` (the default),
+`"L"`, `"a"`, `"n"` (as Lua's own reader, a character at a time: what is
+not a numeral stays; the decimal point is `.` whatever the locale), and a
+count; Lua 5.1's `"*l"` too. As from a file, `nil` at the end, and after the
+first format that fails, no more values; a format is checked when its turn
+comes, as Lua does.
+
+**Afterwards** each name gets its value back, unless the command changed it
+(`print = myPrint` stays). With an error, or a Ctrl-C, the command's
+output so far stays in its target, and the names are put back all the same
+(directly, not in a protected call, which the stop hook of *Ctrl-C* would
+end at once). A stand-in kept in a variable and called after its command
+ended is a Lua error ("the ADDRESS LUA command this stream was redirected
+for has ended"); each one carries its command's number, so in nested
+commands (Rexx code called back from Lua, with an `ADDRESS LUA ... WITH` of
+its own) each writes to its own command's target. A Rexx condition that the
+target or source raises (a stream's `lineout` that fails, say) is a Lua
+error, so the command's ERROR.
+
+Only `.lua`'s Lua sees the redirection: code that kept `print` or
+`io.write` in a local before the command, or writes to `io.output()`,
+writes where it always did, and other `.LuaState`s are not touched. Every
+stand-in runs inside the command, under the state's lock (*Threads*), in
+the command's thread.
+
+**Needs the fixes in `patches/oorexx/`**: the redirector's queries
+(`IsInputRedirected` ...) ran with a flag uninitialized (ooRexx bug #2113),
+and the registration fixes of #2111 and #2112 (above). The tests of `WITH`
+(`AddressWith.testGroup`) run only with `ORXLUA_OOREXX_FIXES=1`: on Linux in
+the CI, everywhere when it is run with `oorexx_fixes`.
 
 ## Lua → ooRexx
 
@@ -721,8 +785,6 @@ taken from the `lua.h` of the Lua inside.
 
 ## Not yet done
 
-- `ADDRESS LUA ... WITH` (input, output and error redirected; `print`
-  into an output stem), and maybe Rexx variables seen from the command's Lua
-  code (see *ADDRESS LUA*).
+- Maybe Rexx variables seen from the command's Lua code in `ADDRESS LUA`.
 - A `lua_State` built with real `lua_lock`, so that threads do not wait for
   each other during callbacks (see *Threads*), if a real need appears.

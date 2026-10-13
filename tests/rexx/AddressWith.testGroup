@@ -1,0 +1,311 @@
+#!/usr/bin/env rexx
+/*----------------------------------------------------------------------------*/
+/* AddressWith.testGroup: ADDRESS LUA ... WITH (docs/design.md, *ADDRESS      */
+/* LUA*, *WITH*): print, io.write and io.stdout write to OUTPUT, io.stderr to */
+/* ERROR, io.read, io.lines and io.stdin read INPUT, while the command runs.  */
+/* Needs an ooRexx with the fixes in patches/oorexx/: tests/run.sh runs it    */
+/* only with ORXLUA_OOREXX_FIXES=1.                                           */
+/*                                                                            */
+/* Licensed under the Apache License, Version 2.0.                            */
+/*----------------------------------------------------------------------------*/
+  parse source . . fileSpec
+
+  group = .TestGroup~new(fileSpec)
+  group~add(.AddressWith.testGroup)
+
+  if group~isAutomatedTest then return group
+
+  testResult = group~suite~execute~~print
+
+return testResult
+-- End of entry point.
+
+::requires 'LuaTestCase.cls'
+
+::class "AddressWith.testGroup" subclass LuaTestCase public
+
+-- the originals, to compare with after each command
+::method setUp
+  address lua 'withOrig = {print = print, write = io.write, read = io.read, lines = io.lines,' -
+              'stdin = io.stdin, stdout = io.stdout, stderr = io.stderr}'
+
+::method tearDown
+  address lua 'print, io.write, io.read, io.lines = withOrig.print, withOrig.write, withOrig.read, withOrig.lines;' -
+              'io.stdin, io.stdout, io.stderr = withOrig.stdin, withOrig.stdout, withOrig.stderr; withOrig = nil'
+
+::method restored
+  expose rc
+  address lua 'return print == withOrig.print and io.write == withOrig.write and io.read == withOrig.read' -
+              'and io.lines == withOrig.lines and io.stdin == withOrig.stdin and io.stdout == withOrig.stdout' -
+              'and io.stderr == withOrig.stderr'
+  return result
+
+::method test_print_to_output_stem
+  address lua 'print("hello", 41 + 1, nil, true, 1.5)' with output stem out.
+  self~assertEquals(0, rc)
+  self~assertEquals(1, out.0)
+  self~assertEquals("hello" || '09'x || "42" || '09'x || "nil" || '09'x || "true" || '09'x || "1.5", out.1)
+  self~assertTrue(self~restored, "print is Lua's again")
+
+::method test_print_uses_tostring
+  address lua 'print(setmetatable({}, {__tostring = function() return "T!" end}))' with output stem out.
+  self~assertEquals("T!", out.1)
+
+::method test_io_write_lines_are_cut_by_the_redirector
+  address lua 'io.write("a", 1, " ", 2.5); io.write("b\n"); io.stdout:write("c"):write("d\ne\n", "f")' -
+    with output stem out.
+  self~assertEquals(0, rc)
+  self~assertEquals(4, out.0)
+  self~assertEquals("a1 2.5b", out.1, "numbers as io.write writes them, a line in two writes")
+  self~assertEquals("cd", out.2, "f:write returns f")
+  self~assertEquals("e", out.3)
+  self~assertEquals("f", out.4, "the last line, without a line end")
+
+::method test_io_write_returns_stdout
+  address lua 'return io.write("") == io.stdout' with output stem out.; r = result
+  self~assertTrue(r)
+  self~assertEquals(0, out.0)
+
+::method test_io_write_rejects_tables
+  trace off
+  call on error name trapped
+  address lua 'io.write({})' with output stem out.
+  self~assertEquals(1, rc)
+  self~assertTrue(self~additional~pos("string expected") > 0, self~additional)
+  self~assertTrue(self~restored, "restored after an error")
+  return
+trapped:
+  self~additional = condition('A')
+  return
+
+::attribute additional
+
+::method test_output_appended
+  out.0 = 1; out.1 = "before"
+  address lua 'print("after")' with output append stem out.
+  self~assertEquals(2, out.0)
+  self~assertEquals("before", out.1)
+  self~assertEquals("after", out.2)
+
+::method test_output_to_an_array
+  a = .array~of("x")
+  address lua 'print("one"); print("two")' with output using (a)
+  self~assertEquals(2, a~items, "replaced")
+  self~assertEquals("one", a[1])
+  self~assertEquals("two", a[2])
+
+::method test_error_stem
+  address lua 'io.stderr:write("warning: ", 7, "\n"); return io.stdout == withOrig.stdout' with error stem err.; r = result
+  self~assertEquals(0, rc)
+  self~assertTrue(r, "only ERROR redirected: io.stdout is Lua's")
+  self~assertEquals(1, err.0)
+  self~assertEquals("warning: 7", err.1)
+  self~assertTrue(self~restored)
+
+::method test_output_and_error_in_one_stem
+  address lua 'print("o1"); io.stderr:write("e1\n"); print("o2")' with output stem s. error stem s.
+  self~assertEquals(3, s.0)
+  self~assertEquals("o1", s.1)
+  self~assertEquals("e1", s.2)
+  self~assertEquals("o2", s.3)
+
+::method test_only_what_is_redirected
+  none.0 = 0
+  address lua 'return print ~= withOrig.print, io.read == withOrig.read, io.stdin == withOrig.stdin,' -
+              'io.stderr == withOrig.stderr' with output stem out.; r = result
+  self~assertEquals(.true, r[1])
+  self~assertEquals(.true, r[2])
+  self~assertEquals(.true, r[3])
+  self~assertEquals(.true, r[4])
+  address lua 'return print == withOrig.print, io.read ~= withOrig.read, io.stdin ~= withOrig.stdin,' -
+              'io.lines ~= withOrig.lines' with input stem none.; r = result
+  self~assertEquals(.true, r[1])
+  self~assertEquals(.true, r[2])
+  self~assertEquals(.true, r[3])
+  self~assertEquals(.true, r[4])
+
+::method test_normal_replaces_nothing
+  address lua 'return print == withOrig.print and io.read == withOrig.read' with input normal output normal error normal; r = result
+  self~assertTrue(r)
+
+::method test_read_lines
+  in.0 = 3; in.1 = "first"; in.2 = ""; in.3 = "third"
+  address lua 'return io.read(), io.read("L"), io.read("*l"), io.read(), io.read()' with input stem in.; r = result
+  self~assertEquals(0, rc)
+  self~assertEquals("first", r[1])
+  self~assertEquals('0a'x, r[2], '"L" keeps the line end')
+  self~assertEquals("third", r[3], 'Lua 5.1''s "*l"')
+  self~assertSame(.nil, r[4], "nil at the end")
+  self~assertTrue(self~restored)
+
+::method test_read_formats
+  in.0 = 3; in.1 = "  12 0x1F -3.5e1 x"; in.2 = "abcdef"; in.3 = "rest"
+  address lua 'local a, b, c = io.read("n", "n", "n"); local d = io.read("n");' -
+              'return a, b, c, d, io.read(1), io.read(3), io.read(0), io.read("a"), io.read("a"), io.read(0), io.read(2)' -
+    with input stem in.; r = result
+  self~assertEquals(12, r[1])
+  self~assertEquals(31, r[2])
+  self~assertEquals(-35, r[3])
+  self~assertSame(.nil, r[4], "not a numeral: nil")
+  self~assertEquals("x", r[5], "a failed number read takes the blank, not the x"
+  self~assertEquals('0a'x || "ab", r[6], "counts cross lines")
+  self~assertEquals("", r[7], '0: "" while there is more')
+  self~assertEquals("cdef" || '0a'x || "rest" || '0a'x, r[8])
+  self~assertEquals("", r[9], '"a" at the end: ""')
+  self~assertSame(.nil, r[10], "0 at the end: nil")
+  self~assertSame(.nil, r[11])
+
+::method test_read_stops_at_the_first_failure
+  in.0 = 1; in.1 = "only"
+  address lua 'return select("#", io.read("l", "l", "l"))' with input stem in.; r = result
+  self~assertEquals(2, r, "one value, then nil, and no more")
+
+::method test_read_invalid_format
+  trace off
+  call on error name trapped
+  in.0 = 1; in.1 = "x"
+  address lua 'io.read("x")' with input stem in.
+  self~assertEquals(1, rc)
+  self~assertTrue(self~additional~pos("invalid format") > 0, self~additional)
+  return
+trapped:
+  self~additional = condition('A')
+  return
+
+::method test_empty_input
+  in.0 = 0
+  address lua 'return io.read()' with input stem in.; r = result
+  self~assertSame(.nil, r)
+  address lua 'return io.read("a")' with input stem in.; r = result
+  self~assertEquals("", r)
+
+::method test_lines
+  in.0 = 3; in.1 = "a"; in.2 = "b"; in.3 = "c"
+  address lua 'for l in io.lines() do print("<" .. l .. ">") end' with input stem in. output stem out.
+  self~assertEquals(3, out.0)
+  self~assertEquals("<a>", out.1)
+  self~assertEquals("<c>", out.3)
+  address lua 'local t = {} for l in io.stdin:lines("L") do t[#t + 1] = l end return table.concat(t, "|")' -
+    with input stem in.; r = result
+  self~assertEquals("a" || '0a'x || "|b" || '0a'x || "|c" || '0a'x, r)
+  address lua 'return io.stdin:read("l"), io.stdin:read("a")' with input stem in.; r = result
+  self~assertEquals("a", r[1])
+  self~assertEquals("b" || '0a'x || "c" || '0a'x, r[2])
+
+::method test_lines_with_a_file_is_luas
+  file = SysTempFileName("withtest???")       -- in the current directory, Lua's too
+  call lineout file, "in the file"; call lineout file
+  in.0 = 1; in.1 = "redirected"
+  .lua~global("_G")["withFile"] = file
+  address lua 'for l in io.lines(withFile) do return l end' with input stem in.; r = result
+  self~assertEquals("in the file", r)
+  address lua 'withFile = nil'
+  call SysFileDelete file
+
+::method test_input_from_an_array
+  address lua 'return io.read("a")' with input using (.array~of("x", "y")); r = result
+  self~assertEquals("x" || '0a'x || "y" || '0a'x, r)
+
+::method test_input_and_output_together
+  in.0 = 2; in.1 = "3"; in.2 = "4"
+  address lua 'local s = 0 for l in io.lines() do s = s + tonumber(l) end print(s)' with input stem in. output stem out.
+  self~assertEquals(7, out.1)
+
+::method test_stream_methods
+  address lua 'local f = io.stdout return f:flush() == f, f:setvbuf("no"), select(2, f:close()), select(2, f:seek()),' -
+              'tostring(f), tostring(io.stderr), io.type(f)' with output stem out. error stem err.; r = result
+  self~assertEquals(.true, r[1])
+  self~assertEquals(.true, r[2])
+  self~assertEquals("cannot close standard file", r[3])
+  self~assertEquals("cannot seek a redirected standard file", r[4])
+  self~assertEquals("file (ADDRESS LUA output)", r[5])
+  self~assertEquals("file (ADDRESS LUA error)", r[6])
+  self~assertSame(.nil, r[7], "not a file of Lua's")
+
+::method test_restored_after_an_error
+  trace off
+  call on error name trapped
+  address lua 'print("before"); error("boom")' with output stem out.
+  self~assertEquals(1, rc)
+  self~assertEquals(1, out.0, "what was written stays")
+  self~assertEquals("before", out.1)
+  self~assertTrue(self~restored)
+  return
+trapped:
+  return
+
+::method test_a_change_by_the_command_stays
+  address lua 'print = function() return "mine" end' with output stem out.
+  address lua 'return print()'; r = result
+  self~assertEquals("mine", r, "not put back over the command's own")
+  address lua 'return io.write == withOrig.write'; r = result
+  self~assertTrue(r, "the rest is")
+
+::method test_a_kept_stand_in_fails_after
+  trace off
+  call on error name trapped
+  in.0 = 0
+  address lua 'keptPrint, keptRead = print, io.read' with output stem out. input stem in.
+  self~assertEquals(0, rc)
+  self~additional = ""
+  address lua 'keptPrint("late")'
+  self~assertEquals(1, rc)
+  self~assertTrue(self~additional~pos("has ended") > 0, self~additional)
+  self~additional = ""
+  address lua 'keptRead()'
+  self~assertEquals(1, rc)
+  self~assertTrue(self~additional~pos("has ended") > 0, self~additional)
+  address lua 'keptPrint, keptRead = nil'
+  return
+trapped:
+  self~additional = condition('A')
+  return
+
+::method test_nested_commands
+  .lua~global("_G")["withInner"] = .WithInner~new
+  address lua 'print("outer 1"); local inner = withInner:run(); print("outer 2"); return inner' with output stem out.; r = result
+  self~assertEquals(0, rc)
+  self~assertEquals(2, out.0)
+  self~assertEquals("outer 1", out.1)
+  self~assertEquals("outer 2", out.2, "the outer redirection again after the inner one")
+  self~assertEquals("inner", r)
+  address lua 'withInner = nil'
+  self~assertTrue(self~restored)
+
+::method test_a_rexx_error_of_the_target_is_a_lua_error
+  trace off
+  call on error name trapped
+  self~additional = ""
+  address lua 'print("one"); print("two"); return "not reached"' with output using (.FailingTarget~new("never-written"))
+  self~assertEquals(1, rc)
+  self~assertTrue(self~additional~pos("Rexx error") > 0, self~additional)
+  self~assertTrue(self~restored)
+  return
+trapped:
+  self~additional = condition('A')
+  return
+
+::method test_rc_and_result_as_without_with
+  address lua 'print("x"); return 1, 2' with output stem out.; r = result
+  self~assertEquals(0, rc)
+  self~assertEquals(2, r~items)
+  trace off
+  call on failure name trapped
+  address lua 'print(' with output stem out.
+  self~assertEquals(-1, rc, "does not compile")
+  self~assertEquals(0, out.0, "nothing ran")
+  self~assertTrue(self~restored)
+  return
+trapped:
+  return
+
+-- an ADDRESS LUA ... WITH of its own, inside a command with output redirected
+::class WithInner
+::method run
+  address lua 'print("inner")' with output stem in.
+  return in.1
+
+-- an output target whose writing fails
+::class FailingTarget subclass Stream
+::method lineout
+  raise syntax 93.900 array("this target fails")

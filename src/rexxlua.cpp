@@ -108,6 +108,8 @@ struct State {
     std::vector<RexxObjectPtr> pending;     // Rexx objects whose userdata Lua finalized outside
                                             // any Rexx code: let go at the next entry
     bool halted = false;                    // a Rexx HALT became a Lua error (ADDRESS LUA)
+    struct Redirect *redirect = NULL;       // ADDRESS LUA ... WITH in progress, innermost first
+    lua_Integer redirects = 0;              // the last one's number
     // Ctrl-C (docs/design.md, *Ctrl-C*); read by the signal handler
     std::atomic<int> running{0};            // lua_pcalls of the bridge's in progress (nested too)
     std::atomic<bool> interrupted{false};   // a signal stopped its Lua code: until the outer
@@ -800,7 +802,8 @@ static int pairs_next(lua_State *L)
 
 static void pushBox(State *st, RexxObjectPtr v);
 static struct Inst *instOfContext(RexxThreadContext *c);
-static RexxObjectPtr RexxEntry addressLua(RexxExitContext *c, RexxStringObject address, RexxStringObject command);
+static RexxObjectPtr RexxEntry addressLua(RexxExitContext *c, RexxStringObject address, RexxStringObject command,
+                                           RexxIORedirectorContext *io);
 
 static int box_pairs(lua_State *L)
 {
@@ -2151,8 +2154,8 @@ static Inst *newInst(State *st, const Options &o, std::string &error)
     for (const std::string &l : o.libraries) { opt.optionName = LOAD_REQUIRED_LIBRARY; opt.option = l.c_str(); options.push_back(opt); }
     opt.optionName = REGISTER_LIBRARY; opt.option = (POINTER)library; options.push_back(opt);
     // ADDRESS LUA, from the start (not AddCommandEnvironment: docs/design.md, *ADDRESS LUA*)
-    static RexxContextEnvironment environments[] = {{addressLua, "LUA"}, {NULL, NULL}};
-    opt.optionName = DIRECT_ENVIRONMENTS; opt.option = (POINTER)environments; options.push_back(opt);
+    static RexxRedirectingEnvironment environments[] = {{addressLua, "LUA"}, {NULL, NULL}};
+    opt.optionName = REDIRECTING_ENVIRONMENTS; opt.option = (POINTER)environments; options.push_back(opt);
     opt.optionName = NULL; options.push_back(opt);
 
     RexxInstance *rexx;
@@ -2525,6 +2528,468 @@ RexxMethod0(logical_t, Lua_AdoptNext)
 }
 
 /* ------------------------------------------------------------------------ */
+/* ADDRESS LUA ... WITH (docs/design.md, *ADDRESS LUA*, *WITH*)               */
+/* ------------------------------------------------------------------------ */
+
+/*
+ * While a command with redirection runs, Lua functions of the bridge stand
+ * in for print, io.write, io.stdout (OUTPUT), io.stderr (ERROR), io.read,
+ * io.lines and io.stdin (INPUT), only for what is redirected; afterwards each
+ * name gets its value back, unless the command changed it.  The stand-ins
+ * carry the number of their command: called after it ended (kept in a
+ * variable), they find no Redirect and raise an error.  Output goes through
+ * the redirector's Write*Buffer, which cuts it into lines (and keeps a line
+ * cut in two by two writes); input is read a line at a time, ReadInput.
+ * Every one of them runs inside the command, so under the state's lock, in
+ * its thread.
+ */
+struct Redirect {
+    RexxIORedirectorContext *io = NULL;
+    lua_Integer id = 0;
+    bool in = false, out = false, err = false;     // what is redirected
+    lua_State *L = NULL;                            // the Lua thread of the read in progress
+    Redirect *prev = NULL;
+    std::string buf;                                // input read, not yet consumed: buf[pos..]
+    size_t pos = 0;
+    bool eof = false;
+};
+
+static Redirect *redirectOf(lua_State *L, State **pst)
+{
+    State *st = stateOf(L);
+    lua_Integer id = lua_tointeger(L, lua_upvalueindex(1));
+    Redirect *r = NULL;
+    if (st != NULL) for (r = st->redirect; r != NULL && r->id != id; r = r->prev) {}
+    if (r == NULL) luaL_error(L, "the ADDRESS LUA command this stream was redirected for has ended");
+    *pst = st;
+    return r;
+}
+
+// Writes the arguments from first on, as io.write does (strings, numbers),
+// to the command's output or error.  A Rexx condition the target raises is
+// a Lua error.
+static int rdWrite(lua_State *L, State *st, Redirect *r, int first, bool err)
+{
+    int top = lua_gettop(L);
+    for (int i = first; i <= top; i++) {
+        char num[64];
+        size_t len;
+        const char *s;
+        if (lua_type(L, i) == LUA_TNUMBER) {        // as this Lua's io.write writes it
+#if LUA_VERSION_NUM >= 505
+            len = lua_numbertocstring(L, i, num);
+            len = len > 0 ? len - 1 : 0;            // (its count has the NUL)
+#else
+            int k = lua_isinteger(L, i) ? snprintf(num, sizeof num, LUA_INTEGER_FMT, (lua_Integer)lua_tointeger(L, i))
+                                        : snprintf(num, sizeof num, LUA_NUMBER_FMT, (lua_Number)lua_tonumber(L, i));
+            len = k < 0 ? 0 : (size_t)k;
+#endif
+            s = num;
+        }
+        else s = luaL_checklstring(L, i, &len);
+        lua_State *outerL = st->L;
+        st->L = L;                          // a USING target may call back into Lua
+        if (err) r->io->WriteErrorBuffer(s, len); else r->io->WriteOutputBuffer(s, len);
+        st->L = outerL;
+        if (st->tc->CheckCondition()) { pushRexxCondition(L, st->tc); return lua_error(L); }
+    }
+    return 0;
+}
+
+static int rd_print(lua_State *L)                   // print(...)
+{
+    State *st;
+    Redirect *r = redirectOf(L, &st);
+    int n = lua_gettop(L);
+    luaL_Buffer b;
+#if LUA_VERSION_NUM < 504
+    lua_getglobal(L, "tostring");           // Lua 5.3's print calls the global tostring
+    int ts = lua_gettop(L);
+#endif
+    luaL_buffinit(L, &b);
+    for (int i = 1; i <= n; i++) {
+        if (i > 1) luaL_addchar(&b, '\t');
+#if LUA_VERSION_NUM < 504
+        lua_pushvalue(L, ts);
+        lua_pushvalue(L, i);
+        lua_call(L, 1, 1);
+        if (lua_type(L, -1) != LUA_TSTRING && lua_type(L, -1) != LUA_TNUMBER)
+            return luaL_error(L, "'tostring' must return a string to 'print'");
+#else
+        luaL_tolstring(L, i, NULL);
+#endif
+        luaL_addvalue(&b);
+    }
+    luaL_addchar(&b, '\n');
+    luaL_pushresult(&b);                    // one write: the line is not cut
+    rdWrite(L, st, r, lua_gettop(L), false);
+    return 0;
+}
+
+static int rd_iowrite(lua_State *L)                 // io.write(...): returns io.stdout
+{
+    State *st;
+    Redirect *r = redirectOf(L, &st);
+    rdWrite(L, st, r, 1, false);
+    lua_pushvalue(L, lua_upvalueindex(2));
+    return 1;
+}
+
+static int rd_fwrite(lua_State *L)                  // f:write(...): returns f
+{
+    State *st;
+    Redirect *r = redirectOf(L, &st);
+    rdWrite(L, st, r, 2, lua_toboolean(L, lua_upvalueindex(2)) != 0);
+    lua_settop(L, 1);
+    return 1;
+}
+
+// One more line of input into r->buf (with "\n": the redirector's lines have
+// no line end); false at the end, or with a Rexx condition pending
+static NOINLINE bool rdFill(State *st, Redirect *r)
+{
+    if (r->eof) return false;
+    CSTRING data = NULL;
+    size_t len = 0;
+    lua_State *outerL = st->L;
+    st->L = r->L;                           // a USING source may call back into Lua
+    r->io->ReadInput(&data, &len);
+    bool error = st->tc->CheckCondition();
+    st->L = outerL;
+    if (data == NULL || error) { r->eof = true; return false; }
+    if (r->pos > 0) { r->buf.erase(0, r->pos); r->pos = 0; }
+    r->buf.append(data, len);
+    r->buf.push_back('\n');
+    return true;
+}
+
+static NOINLINE bool rdLine(lua_State *L, State *st, Redirect *r, bool keep)    // "l", "L"
+{
+    for (;;) {
+        size_t nl = r->buf.find('\n', r->pos);
+        if (nl != std::string::npos) {
+            lua_pushlstring(L, r->buf.data() + r->pos, nl - r->pos + (keep ? 1 : 0));
+            r->pos = nl + 1;
+            return true;
+        }
+        if (!rdFill(st, r)) break;
+    }
+    lua_pushnil(L);
+    return false;
+}
+
+static NOINLINE bool rdAll(lua_State *L, State *st, Redirect *r)               // "a"
+{
+    while (rdFill(st, r)) {}
+    lua_pushlstring(L, r->buf.data() + r->pos, r->buf.size() - r->pos);
+    r->pos = r->buf.size();
+    return true;
+}
+
+static NOINLINE bool rdCount(lua_State *L, State *st, Redirect *r, lua_Integer k)  // a number
+{
+    if (k <= 0) {                           // 0: "" if there is more, nil at the end
+        bool more = r->pos < r->buf.size() || rdFill(st, r);
+        if (more) lua_pushliteral(L, ""); else lua_pushnil(L);
+        return more;
+    }
+    size_t want = (size_t)k;
+    while (r->buf.size() - r->pos < want && rdFill(st, r)) {}
+    size_t take = r->buf.size() - r->pos < want ? r->buf.size() - r->pos : want;
+    if (take == 0) { lua_pushnil(L); return false; }
+    lua_pushlstring(L, r->buf.data() + r->pos, take);
+    r->pos += take;
+    return true;
+}
+
+// The next character, if it is one of set (two characters), is taken
+static bool rdTest2(const std::string &b, size_t &e, const char *set)
+{
+    if (e < b.size() && (b[e] == set[0] || b[e] == set[1])) { e++; return true; }
+    return false;
+}
+
+static int rdDigits(const std::string &b, size_t &e, bool hex)
+{
+    int n = 0;
+    while (e < b.size() && (hex ? isxdigit((unsigned char)b[e]) : isdigit((unsigned char)b[e]))) { e++; n++; }
+    return n;
+}
+
+// "n", as Lua's l_getn: after blanks, the longest prefix that can be a
+// numeral, one character at a time (what does not fit stays in the input)
+static NOINLINE bool rdNumber(lua_State *L, State *st, Redirect *r)
+{
+    for (;;) {                              // blanks, line ends included
+        while (r->pos < r->buf.size() && isspace((unsigned char)r->buf[r->pos])) r->pos++;
+        if (r->pos < r->buf.size()) break;
+        if (!rdFill(st, r)) { lua_pushnil(L); return false; }
+    }
+    const std::string &b = r->buf;          // a numeral is in one line: no refills from here
+    size_t e = r->pos;
+    int count = 0;
+    bool hex = false;
+    rdTest2(b, e, "-+");
+    if (rdTest2(b, e, "00")) {
+        if (rdTest2(b, e, "xX")) hex = true;
+        else count = 1;
+    }
+    count += rdDigits(b, e, hex);
+    if (rdTest2(b, e, "..")) count += rdDigits(b, e, hex);
+    if (count > 0 && rdTest2(b, e, hex ? "pP" : "eE")) {
+        rdTest2(b, e, "-+");
+        rdDigits(b, e, false);
+    }
+    if (e - r->pos > 200) {                 // as Lua's L_MAXLENNUM: fails, the 201st taken
+        r->pos += 201;
+        lua_pushnil(L);
+        return false;
+    }
+    lua_pushlstring(L, b.data() + r->pos, e - r->pos);
+    r->pos = e;
+    if (lua_stringtonumber(L, lua_tostring(L, -1)) != 0) { lua_remove(L, -2); return true; }
+    lua_pop(L, 1);
+    lua_pushnil(L);
+    return false;
+}
+
+// The formats from first on (none: "l"), as io.read: a value each, up to the
+// first that fails (nil); a format is checked when its turn comes, as Lua
+// does.  A Rexx condition reading is a Lua error.
+static int rdRead(lua_State *L, State *st, Redirect *r, int first)
+{
+    if (lua_gettop(L) < first) lua_pushliteral(L, "l");
+    int top = lua_gettop(L), n = 0;
+    for (int i = first; i <= top; i++) {
+        bool ok;
+        luaL_checkstack(L, 2, "too many formats");
+        r->L = L;
+        if (lua_type(L, i) == LUA_TNUMBER) {
+            lua_Integer k = luaL_checkinteger(L, i);
+            ok = rdCount(L, st, r, k < 0 ? LUA_MAXINTEGER : k);      // Lua: (size_t)k, all of it
+        }
+        else {
+            const char *f = luaL_checkstring(L, i);
+            if (*f == '*') f++;                 // Lua 5.1's "*l"
+            if (*f == '\0' || strchr("nlLa", *f) == NULL) return luaL_argerror(L, i, "invalid format");
+            ok = *f == 'n' ? rdNumber(L, st, r) : *f == 'a' ? rdAll(L, st, r) : rdLine(L, st, r, *f == 'L');
+        }
+        n++;
+        if (st->tc->CheckCondition()) { pushRexxCondition(L, st->tc); return lua_error(L); }
+        if (!ok) break;
+    }
+    return n;
+}
+
+static int rd_ioread(lua_State *L)                  // io.read(...)
+{
+    State *st;
+    Redirect *r = redirectOf(L, &st);
+    return rdRead(L, st, r, 1);
+}
+
+static int rd_fread(lua_State *L)                   // f:read(...)
+{
+    State *st;
+    Redirect *r = redirectOf(L, &st);
+    return rdRead(L, st, r, 2);
+}
+
+// The iterator of io.lines() and f:lines(): upvalues the command's number,
+// how many formats, the formats
+static int rd_linesnext(lua_State *L)
+{
+    State *st;
+    Redirect *r = redirectOf(L, &st);
+    int nf = (int)lua_tointeger(L, lua_upvalueindex(2));
+    lua_settop(L, 0);
+    luaL_checkstack(L, nf + 2, "too many formats");
+    for (int i = 1; i <= nf; i++) lua_pushvalue(L, lua_upvalueindex(2 + i));
+    return rdRead(L, st, r, 1);
+}
+
+static int rdLines(lua_State *L, int first)
+{
+    State *st;
+    redirectOf(L, &st);
+    int nf = lua_gettop(L) - first + 1;
+    if (nf < 0) nf = 0;
+    luaL_argcheck(L, nf <= 250, first + 250, "too many arguments");
+    lua_pushvalue(L, lua_upvalueindex(1));
+    lua_pushinteger(L, nf);
+    for (int i = 0; i < nf; i++) lua_pushvalue(L, first + i);
+    lua_pushcclosure(L, rd_linesnext, 2 + nf);
+    return 1;
+}
+
+static int rd_iolines(lua_State *L)                 // io.lines(file, ...): Lua's with a file
+{
+    if (!lua_isnoneornil(L, 1)) {
+        lua_pushvalue(L, lua_upvalueindex(2));
+        lua_insert(L, 1);
+        lua_call(L, lua_gettop(L) - 1, LUA_MULTRET);
+        return lua_gettop(L);
+    }
+    return rdLines(L, 2);
+}
+
+static int rd_flines(lua_State *L) { return rdLines(L, 2); }          // f:lines(...)
+
+static int rd_fself(lua_State *L)                   // f:flush(): f
+{
+    State *st;
+    redirectOf(L, &st);
+    lua_settop(L, 1);
+    return 1;
+}
+
+static int rd_ftrue(lua_State *L)                   // f:setvbuf(): true
+{
+    State *st;
+    redirectOf(L, &st);
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+static int rd_fclose(lua_State *L)                  // f:close(), f:seek(): fail, message
+{
+    State *st;
+    redirectOf(L, &st);
+    lua_pushnil(L);
+    lua_pushstring(L, lua_tostring(L, lua_upvalueindex(2)));
+    return 2;
+}
+
+static int rd_ftostring(lua_State *L)
+{
+    lua_pushvalue(L, lua_upvalueindex(1));
+    return 1;
+}
+
+// f[name] = a closure of f(L, id at idIdx, extra)
+static void rdMethod(lua_State *L, int idIdx, const char *name, lua_CFunction f, int extra)
+{
+    lua_pushvalue(L, idIdx);
+    if (extra) lua_insert(L, -2);           // the extra value was on top: id, extra
+    lua_pushcclosure(L, f, 1 + extra);
+    lua_setfield(L, -2, name);
+}
+
+// The stand-in for io.stdin (kind 0), io.stdout (1) or io.stderr (2): a table
+// with the methods of a file that make sense for it
+static void rdPushFile(lua_State *L, int idIdx, int kind)
+{
+    lua_newtable(L);
+    if (kind == 0) {
+        rdMethod(L, idIdx, "read", rd_fread, 0);
+        rdMethod(L, idIdx, "lines", rd_flines, 0);
+    }
+    else { lua_pushboolean(L, kind == 2); rdMethod(L, idIdx, "write", rd_fwrite, 1); }
+    rdMethod(L, idIdx, "flush", rd_fself, 0);
+    rdMethod(L, idIdx, "setvbuf", rd_ftrue, 0);
+    lua_pushliteral(L, "cannot close standard file"); rdMethod(L, idIdx, "close", rd_fclose, 1);
+    lua_pushliteral(L, "cannot seek a redirected standard file"); rdMethod(L, idIdx, "seek", rd_fclose, 1);
+    lua_createtable(L, 0, 2);
+    lua_pushstring(L, kind == 0 ? "file (ADDRESS LUA input)" : kind == 1 ? "file (ADDRESS LUA output)"
+                                                                         : "file (ADDRESS LUA error)");
+    lua_pushcclosure(L, rd_ftostring, 1);
+    lua_setfield(L, -2, "__tostring");
+    lua_pushliteral(L, "ADDRESS LUA stream");
+    lua_setfield(L, -2, "__name");
+    lua_setmetatable(L, -2);
+}
+
+// The stand-in on top goes into t[key] (pops it), and {t, key, old value,
+// stand-in} at the end of the list at index 1
+static void rdReplace(lua_State *L, int t, const char *key)
+{
+    lua_createtable(L, 4, 0);
+    lua_pushvalue(L, t); lua_rawseti(L, -2, 1);
+    lua_pushstring(L, key); lua_rawseti(L, -2, 2);
+    lua_pushstring(L, key); lua_rawget(L, t); lua_rawseti(L, -2, 3);
+    lua_pushvalue(L, -2); lua_rawseti(L, -2, 4);
+    lua_rawseti(L, 1, (lua_Integer)lua_rawlen(L, 1) + 1);
+    lua_pushstring(L, key);
+    lua_insert(L, -2);
+    lua_rawset(L, t);
+}
+
+// Puts the stand-ins of st->redirect in place (raw accesses: a strict _G's
+// metamethods do not run), each recorded in the list at 1 (rd_newList) for
+// rdRestore as it goes.  In a protected call: it allocates.
+static int rd_install(lua_State *L)
+{
+    Redirect *r = stateOf(L)->redirect;
+    lua_settop(L, 1);                                       // 1: the list (rd_newList)
+    lua_rawgeti(L, LUA_REGISTRYINDEX, LUA_RIDX_GLOBALS);    // 2: _G
+    lua_pushliteral(L, "io");
+    lua_rawget(L, 2);                                       // 3: io (if a table)
+    bool io = lua_istable(L, 3);
+    lua_pushinteger(L, r->id);                              // 4: the command's number
+    if (r->out) {
+        rdPushFile(L, 4, 1);                                // 5: io.stdout's stand-in
+        lua_pushvalue(L, 4);
+        lua_pushcclosure(L, rd_print, 1);
+        rdReplace(L, 2, "print");
+        if (io) {
+            lua_pushvalue(L, 4);
+            lua_pushvalue(L, 5);
+            lua_pushcclosure(L, rd_iowrite, 2);
+            rdReplace(L, 3, "write");
+            lua_pushvalue(L, 5);
+            rdReplace(L, 3, "stdout");
+        }
+        lua_pop(L, 1);
+    }
+    if (r->err && io) {
+        rdPushFile(L, 4, 2);
+        rdReplace(L, 3, "stderr");
+    }
+    if (r->in && io) {
+        rdPushFile(L, 4, 0);
+        rdReplace(L, 3, "stdin");
+        lua_pushvalue(L, 4);
+        lua_pushcclosure(L, rd_ioread, 1);
+        rdReplace(L, 3, "read");
+        lua_pushvalue(L, 4);
+        lua_pushliteral(L, "lines");
+        lua_rawget(L, 3);                                   // Lua's, for io.lines(file)
+        lua_pushcclosure(L, rd_iolines, 2);
+        rdReplace(L, 3, "lines");
+    }
+    lua_settop(L, 1);
+    return 1;
+}
+
+static int rd_newList(lua_State *L)
+{
+    lua_newtable(L);
+    return 1;
+}
+
+// Puts back what rd_install replaced (the list at index list), last first,
+// where the stand-in is still there.  Called directly, not in a protected
+// call: raw reads, and raw writes to keys that exist, raise no errors, and
+// after a Ctrl-C the stop hook would end a protected call before it runs.
+static void rdRestore(lua_State *L, int list)
+{
+    if (!lua_checkstack(L, 6)) return;
+    for (lua_Integer i = (lua_Integer)lua_rawlen(L, list); i >= 1; i--) {
+        lua_rawgeti(L, list, i);                            // e
+        lua_rawgeti(L, -1, 1);                              // e t
+        lua_rawgeti(L, -2, 2);                              // e t key
+        lua_pushvalue(L, -1);
+        lua_rawget(L, -3);                                  // e t key now
+        lua_rawgeti(L, -4, 4);                              // e t key now stand-in
+        bool ours = lua_rawequal(L, -1, -2) != 0;
+        lua_pop(L, 2);                                      // e t key
+        if (ours) { lua_rawgeti(L, -3, 3); lua_rawset(L, -3); }
+        else lua_pop(L, 1);
+        lua_pop(L, 2);
+    }
+}
+
+/* ------------------------------------------------------------------------ */
 /* ADDRESS LUA (docs/design.md, *ADDRESS LUA*)                                */
 /* ------------------------------------------------------------------------ */
 
@@ -2544,8 +3009,9 @@ static RexxObjectPtr addressCondition(RexxExitContext *c, RexxStringObject comma
 // none, the value if one, an Array if several); an error raises FAILURE
 // (cannot compile, RC -1; no usable .lua, RC -2) or ERROR (a Lua error while
 // running, RC 1), with Lua's message (and traceback) as condition('A').
+// With WITH, the stand-ins of print, io.write... while it runs (rd_install).
 static RexxObjectPtr RexxEntry addressLua(RexxExitContext *c, RexxStringObject address,
-                                           RexxStringObject command)
+                                           RexxStringObject command, RexxIORedirectorContext *io)
 {
     RexxThreadContext *tc = c->threadContext;
     drain(tc);
@@ -2576,8 +3042,42 @@ static RexxObjectPtr RexxEntry addressLua(RexxExitContext *c, RexxStringObject a
         }
     }
     std::string error;
+    Redirect rd;
+    bool redirected = io != NULL && io->IsRedirectionRequested();
+    if (redirected) {
+        rd.io = io;
+        rd.in = io->IsInputRedirected() != 0;
+        rd.out = io->IsOutputRedirected() != 0;
+        rd.err = io->IsErrorRedirected() != 0;
+        rd.id = ++st->redirects;
+        rd.prev = st->redirect;
+        st->redirect = &rd;
+        if (st->running.load() == 0) st->interrupted.store(false);   // as pcallQuiet: a signal
+                                                                     // that came as the last call ended
+        bool ok = false;
+        lua_pushcfunction(L, rd_newList);
+        if (lua_pcall(L, 0, 1, 0) == LUA_OK) {
+            lua_insert(L, top + 1);                         // the list, under the chunk
+            lua_pushcfunction(L, rd_install);
+            lua_pushvalue(L, top + 1);
+            ok = lua_pcall(L, 1, 0, 0) == LUA_OK;
+            if (!ok) rdRestore(L, top + 1);                 // what it put in place before failing
+        }
+        if (!ok) {                                          // out of memory, or interrupted
+            const char *s = lua_tostring(L, -1);
+            error = s != NULL ? s : "(error object)";
+            st->redirect = rd.prev;
+            lua_settop(L, top);
+            return addressCondition(c, command, ADDRESS_RUNTIME, error);
+        }
+    }
     st->halted = false;
     int n = pcallQuiet(st, 0, error);
+    if (redirected) {
+        rdRestore(L, top + 1);
+        lua_remove(L, top + 1);
+        st->redirect = rd.prev;
+    }
     if (takeInterrupt(st) && !haltError(st, error)) {   // Ctrl-C: the HALT comes after the command
         tc->HaltThread();
         if (n < 0) { lua_settop(L, top); return c->WholeNumber(ADDRESS_RUNTIME); }
@@ -2613,7 +3113,7 @@ RexxMethod0(RexxObjectPtr, Lua_Address)
     RexxDirectoryObject local = tc->GetLocalEnvironment();
     if (tc->DirectoryAt(local, "LUA.ADDRESS") != NULLOBJECT) return NULLOBJECT;
     tc->DirectoryPut(local, tc->True(), "LUA.ADDRESS");
-    tc->AddCommandEnvironment("LUA", (REXXPFN)addressLua, DIRECT_COMMAND_ENVIRONMENT);
+    tc->AddCommandEnvironment("LUA", (REXXPFN)addressLua, REDIRECTING_COMMAND_ENVIRONMENT);
     return NULLOBJECT;
 }
 
