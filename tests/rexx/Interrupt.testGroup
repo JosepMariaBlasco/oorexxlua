@@ -1,0 +1,151 @@
+#!/usr/bin/env rexx
+/*----------------------------------------------------------------------------*/
+/* Interrupt.testGroup: a Ctrl-C while Lua code runs (docs/design.md,         */
+/* *Ctrl-C*) stops it, and the caller gets its HALT at the next clause        */
+/* boundary.  The interrupt comes from the Lua code itself: interrupt() of    */
+/* the test C module (tests/cmodule/hello.c), a SIGINT on Unix, a CTRL_C_EVENT */
+/* on Windows.                                                                */
+/*                                                                            */
+/* Licensed under the Apache License, Version 2.0.                            */
+/*----------------------------------------------------------------------------*/
+  parse source . . fileSpec
+
+  group = .TestGroup~new(fileSpec)
+  group~add(.Interrupt.testGroup)
+
+  if group~isAutomatedTest then return group
+
+  testResult = group~suite~execute~~print
+
+return testResult
+-- End of entry point.
+
+::requires 'LuaTestCase.cls'
+
+::class "Interrupt.testGroup" subclass LuaTestCase public
+
+::method setUp
+  .lua~eval('hello = require "hello"')
+
+/** halts(code): runs the Lua code with ~eval; .true if a HALT came (and
+ * .local~interruptValue is what ~eval returned), .false if it returned */
+::method halts
+  use strict arg code
+  .local~interruptValue = "unset"
+  signal on halt
+  .local~interruptValue = .lua~eval(code)  -- the clause ends; the HALT comes after it
+  return .false
+halt:
+  return .true
+
+::method test_a_loop_stops
+  self~assertTrue(self~halts('hello.interrupt(); while true do end'))
+  self~assertEquals(.nil, .local~interruptValue, "the call returned .nil")
+
+::method test_pcall_cannot_keep_it_going
+  self~assertTrue(self~halts('hello.interrupt(); while true do pcall(function() while true do end end) end'))
+
+::method test_code_that_ends_meanwhile
+  -- the interrupted code returns, or is stopped as it does: a HALT either way
+  self~assertTrue(self~halts('hello.interrupt(); return 42'))
+
+::method test_the_state_goes_on
+  self~assertTrue(self~halts('hello.interrupt(); while true do end'))
+  self~assertEquals(2, .lua~eval('return 1 + 1'))
+  self~assertTrue(self~halts('hello.interrupt(); while true do end'), "and a second one")
+  self~assertFalse(self~halts('return 3'), "no stray HALT")
+  self~assertEquals(3, .local~interruptValue)
+
+::method test_another_state
+  s = .LuaState~new
+  s~eval('hello = require "hello"')
+  signal on halt
+  s~eval('hello.interrupt(); while true do end')
+  nop
+  s~close
+  self~fail("no HALT")
+halt:
+  self~assertEquals(7, s~eval('return 7'))
+  s~close
+
+::method test_a_protected_operation
+  -- a metamethod that loops: the operation returns .nil, then the HALT
+  o = .lua~eval('return setmetatable({}, {__index = function() hello.interrupt(); while true do end end})')
+  r = "unset"
+  signal on halt
+  r = o~field
+  nop
+  self~fail("no HALT")
+halt:
+  self~assertEquals(.nil, r)
+
+::method test_do_over
+  o = .lua~eval('return setmetatable({}, {__len = function() hello.interrupt(); while true do end end})')
+  n = 0
+  signal on halt
+  do x over o; n += 1; end
+  nop
+  self~fail("no HALT")
+halt:
+  self~assertEquals(0, n, "an empty Array: the loop ends first")
+
+::method test_a_comparison
+  -- after Ctrl-C a comparison is false: IF needs a logical value (with .nil
+  -- the program would end with Error 34.1, not the HALT, which comes at the
+  -- boundary after the IF clause, before its THEN)
+  o = .lua~eval('return setmetatable({}, {__lt = function() hello.interrupt(); while true do end end})')
+  r = "unset"
+  signal on halt
+  if o < 1 then r = "less"; else r = "not less"
+  self~fail("no HALT")
+halt:
+  self~assertEquals("unset", r)
+
+::method test_a_nested_call_does_not_end_it
+  -- the Ctrl-C comes during a nested ~eval (from a callback): the outer Lua
+  -- code, whose pcall catches the callback's HALT, is stopped too
+  .local~interruptCalls = 0
+  .lua~global("_G")["nestedCallback"] = .routines~nestedCallback
+  self~assertTrue(self~halts('while true do pcall(nestedCallback) end'))
+  self~assertEquals(1, .local~interruptCalls)
+
+::method test_a_caught_halt_is_not_the_error
+  -- Lua code caught a callback's HALT with pcall, then failed otherwise:
+  -- that error, not Error 4.1
+  .lua~global("_G")["haltCallback"] = .routines~haltCallback
+  signal on syntax
+  .lua~eval('pcall(haltCallback); error("plain")')
+  self~fail("no SYNTAX condition")
+syntax:
+  self~assertEquals(98.900, condition("O")~code)
+
+::method test_address_lua
+  rc = "unset"
+  signal on halt
+  address lua 'hello.interrupt(); while true do end'
+  nop
+  self~fail("no HALT")
+halt:
+  self~assertEquals(1, rc, "RC 1, no ERROR condition")
+
+::method test_in_a_callback
+  -- the HALT lands in the Rexx code of a callback: Error 4.1 from ~eval, as
+  -- from ADDRESS LUA
+  .lua~global("_G")["interruptCallback"] = .routines~interruptCallback
+  signal on syntax
+  .lua~eval('interruptCallback(); while true do end')
+  self~fail("no SYNTAX condition")
+syntax:
+  self~assertEquals(4.1, condition("O")~code)
+
+::routine interruptCallback
+  .lua~eval('hello.interrupt()')            -- the HALT of this activation
+  do forever; nop; end                      -- comes at its next clause
+
+::routine nestedCallback
+  .local~interruptCalls += 1
+  if .local~interruptCalls = 1 then .lua~eval('hello.interrupt()')
+  return 0
+
+::routine haltCallback
+  raise halt

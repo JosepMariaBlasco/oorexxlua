@@ -10,8 +10,9 @@ Both directions work. **Lua embedded in ooRexx**: an ooRexx native package,
 `.LuaState~new` makes more, independent ones, and `.LuaObject` proxies let
 Rexx use Lua tables, functions and objects as Rexx objects. Rexx routines and
 objects are passed to Lua as functions and userdata that Lua can call back.
-Errors cross in both directions, nested. Several Rexx threads can use Lua at
-once, and Lua C modules (LuaRocks's) load.
+Errors cross in both directions, nested, and a Ctrl-C stops Lua code with a
+HALT, as it stops Rexx code. Several Rexx threads can use Lua at once, and
+Lua C modules (LuaRocks's) load.
 
 ```rexx
 string = .lua~global("string")
@@ -162,7 +163,7 @@ LUA_VERSION=5.3 BUILD=build53 TESTS="Module.test.lua" oorexxlua/tests/run.sh`.
   (`\rexx{...}`, and a Rexx program that writes into the page through
   `ADDRESS LUA`), not run by the tests.
 - `tests/` — `run.sh`; `rexx/`, the ooRexxUnit test groups (examples,
-  lifetime, threads, C modules, and `Robustness`, a test for every fault a
+  lifetime, threads, C modules, interrupts, and `Robustness`, a test for every fault a
   review found) with their base class `LuaTestCase.cls`; `lua/`, the tests
   of the Lua module, in Lua (`harness.lua`); `cmodule/` (a Lua C module built
   as LuaRocks builds them).

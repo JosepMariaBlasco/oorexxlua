@@ -29,10 +29,12 @@ extern "C" {
 #endif
 #ifndef _WIN32
 #include <dlfcn.h>
+#include <signal.h>
 #endif
 #ifdef _WIN32
 #include <windows.h>
 #endif
+#include <atomic>
 #include <functional>
 #include <map>
 #include <mutex>
@@ -106,6 +108,11 @@ struct State {
     std::vector<RexxObjectPtr> pending;     // Rexx objects whose userdata Lua finalized outside
                                             // any Rexx code: let go at the next entry
     bool halted = false;                    // a Rexx HALT became a Lua error (ADDRESS LUA)
+    // Ctrl-C (docs/design.md, *Ctrl-C*); read by the signal handler
+    std::atomic<int> running{0};            // lua_pcalls of the bridge's in progress (nested too)
+    std::atomic<bool> interrupted{false};   // a signal stopped its Lua code: until the outer
+                                            // lua_pcall returns, the stop hook stops it
+    State *nextAll = NULL;                  // every State, for the handler (allStates)
 };
 
 // One per .LuaObject: a Lua value in a state's registry.
@@ -300,6 +307,17 @@ static NOINLINE std::string formatFloat(double d)
 static RexxObjectPtr toRexx(State *st, int idx);
 static bool pushValue(State *st, RexxObjectPtr v);
 
+static bool takeInterrupt(State *st);
+static RexxObjectPtr failed(State *st);
+
+// The Lua error that ended a call is a callback's HALT (pushRexxCondition):
+// st->halted, and the error is that one (Lua code may have caught it with
+// pcall, and raised another since)
+static bool haltError(State *st, const std::string &error)
+{
+    return st->halted && error.compare(0, 13, "Rexx error 4.") == 0;
+}
+
 static int msgh(lua_State *L)
 {
     // message "\n" traceback, by lua_concat: the message may hold a NUL
@@ -319,7 +337,11 @@ static int pcallQuiet(State *st, int nargs, std::string &error)
     int base = lua_gettop(L) - nargs;       // index of the function
     lua_pushcfunction(L, msgh);
     lua_insert(L, base);
+    if (st->running.load() == 0) st->interrupted.store(false);   // a signal that came as the last
+                                                                 // call ended: ooRexx's HALT
+    st->running++;
     int rc = lua_pcall(L, nargs, LUA_MULTRET, base);
+    st->running--;
     lua_remove(L, base);
     if (rc != LUA_OK) {
         size_t length;
@@ -331,15 +353,33 @@ static int pcallQuiet(State *st, int nargs, std::string &error)
     return lua_gettop(L) - base + 1;
 }
 
-/* The same, raising a Rexx SYNTAX 98.900 with Lua's message and traceback.
- * Leaves all results on the stack and returns their count, or -1 after
- * raising a Rexx SYNTAX 98.900 with Lua's message and traceback.          */
+/* The same, raising a Rexx condition.  Leaves all results on the stack and
+ * returns their count, or -1 after raising a Rexx SYNTAX 98.900 with Lua's
+ * message and traceback, or Error 4.1 when a HALT in a callback stopped it.
+ * Ctrl-C (docs/design.md, *Ctrl-C*): the caller's HALT is made pending; if
+ * that stopped the Lua code, -1 with no condition (see failed).            */
 static int pcallAll(State *st, int nargs)
 {
     std::string error;
+    st->halted = false;
     int n = pcallQuiet(st, nargs, error);
-    if (n < 0) raise(st->tc, "Lua error: " + error);
+    bool ctrlC = takeInterrupt(st);
+    if (n < 0 && haltError(st, error)) {        // a HALT in a callback: Error 4.1, as ADDRESS LUA
+        st->halted = false;
+        st->tc->RaiseException1(Rexx_Error_Program_interrupted_condition, st->tc->String("HALT"));
+        return -1;
+    }
+    if (ctrlC) st->tc->HaltThread();            // (not twice if ooRexx's handler already did)
+    if (n < 0 && !ctrlC) raise(st->tc, "Lua error: " + error);
     return n;
+}
+
+/* What a method returns when pcallAll returned -1: NULLOBJECT, with the
+ * condition raised; or, after Ctrl-C, .nil, so that the clause ends and the
+ * HALT comes at its boundary (a missing result would raise Error 91 first). */
+static RexxObjectPtr failed(State *st)
+{
+    return st->tc->CheckCondition() ? NULLOBJECT : st->tc->Nil();
 }
 
 /*
@@ -457,7 +497,7 @@ static int p_compare(lua_State *L)
 /* First result as a Rexx object (.nil if none); pops all results. */
 static RexxObjectPtr firstResult(State *st, int n)
 {
-    if (n < 0) return NULLOBJECT;
+    if (n < 0) return failed(st);
     RexxObjectPtr r = n == 0 ? st->tc->Nil() : toRexx(st, -n);
     lua_pop(st->L, n);
     return r;
@@ -466,7 +506,7 @@ static RexxObjectPtr firstResult(State *st, int n)
 /* All results as a Rexx Array; pops them. */
 static RexxObjectPtr allResults(State *st, int n)
 {
-    if (n < 0) return NULLOBJECT;
+    if (n < 0) return failed(st);
     RexxThreadContext *c = st->tc;
     RexxArrayObject a = c->NewArray(n);
     for (int i = 1; i <= n; i++) c->ArrayPut(a, toRexx(st, -n + i - 1), i);
@@ -894,6 +934,117 @@ static void setupLua(lua_State *L, State *st)
     lua_setfield(L, LUA_REGISTRYINDEX, CACHE);
 }
 
+/* ------------------------------------------------------------------------ */
+/* Ctrl-C (docs/design.md, *Ctrl-C*)                                          */
+/* ------------------------------------------------------------------------ */
+
+/*
+ * ooRexx's handler (SIGINT, SIGTERM, SIGHUP; Ctrl-C on Windows) marks the
+ * running Rexx activation halted, and the HALT comes at its next clause
+ * boundary.  While Lua code runs, that activation is the one that called into
+ * Lua, which does not return: the HALT would wait for ever, and a second
+ * signal is ignored while one is pending.  So, as lua.c does, a handler run
+ * before ooRexx's marks every state with Lua code running interrupted and
+ * sets a hook on its Lua threads (lua_sethook may be called from a signal
+ * handler).  The hook raises an error at every instruction, so that no pcall
+ * in the Lua code can keep it going.  Every bridge call that returns while
+ * its state is interrupted makes its caller's HALT pending itself
+ * (HaltThread, takeInterrupt): when the signal came as a callback was
+ * ending, ooRexx's mark fell on an activation about to go.  The state stays
+ * interrupted until its outermost call returns.  No hook at all otherwise:
+ * in Lua 5.4 any hook sends every instruction through the slow path.  Signals
+ * that were ignored stay ignored.
+ *
+ * Every State ever opened is on a list (they are never freed), pushed with a
+ * compare-and-swap; the handler only reads it.  Only in a process where Rexx
+ * is the host: not when the Lua module made the interpreter instance (the
+ * host, LuaTeX say, has its own idea of a Ctrl-C).
+ */
+static std::atomic<State *> allStates(NULL);
+
+// Stops the Lua code while its state is interrupted; once it is not, it takes
+// itself off (a coroutine it was set on may be gone by then, so nothing else
+// touches it)
+static void stopHook(lua_State *L, lua_Debug *)
+{
+    State *st = stateOf(L);
+    if (st == NULL || !st->interrupted.load()) { lua_sethook(L, NULL, 0, 0); return; }
+    luaL_error(L, "interrupted");
+}
+
+// From the handler: stop the Lua code now running, on the thread the bridge
+// last entered or left and on the main one (the outer call runs there)
+static void stopAll()
+{
+    for (State *st = allStates.load(); st != NULL; st = st->nextAll) {
+        if (st->running.load() <= 0 || st->interrupted.load()) continue;
+        lua_State *L = st->L, *main = st->main;
+        if (L == NULL || main == NULL) continue;
+        st->interrupted.store(true);
+        lua_sethook(L, stopHook, LUA_MASKCALL | LUA_MASKRET | LUA_MASKCOUNT, 1);
+        if (main != L) lua_sethook(main, stopHook, LUA_MASKCALL | LUA_MASKRET | LUA_MASKCOUNT, 1);
+    }
+}
+
+#ifdef _WIN32
+// Called before ooRexx's (handlers run last registered first); FALSE: on to it
+static BOOL WINAPI onCtrl(DWORD type)
+{
+    if (type == CTRL_C_EVENT) stopAll();
+    return FALSE;
+}
+#else
+static const int haltSignals[] = { SIGINT, SIGTERM, SIGHUP };
+static struct sigaction oldActions[3];
+static void onSignal(int sig, siginfo_t *info, void *uc)
+{
+    stopAll();
+    for (int i = 0; i < 3; i++) {
+        if (haltSignals[i] != sig) continue;
+        struct sigaction *old = &oldActions[i];
+        if (old->sa_flags & SA_SIGINFO) { if (old->sa_sigaction != NULL) old->sa_sigaction(sig, info, uc); }
+        else if (old->sa_handler == SIG_DFL) { sigaction(sig, old, NULL); raise(sig); }
+        else if (old->sa_handler != SIG_IGN) old->sa_handler(sig);
+    }
+}
+#endif
+
+static void installHandler()
+{
+    static std::once_flag once;
+    std::call_once(once, [] {
+#ifdef _WIN32
+        SetConsoleCtrlHandler(onCtrl, TRUE);
+#else
+        for (int i = 0; i < 3; i++) {
+            struct sigaction old;               // an ignored signal stays ignored (nohup)
+            if (sigaction(haltSignals[i], NULL, &old) == 0 && !(old.sa_flags & SA_SIGINFO)
+                && old.sa_handler == SIG_IGN) continue;
+            struct sigaction sa;
+            memset(&sa, 0, sizeof sa);
+            sa.sa_sigaction = onSignal;
+            sa.sa_flags = SA_SIGINFO;           // no SA_RESTART, as ooRexx: a read is interrupted
+            sigfillset(&sa.sa_mask);
+            sigaction(haltSignals[i], &sa, &oldActions[i]);
+        }
+#endif
+    });
+}
+
+// After the bridge's lua_pcall: whether a signal stopped its Lua code.  It
+// stays stopped until the outer call returns: a nested one (from a callback)
+// must not let the outer Lua code go on.  Then the hook of the main thread
+// goes now (the others' when they next run, stopHook).
+static bool takeInterrupt(State *st)
+{
+    if (!st->interrupted.load()) return false;
+    if (st->running.load() == 0) {
+        st->interrupted.store(false);
+        if (st->main != NULL) lua_sethook(st->main, NULL, 0, 0);
+    }
+    return true;
+}
+
 static State *openState(RexxThreadContext *c)
 {
     makeLuaGlobal();
@@ -911,6 +1062,9 @@ static State *openState(RexxThreadContext *c)
     lua_pushcfunction(L, luaopen_oorexx);
     lua_setfield(L, -2, "oorexx");
     lua_pop(L, 1);
+    st->nextAll = allStates.load();
+    while (!allStates.compare_exchange_weak(st->nextAll, st)) {}
+    if (instOfContext(c) == NULL) installHandler();
     return st;
 }
 
@@ -1170,7 +1324,7 @@ RexxMethod2(RexxObjectPtr, LuaState_Global, CSTRING, name, CSELF, self)
     Entry en(context, (State *)self, context->GetSelf());
     if (!en.ok) return NULLOBJECT;
     lua_pushstring(en.st->L, name);
-    if (!protect(en.st, p_getglobal, 1)) return NULLOBJECT;
+    if (!protect(en.st, p_getglobal, 1)) return failed(en.st);
     RexxObjectPtr r = toRexx(en.st, -1);
     lua_pop(en.st->L, 1);
     return r;
@@ -1182,7 +1336,7 @@ RexxMethod2(RexxObjectPtr, LuaState_Require, CSTRING, name, CSELF, self)
     Entry en(context, (State *)self, context->GetSelf());
     if (!en.ok) return NULLOBJECT;
     lua_pushstring(en.st->L, "require");
-    if (!protect(en.st, p_getglobal, 1)) return NULLOBJECT;
+    if (!protect(en.st, p_getglobal, 1)) return failed(en.st);
     lua_pushstring(en.st->L, name);
     return firstResult(en.st, pcallAll(en.st, 1));
 }
@@ -1345,7 +1499,7 @@ static RexxObjectPtr callField(RexxMethodContext *context, Proxy *px, CSTRING me
     }
     lua_pushvalue(L, obj);
     lua_pushstring(L, message);
-    if (!protect(st, p_resolve, 2)) { lua_settop(L, top); return NULLOBJECT; }
+    if (!protect(st, p_resolve, 2)) { lua_settop(L, top); return failed(st); }
     bool raw = lua_toboolean(L, -1);
     lua_pop(L, 1);
     int fn = lua_gettop(L);
@@ -1439,7 +1593,7 @@ RexxMethod2(RexxObjectPtr, LuaObj_Get, CSTRING, name, CSELF, self)
     PROXY_ENTRY
     pushSelf(px);
     lua_pushstring(L, name);
-    if (!protect(st, p_resolve, 2)) return NULLOBJECT;
+    if (!protect(st, p_resolve, 2)) return failed(st);
     RexxObjectPtr r = toRexx(st, -2);
     lua_pop(L, 2);
     return r;
@@ -1452,7 +1606,7 @@ RexxMethod2(RexxObjectPtr, LuaObj_At, RexxObjectPtr, key, CSELF, self)
     int top = lua_gettop(L);
     pushSelf(px);
     if (!pushValue(st, key)) { raiseTop(st); lua_settop(L, top); return NULLOBJECT; }
-    if (!protect(st, p_gettable, 2)) { lua_settop(L, top); return NULLOBJECT; }
+    if (!protect(st, p_gettable, 2)) { lua_settop(L, top); return failed(st); }
     RexxObjectPtr r = toRexx(st, -1);
     lua_settop(L, top);
     return r;
@@ -1473,12 +1627,18 @@ RexxMethod1(RexxObjectPtr, LuaObj_String, CSELF, self)
 {
     PROXY_ENTRY
     pushSelf(px);
-    if (!protect(st, p_tostring, 1)) return NULLOBJECT;
+    if (!protect(st, p_tostring, 1)) return c->CheckCondition() ? NULLOBJECT : c->NullString();   // Ctrl-C
     size_t len;
     const char *s = lua_tolstring(L, -1, &len);
     RexxObjectPtr r = c->NewString(s, len);
     lua_pop(L, 1);
     return r;
+}
+
+// After Ctrl-C (see failed) an empty Array, so that the loop ends first
+static RexxObjectPtr emptyArray(RexxThreadContext *c)
+{
+    return c->CheckCondition() ? NULLOBJECT : (RexxObjectPtr)c->NewArray(0);
 }
 
 // do x over o: the sequence part (1..#o)
@@ -1489,14 +1649,14 @@ RexxMethod1(RexxObjectPtr, LuaObj_MakeArray, CSELF, self)
     pushSelf(px);
     int obj = lua_gettop(L);
     lua_pushvalue(L, obj);
-    if (!protect(st, p_len, 1)) { lua_settop(L, top); return NULLOBJECT; }
+    if (!protect(st, p_len, 1)) { lua_settop(L, top); return emptyArray(c); }
     lua_Integer n = lua_tointeger(L, -1);
     lua_pop(L, 1);
     RexxArrayObject a = c->NewArray(n > 0 ? (size_t)n : 0);
     for (lua_Integer i = 1; i <= n; i++) {
         lua_pushvalue(L, obj);
         lua_pushinteger(L, i);
-        if (!protect(st, p_gettable, 2)) { lua_settop(L, top); return NULLOBJECT; }
+        if (!protect(st, p_gettable, 2)) { lua_settop(L, top); return emptyArray(c); }
         c->ArrayPut(a, toRexx(st, -1), (size_t)i);
         lua_pop(L, 1);
     }
@@ -1563,7 +1723,11 @@ RexxMethod3(RexxObjectPtr, LuaObj_Operator, NAME, message, ARGLIST, args, CSELF,
     if (e->swap && !pushValue(st, c->ArrayAt(args, 1))) { raiseTop(st); lua_settop(L, top); return NULLOBJECT; }
     pushSelf(px);
     if (!unary && !e->swap && !pushValue(st, c->ArrayAt(args, 1))) { raiseTop(st); lua_settop(L, top); return NULLOBJECT; }
-    if (!protect(st, e->kind == OP_ARITH ? p_arith : p_compare, unary ? 2 : 3)) { lua_settop(L, top); return NULLOBJECT; }
+    if (!protect(st, e->kind == OP_ARITH ? p_arith : p_compare, unary ? 2 : 3)) {
+        lua_settop(L, top);                     // after Ctrl-C a comparison is false (an IF
+        RexxObjectPtr r = failed(st);           // or WHILE needs a logical value)
+        return r == c->Nil() && e->kind == OP_COMPARE ? c->False() : r;
+    }
     RexxObjectPtr r;
     if (e->kind == OP_COMPARE) r = (lua_toboolean(L, -1) != e->negate) ? c->True() : c->False();
     else r = toRexx(st, -1);
@@ -2239,9 +2403,13 @@ static RexxObjectPtr RexxEntry addressLua(RexxExitContext *c, RexxStringObject a
     std::string error;
     st->halted = false;
     int n = pcallQuiet(st, 0, error);
+    if (takeInterrupt(st) && !haltError(st, error)) {   // Ctrl-C: the HALT comes after the command
+        tc->HaltThread();
+        if (n < 0) { lua_settop(L, top); return c->WholeNumber(ADDRESS_RUNTIME); }
+    }
     if (n < 0) {
         lua_settop(L, top);
-        if (st->halted) {                       // a HALT in a callback: Error 4.1, as ~eval
+        if (haltError(st, error)) {             // a HALT in a callback: Error 4.1, as ~eval
             st->halted = false;                 // (a HALT raised here would be ignored
             c->RaiseException1(Rexx_Error_Program_interrupted_condition, c->String("HALT"));
             return NULLOBJECT;                  // when not trapped)

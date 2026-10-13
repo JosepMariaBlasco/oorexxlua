@@ -328,7 +328,14 @@ and friends) the message is always `r[2]`.
 Lua errors become SYNTAX 98.900 "Lua error: ...", with Lua's traceback. A
 Rexx condition raised inside a callback becomes a Lua error, and so it can
 come back to Rexx, nested. Messages cross whole both ways: a NUL in one
-does not cut it short.
+does not cut it short. A HALT is the exception: when it ends a callback (the
+callback's Rexx code did not trap it, and it became Error 4.1 there), and
+that error is the one that ends the Lua code (it may have caught it with
+`pcall`, and failed otherwise since), the call into Lua gives Error 4.1 too,
+not a 98.900 around it, so that the
+program stops as a HALT stops it (until 0.2.0, `~eval` and the other calls
+gave the 98.900; ADDRESS LUA already did this, *ADDRESS LUA*). A Ctrl-C while
+Lua code runs: *Ctrl-C*.
 
 Getting a field, indexing, `tostring` and `#` can all run Lua code
 (metamethods), and a Lua error outside a protected call does not come back
@@ -404,6 +411,71 @@ called (Lua cannot suspend the C call to Rexx that is in between): that fails
 with Lua's own "attempt to yield across a C-call boundary", which comes back
 as a Rexx condition. It is not worked around.
 
+## Ctrl-C
+
+A Ctrl-C stops Lua code as it stops Rexx code: the program gets a HALT
+condition, which `signal on halt` traps, and which otherwise stops it with
+Error 4.1. So do the other signals ooRexx makes a HALT of on Unix, SIGTERM
+and SIGHUP, unless they were ignored when the first state was opened (as
+`nohup` ignores SIGHUP): ooRexx does not halt on those either.
+
+ooRexx's handler marks the Rexx activation that is running halted, and the
+HALT comes at that activation's next clause boundary. While Lua code runs,
+that activation is the one that called into Lua, and it is not running
+clauses: without help, the HALT waited for the Lua code to end, possibly for
+ever, and further Ctrl-Cs were ignored, since one was already pending (on
+Windows the second one kills the process).
+
+So the bridge, as `lua.c` does, puts a handler of its own before ooRexx's
+(`sigaction` for SIGINT, SIGTERM and SIGHUP; `SetConsoleCtrlHandler` for
+`CTRL_C_EVENT`, whose handlers run last registered first), and calls
+ooRexx's from it. It marks every state whose Lua code is running
+interrupted, and sets a hook (`lua_sethook`, which may be called from a
+signal handler) on its main thread and on the thread the bridge last
+entered or left (a coroutine that called back into Rexx), a hook that raises
+a Lua error at every instruction, call and return, so that no `pcall` in the
+Lua code can keep it going. Every call into Lua that returns while its state
+is interrupted makes the HALT of the Rexx code that called pending itself
+(`HaltThread`): if the signal came as a callback was ending, ooRexx's mark
+fell on the callback's activation, which was about to go, and the HALT was
+lost (1 in 25 in a stress test). A HALT already pending is not made twice.
+The state stays interrupted until the outermost call into it returns: a call
+from a callback (a nested `~eval`) must not let the Lua code around it go
+on, even when that code catches the callback's HALT with `pcall`. Then the
+main thread's hook goes; a coroutine's takes itself off when it next runs
+(the coroutine may be gone by then). A call that starts with no other call
+of its state running clears a mark left by a signal that came as the last
+one ended (ooRexx's HALT deals with that one). No hook is set until a
+signal comes: in Lua 5.4 any hook sends every instruction through the slow
+path (a loop took 2.4 times as long).
+
+The call into Lua then returns `.nil` (an empty string as `string`, an
+empty Array as `makeArray` for `do over`, `.false` from a comparison), so
+that the clause that called ends normally and the HALT comes at its
+boundary: a call that returned no value would raise Error 91 first. A value
+the clause goes on using can still raise an error before that boundary
+(`x = o~field + 1` gives Error 97.1, `.nil` does not understand `+`), and
+that error, not the HALT, then ends the program. ADDRESS LUA sets RC 1 with no ERROR
+condition, and the HALT comes after the command. If the signal lands while a
+callback's Rexx code runs, ooRexx's HALT is raised there, and the call gives
+Error 4.1 (*Errors*).
+
+The handler is installed when the first state is opened, once per process,
+and only where Rexx is the host: not in an interpreter instance that the Lua
+module made (*Lua → ooRexx*), where the host, LuaTeX say, has its own idea
+of a Ctrl-C. Closing a state closes its `lua_State`, but the bridge's
+record of it (`State` in `rexxlua.cpp`) is never freed, since proxies may
+still point to it; so the handler can walk a list of all of them, which only
+grows (a compare-and-swap), and what it reads of a state is atomic.
+
+**Limit.** The hook goes on the main thread and the one the bridge last
+entered or left. A loop inside a coroutine that makes no callbacks is not
+stopped, as in `lua.c`; nor one in a coroutine that resumed the coroutine
+that called back.
+`Interrupt.testGroup` tests the rest, with a Ctrl-C that the Lua code sends
+itself (`interrupt()` of the test C module: `raise(SIGINT)`; on Windows, a
+console of its own and `GenerateConsoleCtrlEvent`).
+
 ## ADDRESS LUA
 
 `LUA` is an `ADDRESS` environment: its commands are Lua code, run in `.lua`
@@ -444,7 +516,8 @@ is a success (RC 0, `result[2]` is the message). With an error,
 callback that the command makes is a Lua error, and so an ERROR, except a
 HALT: that one is SYNTAX 4.1 after the command, which stops the program
 unless trapped, as under `~eval` (a HALT condition raised by a command
-handler is ignored when not trapped, so it would be lost). A NUL in Lua's
+handler is ignored when not trapped, so it would be lost). A Ctrl-C while
+the command runs: RC 1 and no condition, then the HALT (*Ctrl-C*). A NUL in Lua's
 message is kept. Commands
 do not set RESULT in the language; this environment does, and
 documents it.
