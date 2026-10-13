@@ -147,7 +147,7 @@ trapped:
   self~assertEquals(31, r[2])
   self~assertEquals(-35, r[3])
   self~assertSame(.nil, r[4], "not a numeral: nil")
-  self~assertEquals("x", r[5], "a failed number read takes the blank, not the x"
+  self~assertEquals("x", r[5], "a failed number read takes the blank, not the x")
   self~assertEquals('0a'x || "ab", r[6], "counts cross lines")
   self~assertEquals("", r[7], '0: "" while there is more')
   self~assertEquals("cdef" || '0a'x || "rest" || '0a'x, r[8])
