@@ -2,7 +2,9 @@
 /*----------------------------------------------------------------------------*/
 /* AddressWith.testGroup: ADDRESS LUA ... WITH (docs/design.md, *ADDRESS      */
 /* LUA*, *WITH*): print, io.write and io.stdout write to OUTPUT, io.stderr to */
-/* ERROR, io.read, io.lines and io.stdin read INPUT, while the command runs.  */
+/* ERROR, io.read, io.lines and io.stdin read INPUT, while the command runs;  */
+/* io.output, io.input and io.type know the stand-ins, and io.write, io.read  */
+/* and io.lines follow Lua's default files.                                   */
 /* Needs an ooRexx with the fixes in patches/oorexx/: tests/run.sh runs it    */
 /* only with ORXLUA_OOREXX_FIXES=1.                                           */
 /*                                                                            */
@@ -27,17 +29,21 @@ return testResult
 -- the originals, to compare with after each command
 ::method setUp
   address lua 'withOrig = {print = print, write = io.write, read = io.read, lines = io.lines,' -
-              'stdin = io.stdin, stdout = io.stdout, stderr = io.stderr}'
+              'stdin = io.stdin, stdout = io.stdout, stderr = io.stderr,' -
+              'output = io.output, input = io.input, type = io.type, close = io.close}'
 
 ::method tearDown
   address lua 'print, io.write, io.read, io.lines = withOrig.print, withOrig.write, withOrig.read, withOrig.lines;' -
-              'io.stdin, io.stdout, io.stderr = withOrig.stdin, withOrig.stdout, withOrig.stderr; withOrig = nil'
+              'io.stdin, io.stdout, io.stderr = withOrig.stdin, withOrig.stdout, withOrig.stderr;' -
+              'io.output, io.input, io.type, io.close = withOrig.output, withOrig.input, withOrig.type, withOrig.close;' -
+              'io.output(io.stdout); io.input(io.stdin); withOrig = nil'
 
 ::method restored
   expose rc
   address lua 'return print == withOrig.print and io.write == withOrig.write and io.read == withOrig.read' -
               'and io.lines == withOrig.lines and io.stdin == withOrig.stdin and io.stdout == withOrig.stdout' -
-              'and io.stderr == withOrig.stderr'
+              'and io.stderr == withOrig.stderr and io.output == withOrig.output and io.input == withOrig.input' -
+              'and io.type == withOrig.type and io.close == withOrig.close'
   return result
 
 ::method test_print_to_output_stem
@@ -213,14 +219,126 @@ trapped:
 
 ::method test_stream_methods
   address lua 'local f = io.stdout return f:flush() == f, f:setvbuf("no"), select(2, f:close()), select(2, f:seek()),' -
-              'tostring(f), tostring(io.stderr), io.type(f)' with output stem out. error stem err.; r = result
+              'tostring(f), tostring(io.stderr), io.type(f), io.type(withOrig.stdout), io.type(42)' -
+    with output stem out. error stem err.; r = result
   self~assertEquals(.true, r[1])
   self~assertEquals(.true, r[2])
   self~assertEquals("cannot close standard file", r[3])
   self~assertEquals("cannot seek a redirected standard file", r[4])
   self~assertEquals("file (ADDRESS LUA output)", r[5])
   self~assertEquals("file (ADDRESS LUA error)", r[6])
-  self~assertSame(.nil, r[7], "not a file of Lua's")
+  self~assertEquals("file", r[7], "io.type knows the stand-ins")
+  self~assertEquals("file", r[8], "and Lua's files")
+  self~assertSame(.nil, r[9])
+
+::method test_io_type_of_a_stand_in_whose_command_ended
+  address lua 'withKept = io.stdout' with output stem out.
+  address lua 'return io.type(withKept)' with output stem out.; r = result
+  self~assertEquals("closed file", r)
+  address lua 'return io.type(withKept)'; r = result
+  self~assertSame(.nil, r, "Lua's io.type, outside a command")
+  address lua 'withKept = nil'
+
+::method test_io_output_gives_the_stand_in
+  address lua 'return io.output() == io.stdout, io.output(io.stdout) == io.stdout, io.write("x") == io.stdout' -
+    with output stem out.; r = result
+  self~assertEquals(.true, r[1])
+  self~assertEquals(.true, r[2])
+  self~assertEquals(.true, r[3])
+  self~assertEquals("x", out.1)
+
+::method test_io_output_to_a_file
+  file = SysTempFileName("withtest???")
+  .lua~global("_G")["withFile"] = file
+  address lua 'io.output(withFile); io.write("to the file\n"); print("printed"); io.output():close();' -
+              'io.output(io.stdout); io.write("back\n")' with output stem out.
+  self~assertEquals(0, rc)
+  self~assertEquals(2, out.0)
+  self~assertEquals("printed", out.1, "print writes to the standard output")
+  self~assertEquals("back", out.2)
+  self~assertEquals("to the file", linein(file))
+  call stream file, "c", "close"
+  self~assertTrue(self~restored)
+  address lua 'return io.output() == io.stdout'; r = result
+  self~assertTrue(r, "Lua's default output is the real one again")
+  address lua 'withFile = nil'
+  call SysFileDelete file
+
+::method test_io_output_to_stderr
+  address lua 'io.output(io.stderr); io.write("e\n"); io.output(io.stdout); io.write("o\n")' -
+    with output stem out. error stem err.
+  self~assertEquals(1, out.0)
+  self~assertEquals("o", out.1)
+  self~assertEquals(1, err.0)
+  self~assertEquals("e", err.1)
+  address lua 'io.output(io.stderr); io.write("only e\n"); io.output(withOrig.stdout)' with error stem err.
+  self~assertEquals(1, err.0)
+  self~assertEquals("only e", err.1)
+
+::method test_io_close
+  address lua 'return select(2, io.close(io.stdout)), select(2, io.close())' with output stem out.; r = result
+  self~assertEquals("cannot close standard file", r[1])
+  self~assertEquals("cannot close standard file", r[2])
+
+::method test_input_only_keeps_luas_output
+  in.0 = 0
+  address lua 'return io.write == withOrig.write, io.output == withOrig.output, io.type ~= withOrig.type' -
+    with input stem in.; r = result
+  self~assertEquals(.true, r[1])
+  self~assertEquals(.true, r[2])
+  self~assertEquals(.true, r[3])
+  self~assertTrue(self~restored)
+
+::method test_a_sandboxed_io_gets_nothing_new
+  address lua 'withIo = io; io = {write = withIo.write, stdout = withIo.stdout}'
+  address lua 'local k = {} for n in pairs(io) do k[#k + 1] = n end table.sort(k) io.write("w\n")' -
+              'return table.concat(k, ",")' with output stem out.; r = result
+  address lua 'local same = io.write == withIo.write; io = withIo; withIo = nil; return same'; s = result
+  self~assertEquals("stdout,write", r)
+  self~assertEquals(1, out.0)
+  self~assertEquals("w", out.1)
+  self~assertTrue(s, "restored")
+
+::method test_a_delegated_error_says_where
+  trace off
+  call on error name trapped
+  self~additional = ""
+  address lua 'io.output(withOrig.stderr); io.write({})' with output stem out.
+  self~assertEquals(1, rc)
+  self~assertTrue(self~additional~pos("ADDRESS LUA:1: bad argument #1 to 'write'") > 0, self~additional)
+  return
+trapped:
+  self~additional = condition('A')
+  return
+
+::method test_io_input_from_a_file
+  file = SysTempFileName("withtest???")
+  call lineout file, "in the file"; call lineout file
+  in.0 = 1; in.1 = "redirected"
+  .lua~global("_G")["withFile"] = file
+  address lua 'io.input(withFile); local a = io.read(); local n = 0 for l in io.lines() do n = n + 1 end;' -
+              'io.input():close(); local same = io.input(io.stdin) == io.stdin return a, n, io.read(), same' -
+    with input stem in.; r = result
+  self~assertEquals(0, rc)
+  self~assertEquals("in the file", r[1])
+  self~assertEquals(0, r[2], "io.lines() reads the default input")
+  self~assertEquals("redirected", r[3])
+  self~assertEquals(.true, r[4])
+  address lua 'withFile = nil'
+  call SysFileDelete file
+
+::method test_a_default_output_set_before_stays
+  file = SysTempFileName("withtest???")
+  .lua~global("_G")["withFile"] = file
+  address lua 'io.output(withFile)'
+  address lua 'io.write("to the file\n"); print("printed")' with output stem out.
+  address lua 'io.output():close(); io.output(io.stdout)'
+  self~assertEquals(1, out.0)
+  self~assertEquals("printed", out.1)
+  self~assertEquals("to the file", linein(file), "as a real redirection of the standard output")
+  call stream file, "c", "close"
+  address lua 'withFile = nil'
+  call SysFileDelete file
 
 ::method test_restored_after_an_error
   trace off

@@ -2533,8 +2533,9 @@ RexxMethod0(logical_t, Lua_AdoptNext)
 
 /*
  * While a command with redirection runs, Lua functions of the bridge stand
- * in for print, io.write, io.stdout (OUTPUT), io.stderr (ERROR), io.read,
- * io.lines and io.stdin (INPUT), only for what is redirected; afterwards each
+ * in for print, io.stdout (OUTPUT), io.stderr (ERROR), io.write, io.output
+ * (either), io.read, io.lines, io.input and io.stdin (INPUT), and io.type and
+ * io.close (any), as what is redirected asks (rd_install); afterwards each
  * name gets its value back, unless the command changed it.  The stand-ins
  * carry the number of their command: called after it ended (kept in a
  * variable), they find no Redirect and raise an error.  Output goes through
@@ -2626,13 +2627,142 @@ static int rd_print(lua_State *L)                   // print(...)
     return 0;
 }
 
-static int rd_iowrite(lua_State *L)                 // io.write(...): returns io.stdout
+// The functions of io that stand in (io.write, io.read, io.lines, io.output,
+// io.input, io.type) have two upvalues: the command's number and a table,
+// ctx, with Lua's own functions (by name: "write", "read"...), the real
+// standard files ("rIn", "rOut", "rErr") and the stand-ins of those that are
+// redirected ("sIn", "sOut", "sErr").  Lua's default files decide: where the
+// default output is the real io.stdout (io.stderr) and that is redirected,
+// io.write goes to the redirection; elsewhere, to Lua's io.write.  So
+// io.output("log.txt") works as it does in Lua.
+
+static void rdCtx(lua_State *L, const char *key)            // pushes ctx[key]
+{
+    lua_pushstring(L, key);
+    lua_rawget(L, lua_upvalueindex(2));
+}
+
+// Lua's function name (in ctx), with the arguments on the stack: its
+// results.  Its errors are Lua's, but called from here Lua cannot name it
+// or say where it was called from: "bad argument #1 to '?'" gets both back.
+static int rdDelegate(lua_State *L, const char *name)
+{
+    rdCtx(L, name);
+    if (!lua_isfunction(L, -1)) return luaL_error(L, "io.%s is not available", name);
+    lua_insert(L, 1);
+    if (lua_pcall(L, lua_gettop(L) - 1, LUA_MULTRET, 0) != LUA_OK) {
+        const char *m = lua_type(L, -1) == LUA_TSTRING ? lua_tostring(L, -1) : NULL;
+        if (m != NULL && strstr(m, "'?'") != NULL) {
+            char fn[32];
+            snprintf(fn, sizeof fn, "'%s'", name);
+            luaL_where(L, 1);
+            luaL_gsub(L, m, "'?'", fn);
+            lua_concat(L, 2);
+        }
+        return lua_error(L);
+    }
+    return lua_gettop(L);
+}
+
+// Which stand-in Lua's default output (input) is now: 1 io.stdout's, 2
+// io.stderr's, 3 io.stdin's, 0 none (a file of Lua's).  Without Lua's
+// io.output (io.input), the stand-in of the redirected stream.
+static int rdCurrent(lua_State *L, bool input)
+{
+    luaL_checkstack(L, 4, NULL);
+    rdCtx(L, input ? "input" : "output");
+    if (!lua_isfunction(L, -1)) {
+        lua_pop(L, 1);
+        rdCtx(L, input ? "sIn" : "sOut");
+        int k = lua_isnil(L, -1) ? 0 : input ? 3 : 1;
+        lua_pop(L, 1);
+        return k;
+    }
+    lua_call(L, 0, 1);
+    static const char *const real[] = {"rOut", "rErr", "rIn"}, *const sub[] = {"sOut", "sErr", "sIn"};
+    int k = 0;
+    for (int i = input ? 2 : 0; i < (input ? 3 : 2) && k == 0; i++) {
+        rdCtx(L, sub[i]);
+        rdCtx(L, real[i]);
+        if (!lua_isnil(L, -2) && !lua_isnil(L, -1) && lua_rawequal(L, -1, -3)) k = i + 1;
+        lua_pop(L, 2);
+    }
+    lua_pop(L, 1);
+    return k;
+}
+
+static int rd_iowrite(lua_State *L)                 // io.write(...): returns the file
 {
     State *st;
     Redirect *r = redirectOf(L, &st);
-    rdWrite(L, st, r, 1, false);
-    lua_pushvalue(L, lua_upvalueindex(2));
+    int k = rdCurrent(L, false);
+    if (k == 0) return rdDelegate(L, "write");
+    rdWrite(L, st, r, 1, k == 2);
+    rdCtx(L, k == 2 ? "sErr" : "sOut");
     return 1;
+}
+
+// The value at idx: a stand-in of this command becomes the real file it
+// stands for (toReal), or a real file whose stream is redirected becomes its
+// stand-in (!toReal); anything else stays
+static void rdMap(lua_State *L, int idx, bool toReal)
+{
+    static const char *const sub[] = {"sIn", "sOut", "sErr"}, *const real[] = {"rIn", "rOut", "rErr"};
+    idx = lua_absindex(L, idx);
+    luaL_checkstack(L, 3, NULL);
+    for (int i = 0; i < 3; i++) {
+        rdCtx(L, sub[i]);                           // not redirected: no stand-in
+        rdCtx(L, real[i]);
+        if (!lua_isnil(L, -2) && !lua_isnil(L, -1) && lua_rawequal(L, toReal ? -2 : -1, idx)) {
+            lua_pushvalue(L, toReal ? -1 : -2);
+            lua_replace(L, idx);
+            lua_pop(L, 2);
+            return;
+        }
+        lua_pop(L, 2);
+    }
+}
+
+// io.output(file), io.input(file): Lua's, with the stand-ins as the real
+// files they stand for, both ways
+static int rdSetDefault(lua_State *L, const char *name)
+{
+    State *st;
+    redirectOf(L, &st);
+    if (!lua_isnoneornil(L, 1)) { lua_settop(L, 1); rdMap(L, 1, true); }
+    else lua_settop(L, 0);
+    rdDelegate(L, name);
+    lua_settop(L, 1);
+    rdMap(L, 1, false);
+    return 1;
+}
+
+static int rd_iooutput(lua_State *L) { return rdSetDefault(L, "output"); }
+static int rd_ioinput(lua_State *L) { return rdSetDefault(L, "input"); }
+
+static int rd_ioclose(lua_State *L)                 // io.close(file): Lua's, with the real file
+{
+    if (!lua_isnoneornil(L, 1)) { lua_settop(L, 1); rdMap(L, 1, true); }
+    return rdDelegate(L, "close");
+}
+
+static char rdMark;                                 // key, in a stand-in's metatable, of its command's number
+
+static int rd_iotype(lua_State *L)                  // io.type(x): "file", "closed file" for a stand-in
+{
+    if (lua_istable(L, 1) && lua_getmetatable(L, 1)) {
+        lua_rawgetp(L, -1, &rdMark);
+        if (lua_isinteger(L, -1)) {
+            lua_Integer id = lua_tointeger(L, -1);
+            State *st = stateOf(L);
+            Redirect *r = NULL;
+            if (st != NULL) for (r = st->redirect; r != NULL && r->id != id; r = r->prev) {}
+            lua_pushstring(L, r != NULL ? "file" : "closed file");
+            return 1;
+        }
+        lua_pop(L, 2);
+    }
+    return rdDelegate(L, "type");
 }
 
 static int rd_fwrite(lua_State *L)                  // f:write(...): returns f
@@ -2785,6 +2915,7 @@ static int rd_ioread(lua_State *L)                  // io.read(...)
 {
     State *st;
     Redirect *r = redirectOf(L, &st);
+    if (rdCurrent(L, true) == 0) return rdDelegate(L, "read");
     return rdRead(L, st, r, 1);
 }
 
@@ -2824,12 +2955,9 @@ static int rdLines(lua_State *L, int first)
 
 static int rd_iolines(lua_State *L)                 // io.lines(file, ...): Lua's with a file
 {
-    if (!lua_isnoneornil(L, 1)) {
-        lua_pushvalue(L, lua_upvalueindex(2));
-        lua_insert(L, 1);
-        lua_call(L, lua_gettop(L) - 1, LUA_MULTRET);
-        return lua_gettop(L);
-    }
+    State *st;
+    redirectOf(L, &st);
+    if (!lua_isnoneornil(L, 1) || rdCurrent(L, true) == 0) return rdDelegate(L, "lines");
     return rdLines(L, 2);
 }
 
@@ -2896,6 +3024,8 @@ static void rdPushFile(lua_State *L, int idIdx, int kind)
     lua_setfield(L, -2, "__tostring");
     lua_pushliteral(L, "ADDRESS LUA stream");
     lua_setfield(L, -2, "__name");
+    lua_pushvalue(L, idIdx);                    // for io.type
+    lua_rawsetp(L, -2, &rdMark);
     lua_setmetatable(L, -2);
 }
 
@@ -2914,6 +3044,21 @@ static void rdReplace(lua_State *L, int t, const char *key)
     lua_rawset(L, t);
 }
 
+// io[name] = a closure of f(L, the command's number at 4, ctx at 5), if
+// io[name] is a function (a sandbox's io may not have it)
+static void rdIoFunction(lua_State *L, const char *name, lua_CFunction f)
+{
+    lua_pushstring(L, name);
+    lua_rawget(L, 3);
+    bool is = lua_isfunction(L, -1);
+    lua_pop(L, 1);
+    if (!is) return;
+    lua_pushvalue(L, 4);
+    lua_pushvalue(L, 5);
+    lua_pushcclosure(L, f, 2);
+    rdReplace(L, 3, name);
+}
+
 // Puts the stand-ins of st->redirect in place (raw accesses: a strict _G's
 // metamethods do not run), each recorded in the list at 1 (rd_newList) for
 // rdRestore as it goes.  In a protected call: it allocates.
@@ -2924,39 +3069,45 @@ static int rd_install(lua_State *L)
     lua_rawgeti(L, LUA_REGISTRYINDEX, LUA_RIDX_GLOBALS);    // 2: _G
     lua_pushliteral(L, "io");
     lua_rawget(L, 2);                                       // 3: io (if a table)
-    bool io = lua_istable(L, 3);
     lua_pushinteger(L, r->id);                              // 4: the command's number
     if (r->out) {
-        rdPushFile(L, 4, 1);                                // 5: io.stdout's stand-in
         lua_pushvalue(L, 4);
         lua_pushcclosure(L, rd_print, 1);
         rdReplace(L, 2, "print");
-        if (io) {
-            lua_pushvalue(L, 4);
-            lua_pushvalue(L, 5);
-            lua_pushcclosure(L, rd_iowrite, 2);
-            rdReplace(L, 3, "write");
-            lua_pushvalue(L, 5);
-            rdReplace(L, 3, "stdout");
-        }
-        lua_pop(L, 1);
     }
-    if (r->err && io) {
-        rdPushFile(L, 4, 2);
-        rdReplace(L, 3, "stderr");
+    if (!lua_istable(L, 3)) { lua_settop(L, 1); return 1; }
+    lua_newtable(L);                                        // 5: ctx (rdCtx)
+    static const char *const saved[][2] = {
+        {"write", "write"}, {"read", "read"}, {"lines", "lines"}, {"output", "output"},
+        {"input", "input"}, {"type", "type"}, {"close", "close"}, {"stdin", "rIn"}, {"stdout", "rOut"}, {"stderr", "rErr"}};
+    for (const auto &k : saved) {
+        lua_pushstring(L, k[1]);
+        lua_pushstring(L, k[0]);
+        lua_rawget(L, 3);
+        lua_rawset(L, 5);
     }
-    if (r->in && io) {
-        rdPushFile(L, 4, 0);
-        rdReplace(L, 3, "stdin");
-        lua_pushvalue(L, 4);
-        lua_pushcclosure(L, rd_ioread, 1);
-        rdReplace(L, 3, "read");
-        lua_pushvalue(L, 4);
-        lua_pushliteral(L, "lines");
-        lua_rawget(L, 3);                                   // Lua's, for io.lines(file)
-        lua_pushcclosure(L, rd_iolines, 2);
-        rdReplace(L, 3, "lines");
+    static const struct { bool Redirect::*on; int kind; const char *sub, *name; } files[] = {
+        {&Redirect::in, 0, "sIn", "stdin"}, {&Redirect::out, 1, "sOut", "stdout"},
+        {&Redirect::err, 2, "sErr", "stderr"}};
+    for (const auto &f : files) {
+        if (!(r->*f.on)) continue;
+        rdPushFile(L, 4, f.kind);
+        lua_pushstring(L, f.sub);
+        lua_pushvalue(L, -2);
+        lua_rawset(L, 5);
+        rdReplace(L, 3, f.name);
     }
+    if (r->out || r->err) {
+        rdIoFunction(L, "write", rd_iowrite);
+        rdIoFunction(L, "output", rd_iooutput);
+    }
+    if (r->in) {
+        rdIoFunction(L, "read", rd_ioread);
+        rdIoFunction(L, "lines", rd_iolines);
+        rdIoFunction(L, "input", rd_ioinput);
+    }
+    rdIoFunction(L, "type", rd_iotype);
+    rdIoFunction(L, "close", rd_ioclose);
     lua_settop(L, 1);
     return 1;
 }

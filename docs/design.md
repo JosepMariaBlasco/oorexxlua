@@ -568,16 +568,41 @@ While a command with `WITH` runs, Lua functions of the bridge stand in, in
 
 | Redirected | Stand-ins |
 |---|---|
-| `OUTPUT` | `print`, `io.write`, `io.stdout` |
+| `OUTPUT` | `print`, `io.stdout` |
 | `ERROR` | `io.stderr` |
-| `INPUT` | `io.read`, `io.lines` (with no file name; with one, it is Lua's), `io.stdin` |
+| `OUTPUT` or `ERROR` | `io.write`, `io.output` |
+| `INPUT` | `io.stdin`, `io.read`, `io.lines`, `io.input` |
+| any | `io.type`, `io.close` |
 
 `NORMAL` is not redirected. The stand-ins of the files are tables with the
 methods that make sense: `read` and `lines` for input, `write` for output
 and error, and `flush` (returns the file), `setvbuf` (`true`), `close` and
-`seek` (`nil` and a message) for all. `io.type` says `nil` of them, and
-`io.input()` and `io.output()` are still Lua's own files, which a command
-that wants the redirection does not use.
+`seek` (`nil` and a message) for all.
+
+The redirection is that of the standard files, as in a process whose
+standard output is redirected: **Lua's default files decide**. Where the
+default output (`io.output()`) is the real `io.stdout`, and the output is
+redirected, `io.write` writes to the redirection; where it is the real
+`io.stderr`, and the error is, to the error's; anywhere else, Lua's
+`io.write` writes to that file. `io.read` and `io.lines()` (with no file
+name; with one, they are Lua's) do the same with the default input and
+`io.stdin`. `io.output` and `io.input` are Lua's, with each stand-in as the
+real file it stands for, both ways: `io.output()` is `io.stdout`'s stand-in
+while the default output is the real `io.stdout`, `io.output("log.txt")`
+makes `io.write` write to that file, as in Lua, and `io.output(io.stdout)`
+or `io.output(io.stderr)` brings the redirection back. So a default output
+that was a file before the command is still that file during it (`print`,
+which writes to the standard output, is redirected all the same), and what
+the command leaves as the default files stays after it, as without `WITH`.
+The real files are the values of `io.stdout`, `io.stderr` and `io.stdin`
+when the command starts: if they are not Lua's own (code that put a table
+of its own there), `io.write` writes to Lua's default output. `io.close`
+is Lua's with each stand-in as its real file (`nil` and "cannot close
+standard file"). During a command, `io.type` says `"file"` of a stand-in,
+and `"closed file"` of one whose command has ended; outside, Lua's says
+`nil`. An `io` function that is not in `io` (a sandbox's) gets no stand-in.
+Lua's own functions called through a stand-in raise their errors as when
+called directly ("ADDRESS LUA:1: bad argument #1 to 'write'").
 
 **Output** goes through the redirector's `WriteOutputBuffer` and
 `WriteErrorBuffer`, which cut it into lines at its line ends and join a
@@ -607,9 +632,12 @@ its own) each writes to its own command's target. A Rexx condition that the
 target or source raises (a stream's `lineout` that fails, say) is a Lua
 error, so the command's ERROR.
 
-Only `.lua`'s Lua sees the redirection: code that kept `print` or
-`io.write` in a local before the command, or writes to `io.output()`,
-writes where it always did, and other `.LuaState`s are not touched. Every
+Only `.lua`'s Lua sees the redirection: code that kept `print`, `io.write`
+or the real `io.stdout` in a local before the command, and code in C that
+writes to the process's standard output, write where they always did, and
+other `.LuaState`s are not touched. (Redirecting the real `FILE*` has no
+portable way: `fopencookie` on Linux, `funopen` on macOS, nothing on
+Windows short of a pipe and a thread.) Every
 stand-in runs inside the command, under the state's lock (*Threads*), in
 the command's thread.
 
