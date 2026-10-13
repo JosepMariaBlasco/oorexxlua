@@ -473,8 +473,9 @@ entered or left. A loop inside a coroutine that makes no callbacks is not
 stopped, as in `lua.c`; nor one in a coroutine that resumed the coroutine
 that called back.
 `Interrupt.testGroup` tests the rest, with a Ctrl-C that the Lua code sends
-itself (`interrupt()` of the test C module: `raise(SIGINT)`; on Windows, a
-console of its own and `GenerateConsoleCtrlEvent`).
+itself (`interrupt()` of the test C module: `raise(SIGINT)`; on Windows
+`GenerateConsoleCtrlEvent`, which reaches every process of the console, so
+`tests/run.sh` runs that group in a console of its own, with `start`).
 
 ## ADDRESS LUA
 

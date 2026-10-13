@@ -47,6 +47,15 @@ for t in $TESTS; do
         echo "FAIL lua$V $t: no standalone lua $V (scripts/setup-lua.sh $V, or LUA_EXE)"; status=1; continue
       fi
       (cd "$OUT" && timeout -s KILL "${TIMEOUT:-300}" "$LUA_EXE" "$(native_path "$HERE/lua/$t")") > "$log" 2>&1 ;;
+    Interrupt.testGroup)
+      if [ "$OS" = Windows ]; then
+        # its Ctrl-C goes to every process of the console: a console of its own
+        (cd "$OUT" && timeout -s KILL "${TIMEOUT:-300}" cmd //c start '""' //wait //min cmd //c \
+          "rexx $(native_path "$UNIT/testOORexx.rex") -f $(native_path "$HERE/rexx/$t") -O -U > $(native_path "$log") 2>&1")
+      else
+        (cd "$OUT" && timeout -s KILL "${TIMEOUT:-300}" rexx "$(native_path "$UNIT/testOORexx.rex")" \
+            -f "$(native_path "$HERE/rexx/$t")" -O -U) > "$log" 2>&1
+      fi ;;
     *)
       (cd "$OUT" && timeout -s KILL "${TIMEOUT:-300}" rexx "$(native_path "$UNIT/testOORexx.rex")" \
           -f "$(native_path "$HERE/rexx/$t")" -O -U) > "$log" 2>&1 ;;

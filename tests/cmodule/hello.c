@@ -17,14 +17,14 @@ static int hi(lua_State *L)
 }
 
 /* interrupt(): a Ctrl-C for this process, as if typed at its terminal.  On
-   Unix a SIGINT, handled before raise returns.  On Windows a CTRL_C_EVENT,
-   which goes to every process of a console: so first a console of its own;
-   the handlers run on a thread of their own, so then a wait for them.      */
+   Unix a SIGINT, handled before raise returns.  On Windows a CTRL_C_EVENT to
+   every process of its console: tests/run.sh runs Interrupt.testGroup in a
+   console of its own (FreeConsole and AllocConsole here let the event reach
+   the console of the CI's shell too).  The handlers run on a thread of their
+   own: so then a wait for them.                                             */
 static int interrupt(lua_State *L)
 {
 #ifdef _WIN32
-    FreeConsole();
-    if (!AllocConsole()) return luaL_error(L, "interrupt: AllocConsole failed (%d)", (int)GetLastError());
     SetConsoleCtrlHandler(NULL, FALSE);         /* Ctrl-C not ignored */
     if (!GenerateConsoleCtrlEvent(CTRL_C_EVENT, 0))
         return luaL_error(L, "interrupt: GenerateConsoleCtrlEvent failed (%d)", (int)GetLastError());
