@@ -69,10 +69,18 @@ else
   install_pkg cmake cmake cmake cmake
   log "build -> $BUILD, install -> $INST"
   GEN=(); [ $OS = Windows ] && GEN=(-G "NMake Makefiles")
-  cmake "${GEN[@]}" -S "$(NATIVE "$SRC")" -B "$(NATIVE "$BUILD")" -DCMAKE_BUILD_TYPE=Release \
+  cmake ${GEN[@]+"${GEN[@]}"} -S "$(NATIVE "$SRC")" -B "$(NATIVE "$BUILD")" -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX="$(NATIVE "$INST")" >&2
   cmake --build "$(NATIVE "$BUILD")" -j "$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)" >&2
   cmake --install "$(NATIVE "$BUILD")" >&2
+  if [ $OS = Windows ]; then
+    # the Windows install is flat (the programs and DLLs at the top, headers
+    # and import libraries in api/): into the layout of the portable builds,
+    # which build.sh expects
+    mkdir -p "$INST/bin" "$INST/include" "$INST/lib"
+    find "$INST" -maxdepth 1 -type f -exec mv {} "$INST/bin/" \;
+    mv "$INST"/api/*.h "$INST/include/"; mv "$INST"/api/*.lib "$INST/lib/"
+  fi
   stamp > "$STAMP"
 fi
 [ -f "$INST/include/oorexxapi.h" ] || { log "no $INST/include/oorexxapi.h"; exit 2; }
