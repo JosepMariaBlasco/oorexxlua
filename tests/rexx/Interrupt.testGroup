@@ -56,6 +56,36 @@ halt:
   self~assertFalse(self~halts('return 3'), "no stray HALT")
   self~assertEquals(3, .local~interruptValue)
 
+::method test_a_loop_in_a_coroutine
+  self~assertTrue(self~halts('coroutine.wrap(function() hello.interrupt(); while true do end end)()'))
+  self~assertTrue(self~halts('coroutine.resume(coroutine.create(function() hello.interrupt(); while true do end end))'))
+
+::method test_coroutines_resumed_by_coroutines
+  -- every one in the chain loops: all of them are stopped
+  self~assertTrue(self~halts('local inner = coroutine.create(function() hello.interrupt(); while true do end end)' -
+    || '; local mid = coroutine.create(function() while true do coroutine.resume(inner) end end)' -
+    || '; local outer = coroutine.wrap(function() while true do coroutine.resume(mid) end end)' -
+    || '; while true do pcall(outer) end'))
+
+::method test_a_loop_deep_in_coroutines
+  -- 40 nested wraps (more than the stack of coroutines holds): the innermost,
+  -- the one looping, is always hooked
+  self~assertTrue(self~halts('local function nest(k) if k == 0 then hello.interrupt(); while true do end end' -
+    || '; return coroutine.wrap(function() return nest(k - 1) end)() end; return nest(40)'))
+
+::method test_coroutines_as_before
+  -- resume and wrap are the bridge's (*Ctrl-C*): Lua's behaviour, as it was
+  self~assertEquals("true 2|false eval:1: boom 5|false cannot resume dead coroutine", -
+    .lua~eval('local co = coroutine.create(function(a) local b = coroutine.yield(a + 1); error("boom " .. b) end)' -
+    || '; local r = {coroutine.resume(co, 1)}; local r2 = {coroutine.resume(co, 5)}; local r3 = {coroutine.resume(co)}' -
+    || '; return tostring(r[1]) .. " " .. r[2] .. "|" .. tostring(r2[1]) .. " " .. r2[2] .. "|" .. tostring(r3[1]) .. " " .. r3[2]'))
+  self~assertEquals(55, .lua~eval('local function gen(n) return coroutine.wrap(function() for i = 1, n do coroutine.yield(i) end end) end' -
+    || '; local s = 0; for v in gen(10) do s = s + v end; return s'))
+  self~assertEquals(7, .lua~eval('local f = coroutine.wrap(function() error({code = 7}) end); local ok, e = pcall(f); return e.code'))
+  self~assertTrue(.lua~eval('local ok, e = pcall(coroutine.resume, 42); return e')~pos("'coroutine.resume'") > 0)
+  self~assertEquals(150, .lua~eval('local function nest(k) if k == 0 then return 0 end' -
+    || '; return coroutine.wrap(function() return 1 + nest(k - 1) end)() end; return nest(150)'), "as deep as before")
+
 ::method test_another_state
   s = .LuaState~new
   s~eval('hello = require "hello"')

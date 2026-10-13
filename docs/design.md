@@ -409,7 +409,10 @@ Lua) uses that thread's stack, not the main one's (`USE_THREAD` in
 wrong arguments and, in a long loop, overflowed the main stack. A coroutine still cannot yield from inside Rexx code it has
 called (Lua cannot suspend the C call to Rexx that is in between): that fails
 with Lua's own "attempt to yield across a C-call boundary", which comes back
-as a Rexx condition. It is not worked around.
+as a Rexx condition. It is not worked around. In the states the bridge opens,
+`coroutine.resume` and `coroutine.wrap` (except with Lua 5.4.0 to 5.4.3) are
+the bridge's own copies of Lua's, so that a Ctrl-C stops a loop inside a
+coroutine (*Ctrl-C*).
 
 ## Ctrl-C
 
@@ -468,10 +471,26 @@ record of it (`State` in `rexxlua.cpp`) is never freed, since proxies may
 still point to it; so the handler can walk a list of all of them, which only
 grows (a compare-and-swap), and what it reads of a state is atomic.
 
-**Limit.** The hook goes on the main thread and the one the bridge last
-entered or left. A loop inside a coroutine that makes no callbacks is not
-stopped, as in `lua.c`; nor one in a coroutine that resumed the coroutine
-that called back.
+**Coroutines.** A loop inside a coroutine runs on that coroutine's Lua
+thread, which the hook must be on too (`lua.c` does not stop it). So in the
+states the bridge opens where Rexx is the host, `coroutine.resume` and
+`coroutine.wrap` are the bridge's: Lua's own (`lcorolib.c`, of each
+version), except that the coroutine being resumed is on a stack in the
+state while `lua_resume` runs (nested resumes are nested C calls), and the
+handler hooks every coroutine on it: the 15 outermost and the innermost, the
+one running (in between, deeper than 16, a loop in a coroutine that resumes
+another is not stopped). The state is found in Lua's extra space, which is
+the bridge's in a state it opened and which every coroutine copies; not in
+an upvalue, which Lua's functions do not have. Calling Lua's own functions
+from wrappers instead, under `lua_pcall`, made a resume 2.5 times as slow
+and halved how deep coroutines nest; this way neither changes, nor do the
+error messages. Lua 5.4.0 to 5.4.3 cannot be told apart
+(`LUA_VERSION_RELEASE_NUM` is 50400 in all four) and their `wrap` handles
+an error in its coroutine in two ways: with them the bridge keeps Lua's
+`wrap`, and a loop in a wrapped coroutine is not stopped (`resume` is the
+bridge's). An out-of-memory error inside `lua_resume` can skip taking the
+coroutine off the stack: it is emptied when the outermost call into the
+state returns. A host's state (*Lua → ooRexx*) keeps Lua's functions.
 `Interrupt.testGroup` tests the rest, with a Ctrl-C that the Lua code sends
 itself (`interrupt()` of the test C module: `raise(SIGINT)`; on Windows
 `GenerateConsoleCtrlEvent`, which reaches every process of the console, so

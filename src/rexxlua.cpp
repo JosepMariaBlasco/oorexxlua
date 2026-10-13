@@ -113,7 +113,13 @@ struct State {
     std::atomic<bool> interrupted{false};   // a signal stopped its Lua code: until the outer
                                             // lua_pcall returns, the stop hook stops it
     State *nextAll = NULL;                  // every State, for the handler (allStates)
+    // the coroutines being resumed, outermost first (auxresume): the handler
+    // stops them too.  The first MAXCO - 1, and the innermost always in the
+    // last slot (the one running); coDepth counts all
+    std::atomic<lua_State *> coStack[16] = {};
+    std::atomic<int> coDepth{0};
 };
+static const int MAXCO = 16;
 
 // One per .LuaObject: a Lua value in a state's registry.
 struct Proxy {
@@ -308,6 +314,7 @@ static RexxObjectPtr toRexx(State *st, int idx);
 static bool pushValue(State *st, RexxObjectPtr v);
 
 static bool takeInterrupt(State *st);
+static void coClear(State *st);
 static RexxObjectPtr failed(State *st);
 
 // The Lua error that ended a call is a callback's HALT (pushRexxCondition):
@@ -341,7 +348,7 @@ static int pcallQuiet(State *st, int nargs, std::string &error)
                                                                  // call ended: ooRexx's HALT
     st->running++;
     int rc = lua_pcall(L, nargs, LUA_MULTRET, base);
-    st->running--;
+    if (--st->running == 0) coClear(st);
     lua_remove(L, base);
     if (rc != LUA_OK) {
         size_t length;
@@ -972,18 +979,186 @@ static void stopHook(lua_State *L, lua_Debug *)
     luaL_error(L, "interrupted");
 }
 
-// From the handler: stop the Lua code now running, on the thread the bridge
-// last entered or left and on the main one (the outer call runs there)
+// From the handler: stop the Lua code now running, on every thread it may be
+// running on: the main one (the outer call runs there), the one the bridge
+// last entered or left, and every coroutine being resumed
 static void stopAll()
 {
+    const int mask = LUA_MASKCALL | LUA_MASKRET | LUA_MASKCOUNT;
     for (State *st = allStates.load(); st != NULL; st = st->nextAll) {
         if (st->running.load() <= 0 || st->interrupted.load()) continue;
         lua_State *L = st->L, *main = st->main;
         if (L == NULL || main == NULL) continue;
         st->interrupted.store(true);
-        lua_sethook(L, stopHook, LUA_MASKCALL | LUA_MASKRET | LUA_MASKCOUNT, 1);
-        if (main != L) lua_sethook(main, stopHook, LUA_MASKCALL | LUA_MASKRET | LUA_MASKCOUNT, 1);
+        lua_sethook(main, stopHook, mask, 1);
+        if (L != main) lua_sethook(L, stopHook, mask, 1);
+        int n = st->coDepth.load(std::memory_order_acquire);
+        for (int i = 0; i < n && i < MAXCO; i++) {
+            lua_State *co = st->coStack[i].load(std::memory_order_acquire);
+            if (co != NULL) lua_sethook(co, stopHook, mask, 1);
+        }
     }
+}
+
+/*
+ * coroutine.resume and coroutine.wrap, in the states the bridge opens where
+ * Rexx is the host: Lua's own (lcorolib.c, of each version), except that the
+ * coroutine being resumed is on coStack while lua_resume runs (nested
+ * resumes are nested C calls, so a stack), so that a Ctrl-C stops a loop
+ * inside a coroutine too.  lua_resume does not raise errors, so the entry
+ * always goes.  Not calling Lua's own functions keeps their cost and their
+ * depth of C calls (one more level would halve how deep coroutines nest).
+ * Lua 5.4 before 5.4.4 closed a wrap's coroutine otherwise: its wrap stays.
+ */
+// Only the thread inside the state writes them.  Depth d goes in slot d, or
+// the last one past it (its previous entry, saved by the caller, comes back
+// with coPop): the innermost coroutine is the one running Lua code.
+static lua_State *coPush(State *st, lua_State *co, int *slot)
+{
+    int d = st->coDepth.load(std::memory_order_relaxed);
+    *slot = d < MAXCO ? d : MAXCO - 1;
+    lua_State *previous = st->coStack[*slot].load(std::memory_order_relaxed);
+    st->coStack[*slot].store(co, std::memory_order_release);
+    st->coDepth.store(d + 1, std::memory_order_release);
+    return previous;
+}
+
+static void coPop(State *st, int slot, lua_State *previous)
+{
+    st->coDepth.store(st->coDepth.load(std::memory_order_relaxed) - 1, std::memory_order_release);
+    st->coStack[slot].store(previous, std::memory_order_release);
+}
+
+// When the outermost call into the state ends: nothing is being resumed (an
+// out-of-memory error in lua_resume can skip a coPop)
+static void coClear(State *st)
+{
+    st->coDepth.store(0, std::memory_order_release);
+    for (int i = 0; i < MAXCO; i++) st->coStack[i].store(NULL, std::memory_order_relaxed);
+}
+
+// lcorolib.c's auxresume, with co on coStack while it runs
+static int auxresume(lua_State *L, State *st, lua_State *co, int narg)
+{
+    int status, nres, slot = 0;
+    if (!lua_checkstack(co, narg)) {
+        lua_pushliteral(L, "too many arguments to resume");
+        return -1;
+    }
+#if LUA_VERSION_NUM < 504
+    if (lua_status(co) == LUA_OK && lua_gettop(co) == 0) {
+        lua_pushliteral(L, "cannot resume dead coroutine");
+        return -1;
+    }
+#endif
+    lua_xmove(L, co, narg);
+    lua_State *previous = st != NULL ? coPush(st, co, &slot) : NULL;
+#if LUA_VERSION_NUM < 504
+    status = lua_resume(co, L, narg);
+    nres = lua_gettop(co);
+#else
+    status = lua_resume(co, L, narg, &nres);
+#endif
+    if (st != NULL) coPop(st, slot, previous);
+    if (status == LUA_OK || status == LUA_YIELD) {
+        if (!lua_checkstack(L, nres + 1)) {
+            lua_pop(co, nres);
+            lua_pushliteral(L, "too many results to resume");
+            return -1;
+        }
+        lua_xmove(co, L, nres);
+        return nres;
+    }
+    lua_xmove(co, L, 1);                        // the error
+    return -1;
+}
+
+// The State of a thread of a state these functions are in: in Lua's extra
+// space, which is the bridge's in a state it opened, and which every thread
+// copies from the main one (lua_newthread).  Faster than stateOf, which
+// would cost a resume a third more; not an upvalue, which Lua's functions do
+// not have (and debug.setupvalue could change).
+static State *coState(lua_State *L) { return *(State **)lua_getextraspace(L); }
+
+// coroutine.resume
+static int co_resume(lua_State *L)
+{
+    lua_State *co = lua_tothread(L, 1);
+#if LUA_VERSION_NUM < 504
+    luaL_argcheck(L, co, 1, "thread expected");
+#else
+    luaL_argexpected(L, co, 1, "thread");
+#endif
+    int r = auxresume(L, coState(L), co, lua_gettop(L) - 1);
+    if (r < 0) {
+        lua_pushboolean(L, 0);
+        lua_insert(L, -2);
+        return 2;
+    }
+    lua_pushboolean(L, 1);
+    lua_insert(L, -(r + 1));
+    return r + 1;
+}
+
+// (5.4.0 to 5.4.3 all say 50400: 5.4.3 has the later wrap, 5.4.0 not)
+#if LUA_VERSION_NUM < 504 || LUA_VERSION_RELEASE_NUM >= 50404
+#define TRACK_WRAP 1
+// A wrap's function; upvalue: the coroutine, as Lua's
+static int co_auxwrap(lua_State *L)
+{
+    lua_State *co = lua_tothread(L, lua_upvalueindex(1));
+    int r = auxresume(L, coState(L), co, lua_gettop(L));
+    if (r < 0) {
+#if LUA_VERSION_NUM < 504
+        if (lua_type(L, -1) == LUA_TSTRING) {
+#else
+        int stat = lua_status(co);
+        if (stat != LUA_OK && stat != LUA_YIELD) {    // an error in the coroutine:
+#if LUA_VERSION_RELEASE_NUM >= 50406                  // close its tbc variables
+            stat = lua_closethread(co, L);
+#elif LUA_VERSION_RELEASE_NUM == 50405
+            stat = lua_resetthread(co, L);
+#else
+            stat = lua_resetthread(co);
+#endif
+            lua_xmove(co, L, 1);
+        }
+        if (stat != LUA_ERRMEM && lua_type(L, -1) == LUA_TSTRING) {
+#endif
+            luaL_where(L, 1);
+            lua_insert(L, -2);
+            lua_concat(L, 2);
+        }
+        return lua_error(L);
+    }
+    return r;
+}
+
+// coroutine.wrap
+static int co_wrap(lua_State *L)
+{
+    luaL_checktype(L, 1, LUA_TFUNCTION);
+    lua_State *co = lua_newthread(L);
+    lua_pushvalue(L, 1);
+    lua_xmove(L, co, 1);
+    lua_pushcclosure(L, co_auxwrap, 1);
+    return 1;
+}
+#endif
+
+static void trackCoroutines(lua_State *L, State *st)
+{
+    *(State **)lua_getextraspace(L) = st;      // before any other thread is made
+    lua_getglobal(L, "coroutine");
+    if (lua_istable(L, -1)) {
+        lua_pushcfunction(L, co_resume);
+        lua_setfield(L, -2, "resume");
+#ifdef TRACK_WRAP
+        lua_pushcfunction(L, co_wrap);
+        lua_setfield(L, -2, "wrap");
+#endif
+    }
+    lua_pop(L, 1);
 }
 
 #ifdef _WIN32
@@ -1064,7 +1239,7 @@ static State *openState(RexxThreadContext *c)
     lua_pop(L, 1);
     st->nextAll = allStates.load();
     while (!allStates.compare_exchange_weak(st->nextAll, st)) {}
-    if (instOfContext(c) == NULL) installHandler();
+    if (instOfContext(c) == NULL) { installHandler(); trackCoroutines(L, st); }
     return st;
 }
 
