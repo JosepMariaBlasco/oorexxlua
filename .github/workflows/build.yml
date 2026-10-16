@@ -36,7 +36,7 @@ on:
         default: false
 
 env:
-  OOREXX_REV: "13268"
+  OOREXX_REV: "13271"
   OOREXX_URL: https://downloads.sourceforge.net/project/oorexx/oorexx/5.3.0beta/portable
   OOREXX_FIXES_REV: "13271"     # the revision patches/oorexx/ is made against
 

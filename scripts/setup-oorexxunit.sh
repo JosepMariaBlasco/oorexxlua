@@ -4,7 +4,7 @@
 # at a fixed SVN revision.  It is not part of this repository: it is CPL 1.0
 # (ooRexx's licence) and is obtained on demand, as ooRexx.
 #
-#   OOREXXUNIT_REV  SVN revision (default 13268, the ooRexx we build against)
+#   OOREXXUNIT_REV  SVN revision (default 13271, the ooRexx we build against)
 #   OOREXXUNIT_DIR  target directory (default $ORXLUA_WORK/oorexxunit)
 #
 # Files: OOREXXUNIT.CLS (test/trunk/framework), ooTest.frm, worker.rex and
@@ -13,7 +13,7 @@
 # no Subversion client is needed.
 set -euo pipefail
 WORK=${ORXLUA_WORK:-$(cd "$(dirname "$0")/../.." && pwd)}   # the directory that contains the clone
-REV=${OOREXXUNIT_REV:-13268}
+REV=${OOREXXUNIT_REV:-13271}
 DIR=${OOREXXUNIT_DIR:-$WORK/oorexxunit}
 SVN="https://svn.code.sf.net/p/oorexx/code-0/!svn/bc/$REV/test/trunk"
 mkdir -p "$DIR"
