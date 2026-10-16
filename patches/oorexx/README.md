@@ -4,15 +4,17 @@ Fixes for ooRexx bugs that are reported on SourceForge but are not yet in
 trunk, and that the bridge needs: `WITH` in `ADDRESS LUA` runs through
 ooRexx's I/O redirector API, and the bridge registers its command
 environment while other threads may be running Rexx code. Each one is the
-patch attached to its ticket, made against trunk r13269.
+patch attached to its ticket, made against trunk r13269; they apply to
+r13271, which the CI builds (it has the fix for
+[#2113](https://sourceforge.net/p/oorexx/bugs/2113/), the redirector's
+queries, whose patch was here until then).
 
 | Bug | Patch | What it fixes |
 |---|---|---|
 | [#2111](https://sourceforge.net/p/oorexx/bugs/2111/) | `oorexx-11-addcmdenv-lock.diff` | `AddCommandEnvironment` changes the instance's table of command handlers without the interpreter lock |
 | [#2112](https://sourceforge.net/p/oorexx/bugs/2112/) | `oorexx-12-resolve-subcom.diff` | resolving an unknown `ADDRESS` environment writes into an unanchored object with the kernel lock released |
-| [#2113](https://sourceforge.net/p/oorexx/bugs/2113/) | `oorexx-13-apicontext-clearconditions.diff` | the API context of the non-blocking redirector queries (`IsInputRedirected` …) leaves `clearConditions` uninitialized |
 
-`scripts/setup-oorexx.sh` checks out that revision, applies them (with
+`scripts/setup-oorexx.sh` checks out r13271, applies them (with
 `svn patch`) and builds and installs ooRexx with its API headers, on Linux,
 macOS and Windows; it prints the installation's `bin` directory:
 

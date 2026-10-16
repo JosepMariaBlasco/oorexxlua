@@ -12,7 +12,7 @@
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 WORK=${ORXLUA_WORK:-$(cd "$HERE/../.." && pwd)}   # the directory that contains the clone
-REV=${OOREXX_REV:-13269}                          # the revision the patches are made against
+REV=${OOREXX_REV:-13271}                          # the revision the patches are made against
 SRC=${OOREXX_SRC:-$WORK/oorexx}
 BUILD=${OOREXX_BUILD:-$WORK/oorexx-build}
 INST=${OOREXX_INST:-$WORK/oorexx-inst}
