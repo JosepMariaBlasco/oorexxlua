@@ -16,8 +16,8 @@ one+two+three+four
 11 16 16
 true
 false
-Without predicate: Lua error: invalid order function for sorting
+Without predicate: Lua error: invalid order function for sorting.
 a bb ccc dddd
 JM / a Directory
-Rexx catches: Lua error: eval:1: boom
-Rexx catches: Lua error: Rexx error 41.1: Nonnumeric value ("a") used in arithmetic operation.
+Rexx catches: 98.900 eval:1: boom
+Rexx catches: 41.1 Nonnumeric value ("a") used in arithmetic operation.

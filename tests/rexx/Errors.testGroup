@@ -1,0 +1,166 @@
+#!/usr/bin/env rexx
+/*----------------------------------------------------------------------------*/
+/* Errors.testGroup: errors both ways (docs/design.md, *Errors*).  A Lua      */
+/* error is SYNTAX 98.900 with additional [1] the message, [2] the error      */
+/* value, [3] Lua's traceback; a Rexx error is a table with its fields in     */
+/* Lua; and each comes back as itself after a round trip.                     */
+/*                                                                            */
+/* Licensed under the Apache License, Version 2.0.                            */
+/*----------------------------------------------------------------------------*/
+  parse source . . fileSpec
+
+  group = .TestGroup~new(fileSpec)
+  group~add(.Errors.testGroup)
+
+  if group~isAutomatedTest then return group
+
+  testResult = group~suite~execute~~print
+
+return testResult
+-- End of entry point.
+
+::requires 'LuaTestCase.cls'
+
+::class "Errors.testGroup" subclass LuaTestCase public
+
+-- The condition object of the SYNTAX condition that sending the message raises
+::method conditionOf
+  use strict arg receiver, name, ...
+  args = arg(3, "A")
+  signal on syntax
+  .message~new(receiver, name, "A", args)~send
+  signal off syntax
+  self~fail("no SYNTAX condition raised by message" name)
+syntax:
+  return condition("O")
+
+-- A Lua error in Rexx ----------------------------------------------------------
+
+::method test_a_Lua_error_is_98_900_with_value_and_traceback
+  c = self~conditionOf(.lua, "EVAL", "error('boom')")
+  self~assertEquals(98.900, c~code)
+  a = c~additional
+  self~assertEquals(3, a~items)
+  self~assertEquals("Lua error: eval:1: boom", a[1])
+  self~assertEquals("eval:1: boom", a[2], "the error value")
+  self~assertTrue(a[3]~pos("stack traceback:") = 1, "Lua's traceback:" a[3])
+  self~assertEquals(0, c~message~pos("stack traceback"), "not in the message")
+  self~assertEquals("Lua error: eval:1: boom.", c~message)
+
+::method test_a_table_error_value_is_a_LuaObject
+  a = self~conditionOf(.lua, "EVAL", "error({code = 42})")~additional
+  self~assertTrue(a[2]~isA(.LuaObject))
+  self~assertEquals(42, a[2]~code)
+  self~assertTrue(a[1]~pos("Lua error: table: ") = 1, a[1])
+
+::method test_number_and_boolean_error_values_are_LuaObjects
+  a = self~conditionOf(.lua, "EVAL", "error(42)")~additional
+  self~assertTrue(a[2]~isA(.LuaObject), "a number")
+  self~assertEquals("number", .lua~global("type")~call(a[2]))
+  self~assertEquals("Lua error: 42", a[1])
+  a = self~conditionOf(.lua, "EVAL", "error(false)")~additional
+  self~assertTrue(a[2]~isA(.LuaObject), "a boolean")
+  self~assertEquals("boolean", .lua~global("type")~call(a[2]))
+
+::method test_a_Rexx_object_as_error_value_is_that_object
+  d = .directory~new
+  a = self~conditionOf(.lua, "EVAL", "error(...)", d)~additional
+  self~assertSame(d, a[2])
+
+::method test_a_nil_error_value_is_left_out
+  a = self~conditionOf(.lua, "EVAL", "error()")~additional
+  self~assertEquals("Lua error: nil", a[1])
+  self~assertNull(a[2])
+  self~assertTrue(a[3]~pos("stack traceback:") = 1)
+
+::method test_a_failing_tostring_of_the_error_value
+  -- __tostring runs in the message handler: its own error is reported, no crash
+  c = self~conditionOf(.lua, "EVAL", "error(setmetatable({}, {__tostring = function() error('bad') end}))")
+  self~assertEquals(98.900, c~code)
+
+-- A Rexx error in Lua ----------------------------------------------------------
+
+::method test_a_Rexx_error_is_a_table_with_fields
+  bad = .routine~new("bad", .array~of("x = 1", "return x + 'a'"))
+  f = .lua~eval("local f = ...; local ok, e = pcall(f); return e", bad)
+  self~assertTrue(f~isA(.LuaObject))
+  self~assertEquals("table", .lua~global("type")~call(f))
+  self~assertEquals("SYNTAX", f~get("condition"))
+  self~assertEquals("41.1", f~get("code"))
+  self~assertEquals(41, f~get("rc"))
+  self~assertEquals("Bad arithmetic conversion.", f~get("errortext"))
+  self~assertEquals('Nonnumeric value ("a") used in arithmetic operation.', f~get("message"))
+  self~assertEquals("bad", f~get("program"))
+  self~assertEquals(2, f~get("line"))
+  self~assertTrue(f~get("traceback")~pos("*-* return x + 'a'") > 0, f~get("traceback"))
+  self~assertEquals('Rexx error 41.1: Nonnumeric value ("a") used in arithmetic operation.', f~string)
+  self~assertEquals("RexxError", .lua~eval("return getmetatable(...)", f), "getmetatable")
+  self~assertEquals(0, .lua~eval("return (pcall(setmetatable, ..., {}))", f), "the metatable is protected")
+
+::method test_a_hand_made_98_900_with_nil_is_a_Rexx_error
+  -- raiseLuaError never puts .nil in additional[2]: one raised by hand is a Rexx error
+  bad = .routine~new("bad", "raise syntax 98.900 array('Lua error: x', .nil)")
+  self~assertEquals("table 98.900", .lua~eval("local ok, e = pcall(...); return type(e) .. ' ' .. e.code", bad))
+
+::method test_concatenation_and_tostring
+  bad = .routine~new("bad", "return 1 + 'a'")
+  r = .lua~eval("local f = ...; local ok, e = pcall(f);" -
+                "return 'x: ' .. e, e .. '!', tostring(e), type(e)", bad)
+  self~assertEquals('x: Rexx error 41.1: Nonnumeric value ("a") used in arithmetic operation.', r)
+  r = .lua~eval("function(f) local ok, e = pcall(f); return e .. '!', tostring(e), type(e) end")~callAll(bad)
+  self~assertEquals('Rexx error 41.1: Nonnumeric value ("a") used in arithmetic operation.!', r[1])
+  self~assertEquals("table", r[3])
+  c = self~conditionOf(.lua, "EVAL", "local f = ...; local ok, e = pcall(f); return e .. {}", bad)
+  self~assertTrue(c~additional[1]~pos("attempt to concatenate a table value") > 0, c~additional[1])
+
+::method test_a_NUL_in_a_Rexx_message_stays
+  bad = .routine~new("bad", "raise syntax 98.900 array ('a' || '00'x || 'b')")
+  self~assertEquals(1, .lua~eval("local f = ...; local ok, e = pcall(f);" -
+                                 "return tostring(e):find('a\0b', 1, true) ~= nil and e.message:find('a\0b', 1, true) == 1", bad))
+
+-- Round trips ------------------------------------------------------------------
+
+::method test_a_Rexx_error_through_Lua_is_itself
+  bad = .routine~new("bad", "return 1 + 'a'")
+  c = self~conditionOf(.lua, "EVAL", "local f = ...; return f()", bad)
+  self~assertEquals(41.1, c~code)
+  self~assertEquals('Nonnumeric value ("a") used in arithmetic operation.', c~message)
+
+::method test_raised_again_by_Lua_it_is_itself
+  bad = .routine~new("bad", "raise syntax 93.907 array (0)")
+  c = self~conditionOf(.lua, "EVAL", "local f = ...; local ok, e = pcall(f); error(e)", bad)
+  self~assertEquals(93.907, c~code)
+  self~assertEquals(.array~of(0), c~additional, "with its substitutions")
+  -- made a string, it is a Lua error
+  c = self~conditionOf(.lua, "EVAL", "local f = ...; local ok, e = pcall(f); error(tostring(e), 0)", bad)
+  self~assertEquals(98.900, c~code)
+  self~assertTrue(c~additional[2]~pos("Rexx error 93.907") = 1, c~additional[2])
+
+::method test_a_Lua_error_through_Rexx_is_itself
+  -- Lua -> Rexx -> Lua: the error value Lua raised, not a Rexx error around it
+  inner = .routine~new("inner", "return .lua~eval('error({code = 42})')")
+  self~assertEquals(42, .lua~eval("local f = ...; local ok, e = pcall(f); return e.code", inner))
+  inner = .routine~new("inner", "return .lua~eval('error(""boom"", 0)')")
+  self~assertEquals("string boom", .lua~eval("local f = ...; local ok, e = pcall(f); return type(e) .. ' ' .. e", inner))
+  -- a string error value stays a string ("42" is not made a number)
+  inner = .routine~new("inner", "return .lua~eval('error(""42"", 0)')")
+  self~assertEquals("string", .lua~eval("local f = ...; local ok, e = pcall(f); return type(e)", inner))
+  -- and Rexx -> Lua -> Rexx -> Lua error, back in Rexx: 98.900 with the value
+  c = self~conditionOf(.lua, "EVAL", "local f = ...; return f()", inner)
+  self~assertEquals(98.900, c~code)
+  self~assertEquals("Lua error: 42", c~additional[1])
+
+::method test_a_value_of_another_state_is_a_Rexx_error
+  s = .LuaState~new
+  inner = .routine~new("inner", "use arg s; return s~eval('error({})')")
+  r = .lua~eval("function(f, s) local ok, e = pcall(f, s); return type(e), e.code end")~callAll(inner, s)
+  self~assertEquals("table", r[1])
+  self~assertEquals("98.900", r[2], "a Rexx error around it")
+  s~close
+
+-- The bridge's own errors keep one additional item
+::method test_the_bridges_own_errors
+  s = .LuaState~new; s~close
+  c = self~conditionOf(s, "EVAL", "1")
+  self~assertEquals(98.900, c~code)
+  self~assertEquals(1, c~additional~items)

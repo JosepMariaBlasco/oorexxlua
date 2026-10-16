@@ -51,7 +51,7 @@ say r~items                             -- 1: return nil
 strict = .lua~eval("setmetatable({}, {__index = function(t, k) error('no field ' .. k, 2) end})")
 signal on syntax name e1
 say strict~colour
-e1: say "Rexx catches:" condition("O")~message~makeArray("0a"x)[1]
+e1: say "Rexx catches:" condition("O")~message
 
 -- 7. Coroutines are used like any other function
 gen = .lua~eval("coroutine.wrap(function() for i = 1, 3 do coroutine.yield(i * 10) end end)")
@@ -60,7 +60,7 @@ say gen~call gen~call gen~call          -- 10 20 30
 yielder = .routine~new("yielder", "return .lua~global('coroutine')~yield(1)")
 co = .lua~eval("coroutine.create(function(f) return f() end)")
 r = .lua~global("coroutine")~all("resume", co, yielder)
-say r[1] r[2]~makeArray("0a"x)[1]       -- 0 ...attempt to yield across a C-call boundary
+say r[1] r[2]                           -- 0 attempt to yield across a C-call boundary
 exit
 
 ::requires "lua.cls"

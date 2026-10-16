@@ -12,8 +12,7 @@
 
 /** errorOf(receiver, messageName [, args...])
  * Sends the message and returns the first line of the message of the SYNTAX
- * condition it raises (the bridge's Lua errors go on with a traceback); the
- * test fails if none is raised.
+ * condition it raises; the test fails if none is raised.
  */
 ::method errorOf
   use strict arg receiver, name, ...

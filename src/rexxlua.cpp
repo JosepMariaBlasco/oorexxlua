@@ -107,7 +107,6 @@ struct State {
     struct Inst *defaultInst = NULL;        // the module's default instance (made at first use)
     std::vector<RexxObjectPtr> pending;     // Rexx objects whose userdata Lua finalized outside
                                             // any Rexx code: let go at the next entry
-    bool halted = false;                    // a Rexx HALT became a Lua error (ADDRESS LUA)
     struct Redirect *redirect = NULL;       // ADDRESS LUA ... WITH in progress, innermost first
     lua_Integer redirects = 0;              // the last one's number
     // Ctrl-C (docs/design.md, *Ctrl-C*); read by the signal handler
@@ -319,28 +318,121 @@ static bool takeInterrupt(State *st);
 static void coClear(State *st);
 static RexxObjectPtr failed(State *st);
 
-// The Lua error that ended a call is a callback's HALT (pushRexxCondition):
-// st->halted, and the error is that one (Lua code may have caught it with
-// pcall, and raised another since)
-static bool haltError(State *st, const std::string &error)
+/*
+ * Rexx errors in Lua (docs/design.md, *Errors*).  A Rexx condition becomes a
+ * table with its fields (pushRexxCondition) and the metatable RXERR, whose
+ * __tostring gives the text the error was until 0.3.0.  The weak-keyed table
+ * registry[&RXCOND] maps each such table to the userdata of its condition
+ * object, so that the bridge raises that condition again when the table comes
+ * back to Rexx (raiseCondition), instead of a Lua error around it.
+ */
+static const char *RXERR = "RexxError";
+static char RXCOND;
+
+static void rawField(lua_State *L, int t, const char *name)    // pushes t[name], no metamethods
 {
-    return st->halted && error.compare(0, 13, "Rexx error 4.") == 0;
+    lua_pushstring(L, name);
+    lua_rawget(L, t);
 }
 
-static int msgh(lua_State *L)
+// tostring(e): "Rexx error 41.1: message" (the secondary message, else the
+// error text); a condition other than SYNTAX, "Rexx condition NAME"
+static int rxerr_tostring(lua_State *L)
 {
-    // message "\n" traceback, by lua_concat: the message may hold a NUL
-    if (lua_tostring(L, 1) == NULL) luaL_tolstring(L, 1, NULL); else lua_pushvalue(L, 1);
-    lua_pushliteral(L, "\n");
-    luaL_traceback(L, L, NULL, 1);
-    lua_concat(L, 3);
+    luaL_checktype(L, 1, LUA_TTABLE);
+    lua_settop(L, 1);
+    rawField(L, 1, "code");                                 // 2
+    if (lua_type(L, 2) == LUA_TSTRING) {
+        lua_pushliteral(L, "Rexx error ");
+        lua_pushvalue(L, 2);
+        rawField(L, 1, "message");
+        if (lua_type(L, -1) != LUA_TSTRING) { lua_pop(L, 1); rawField(L, 1, "errortext"); }
+        if (lua_type(L, -1) == LUA_TSTRING) { lua_pushliteral(L, ": "); lua_insert(L, -2); lua_concat(L, 4); }
+        else { lua_pop(L, 1); lua_concat(L, 2); }          // (lua_concat: a NUL stays)
+        return 1;
+    }
+    lua_pushliteral(L, "Rexx condition ");
+    rawField(L, 1, "condition");
+    if (lua_type(L, -1) != LUA_TSTRING) { lua_pop(L, 1); lua_pushliteral(L, "?"); }
+    lua_concat(L, 2);
     return 1;
 }
 
+// Is the value at idx a Rexx error (its metatable is RXERR)?
+static bool isRxErr(lua_State *L, int idx)
+{
+    if (lua_type(L, idx) != LUA_TTABLE || !lua_getmetatable(L, idx)) return false;
+    luaL_getmetatable(L, RXERR);
+    bool ours = lua_rawequal(L, -1, -2) != 0;
+    lua_pop(L, 2);
+    return ours;
+}
+
+// a .. b, with a Rexx error on either side: its text (the other side, a
+// string, a number or a Rexx error too, as Lua's own .. wants)
+static int rxerr_concat(lua_State *L)
+{
+    for (int i = 1; i <= 2; i++) {
+        int t = lua_type(L, i);
+        if (t != LUA_TSTRING && t != LUA_TNUMBER && !isRxErr(L, i))
+            return luaL_error(L, "attempt to concatenate a %s value", luaL_typename(L, i));
+    }
+    luaL_tolstring(L, 1, NULL);
+    luaL_tolstring(L, 2, NULL);
+    lua_concat(L, 2);
+    return 1;
+}
+
+// Pushes the metatable of Rexx errors (made at first use, in each state)
+static void pushRxErrMeta(lua_State *L)
+{
+    if (luaL_newmetatable(L, RXERR)) {                      // also sets __name
+        lua_pushstring(L, RXERR);           // getmetatable(e): "RexxError", and the
+        lua_setfield(L, -2, "__metatable"); // metatable, shared, cannot be changed
+        lua_pushcfunction(L, rxerr_tostring);
+        lua_setfield(L, -2, "__tostring");
+        lua_pushcfunction(L, rxerr_concat);
+        lua_setfield(L, -2, "__concat");
+    }
+}
+
+// The message handler of the bridge's lua_pcalls.  The error value, its text
+// (luaL_tolstring, which runs __tostring: here it is protected) and Lua's
+// traceback, as {value, text, traceback, &FAILMARK}
+static char FAILMARK;
+static int msgh(lua_State *L)
+{
+    lua_settop(L, 1);
+    lua_createtable(L, 4, 0);                               // 2
+    lua_pushvalue(L, 1);
+    lua_rawseti(L, 2, 1);
+    luaL_tolstring(L, 1, NULL);
+    lua_rawseti(L, 2, 2);
+    luaL_traceback(L, L, NULL, 1);
+    lua_rawseti(L, 2, 3);
+    lua_pushlightuserdata(L, &FAILMARK);
+    lua_rawseti(L, 2, 4);
+    return 1;
+}
+
+// A Lua error: its text (the message) and Lua's traceback
+struct LuaFailure {
+    std::string text, traceback;
+    std::string full() const { return traceback.empty() ? text : text + "\n" + traceback; }
+};
+
+static void setString(std::string &s, lua_State *L, int idx)
+{
+    size_t length;
+    const char *m = lua_tolstring(L, idx, &length);
+    if (m != NULL) s.assign(m, length); else s.clear();     // a NUL stays
+}
+
 /* Run the function and nargs arguments on top of the stack, protected.
- * Leaves all results on the stack and returns their count, or -1 with
- * Lua's message and traceback in `error` (nothing raised).                */
-static int pcallQuiet(State *st, int nargs, std::string &error)
+ * Leaves all results on the stack and returns their count, or -1 with the
+ * error value on top of the stack (the caller pops it), and its text and
+ * Lua's traceback in f (nothing raised).                                  */
+static int pcallQuiet(State *st, int nargs, LuaFailure &f)
 {
     lua_State *L = st->L;
     int base = lua_gettop(L) - nargs;       // index of the function
@@ -353,33 +445,100 @@ static int pcallQuiet(State *st, int nargs, std::string &error)
     if (--st->running == 0) coClear(st);
     lua_remove(L, base);
     if (rc != LUA_OK) {
-        size_t length;
-        const char *m = lua_tolstring(L, -1, &length);
-        if (m != NULL) error.assign(m, length); else error = "(error object)";
-        lua_pop(L, 1);
+        int e = lua_gettop(L);
+        bool wrapped = false;               // by msgh (not when out of memory, or msgh failed)
+        if (lua_type(L, e) == LUA_TTABLE) {
+            lua_rawgeti(L, e, 4);
+            wrapped = lua_touserdata(L, -1) == &FAILMARK;
+            lua_pop(L, 1);
+        }
+        if (wrapped) {
+            lua_rawgeti(L, e, 2); setString(f.text, L, -1); lua_pop(L, 1);
+            lua_rawgeti(L, e, 3); setString(f.traceback, L, -1); lua_pop(L, 1);
+            lua_rawgeti(L, e, 1);
+            lua_replace(L, e);
+        }
+        else {
+            if (lua_type(L, e) == LUA_TSTRING) setString(f.text, L, e); else f.text = "(error object)";
+            f.traceback.clear();
+        }
         return -1;
     }
     return lua_gettop(L) - base + 1;
 }
 
+static RexxObjectPtr conditionOf(lua_State *L, int idx);
+
+// A HALT that ended a callback (Error 4)
+static bool isHalt(RexxThreadContext *c, RexxObjectPtr cond)
+{
+    RexxCondition cd;
+    c->DecodeConditionInfo((RexxDirectoryObject)cond, &cd);
+    return cd.code / 1000 == 4;
+}
+
+// Raise again a Rexx condition that went through Lua: SYNTAX with its code
+// and substitutions (a new traceback, from here), any other with its
+// description, additional and result
+static void raiseCondition(RexxThreadContext *c, RexxObjectPtr cond)
+{
+    RexxCondition cd;
+    RexxDirectoryObject d = (RexxDirectoryObject)cond;
+    c->DecodeConditionInfo(d, &cd);
+    if (cd.code != 0) {
+        c->RaiseException(cd.code, cd.additional != NULLOBJECT ? cd.additional : c->NewArray(0));
+        return;
+    }
+    c->RaiseCondition(c->CString(cd.conditionName), cd.description,
+                      c->DirectoryAt(d, "ADDITIONAL"), c->DirectoryAt(d, "RESULT"));
+}
+
+static RexxObjectPtr newProxy(State *st, int idx);
+
+/* A Lua error (the value at idx) as a Rexx condition: SYNTAX 98.900 with
+ * additional [1] "Lua error: " text, [2] the value (a string, or the Rexx
+ * object a userdata holds, or a .LuaObject; .nil is left out), [3] Lua's
+ * traceback.                                                              */
+static NOINLINE void raiseLuaError(State *st, int idx, const LuaFailure &f)
+{
+    RexxThreadContext *c = st->tc;
+    idx = lua_absindex(st->L, idx);
+    std::string m = "Lua error: " + f.text;
+    RexxArrayObject a = c->NewArray(3);
+    c->ArrayPut(a, c->NewString(m.data(), m.size()), 1);
+    int t = lua_type(st->L, idx);
+    RexxObjectPtr v = t == LUA_TNUMBER || t == LUA_TBOOLEAN ? newProxy(st, idx) : toRexx(st, idx);
+    if (v != NULLOBJECT && v != c->Nil()) c->ArrayPut(a, v, 2);
+    if (!f.traceback.empty()) c->ArrayPut(a, c->NewString(f.traceback.data(), f.traceback.size()), 3);
+    if (c->CheckCondition()) return;                        // making the .LuaObject failed: that error
+    c->RaiseException(Rexx_Error_Execution_user_defined, a);
+}
+
 /* The same, raising a Rexx condition.  Leaves all results on the stack and
- * returns their count, or -1 after raising a Rexx SYNTAX 98.900 with Lua's
- * message and traceback, or Error 4.1 when a HALT in a callback stopped it.
+ * returns their count, or -1 after raising a Rexx condition: the one a Rexx
+ * error that went through Lua came from (Error 4.1 for a HALT in a callback),
+ * or for any other Lua error SYNTAX 98.900 (raiseLuaError).
  * Ctrl-C (docs/design.md, *Ctrl-C*): the caller's HALT is made pending; if
  * that stopped the Lua code, -1 with no condition (see failed).            */
 static int pcallAll(State *st, int nargs)
 {
-    std::string error;
-    st->halted = false;
-    int n = pcallQuiet(st, nargs, error);
+    LuaFailure f;
+    int n = pcallQuiet(st, nargs, f);
     bool ctrlC = takeInterrupt(st);
-    if (n < 0 && haltError(st, error)) {        // a HALT in a callback: Error 4.1, as ADDRESS LUA
-        st->halted = false;
-        st->tc->RaiseException1(Rexx_Error_Program_interrupted_condition, st->tc->String("HALT"));
+    RexxObjectPtr cond = n < 0 ? conditionOf(st->L, -1) : NULLOBJECT;
+    if (cond != NULLOBJECT && isHalt(st->tc, cond)) {   // a HALT in a callback: Error 4.1, as ADDRESS LUA
+        raiseCondition(st->tc, cond);
+        lua_pop(st->L, 1);
         return -1;
     }
     if (ctrlC) st->tc->HaltThread();            // (not twice if ooRexx's handler already did)
-    if (n < 0 && !ctrlC) raise(st->tc, "Lua error: " + error);
+    if (n < 0) {
+        if (!ctrlC) {
+            if (cond != NULLOBJECT) raiseCondition(st->tc, cond);
+            else raiseLuaError(st, -1, f);
+        }
+        lua_pop(st->L, 1);
+    }
     return n;
 }
 
@@ -590,22 +749,137 @@ static NOINLINE void releasePending(State *st)
     for (RexxObjectPtr o : objs) keepRemove(st, o);
 }
 
-// A Rexx condition, pending on this thread, as a Lua error (pushes the message;
-// the caller then returns lua_error(L))
+static void pushBox(State *st, RexxObjectPtr v);
+
+static void setStringField(lua_State *L, RexxThreadContext *c, const char *name, RexxStringObject s)
+{
+    if (s == NULLOBJECT) return;
+    lua_pushlstring(L, c->StringData(s), c->StringLength(s));  // a NUL stays
+    lua_setfield(L, -2, name);
+}
+
+/* A Rexx condition, pending on this thread, as a Lua error (pushes it; the
+ * caller then returns lua_error(L)): a table with the condition's fields
+ * (condition, code "41.1", rc, errortext, message, program, line,
+ * traceback), the metatable RXERR, and the condition object kept in
+ * registry[&RXCOND] for the way back (docs/design.md, *Errors*).          */
+static Proxy *proxyOf(RexxThreadContext *c, RexxObjectPtr v);
+
+/* The way back of a Lua error (raiseLuaError): a SYNTAX 98.900 whose
+ * additional is [1] "Lua error: ...", [2] the error value, coming back to
+ * Lua, is that value again (a string as it was, a .LuaObject of this state
+ * its Lua value, a Rexx object its userdata).  False if it is not one.    */
+static bool pushLuaError(lua_State *L, RexxThreadContext *c, const RexxCondition &cd)
+{
+    if (cd.code != Rexx_Error_Execution_user_defined || cd.additional == NULLOBJECT) return false;
+    if (c->ArrayItems(cd.additional) < 2) return false;
+    RexxObjectPtr m = c->ArrayAt(cd.additional, 1);
+    RexxObjectPtr v = c->ArrayAt(cd.additional, 2);
+    bool ours = m != NULLOBJECT && c->IsString(m) && c->StringLength((RexxStringObject)m) >= 11 &&
+                memcmp(c->StringData((RexxStringObject)m), "Lua error: ", 11) == 0 &&
+                v != NULLOBJECT && v != c->Nil();
+    release(c, m);
+    if (!ours) { release(c, v); return false; }
+    State *st = stateOf(L);
+    Proxy *p = proxyOf(c, v);
+    bool done = true;
+    if (p != NULL) {
+        if (st != NULL && p->st == st && !st->closed) lua_rawgeti(L, LUA_REGISTRYINDEX, p->ref);
+        else done = false;                  // another state's value
+    }
+    else if (c->IsString(v)) lua_pushlstring(L, c->StringData((RexxStringObject)v), c->StringLength((RexxStringObject)v));
+    else if (st != NULL && st->tc == c && !c->IsArray(v)) {
+        lua_State *saved = st->L;
+        st->L = L;
+        pushBox(st, v);                     // a Rexx object that Lua raised
+        st->L = saved;
+    }
+    else done = false;
+    release(c, v);
+    return done;
+}
+
 static NOINLINE void pushRexxCondition(lua_State *L, RexxThreadContext *c)
 {
+    RexxDirectoryObject cond = c->GetConditionInfo();
     RexxCondition cd;
-    c->DecodeConditionInfo(c->GetConditionInfo(), &cd);
+    c->DecodeConditionInfo(cond, &cd);
     c->ClearCondition();
-    std::string m = "Rexx error " + std::to_string(cd.code / 1000) + "." + std::to_string(cd.code % 1000);
-    if (cd.message) { m += ": "; m.append(c->StringData(cd.message), c->StringLength(cd.message)); }
-    else if (cd.errortext) { m += ": "; m.append(c->StringData(cd.errortext), c->StringLength(cd.errortext)); }
-    if (cd.code / 1000 == 4) {              // HALT (Error 4): ADDRESS LUA raises it again
-        State *st = stateOf(L);
-        if (st != NULL) st->halted = true;
+    if (pushLuaError(L, c, cd)) { release(c, cond); return; }
+    lua_createtable(L, 0, 8);
+    setStringField(L, c, "condition", cd.conditionName);
+    if (cd.code != 0) {
+        lua_pushfstring(L, "%d.%d", (int)(cd.code / 1000), (int)(cd.code % 1000));
+        lua_setfield(L, -2, "code");
     }
-    lua_pushlstring(L, m.data(), m.size());                 // a NUL stays
-}   // (the strings are gone before lua_error, a longjmp, runs)
+    lua_pushinteger(L, (lua_Integer)cd.rc);
+    lua_setfield(L, -2, "rc");
+    setStringField(L, c, "errortext", cd.errortext);
+    setStringField(L, c, "message", cd.message);
+    setStringField(L, c, "program", cd.program);
+    if (cd.position != 0) { lua_pushinteger(L, (lua_Integer)cd.position); lua_setfield(L, -2, "line"); }
+    RexxObjectPtr tb = c->DirectoryAt(cond, "TRACEBACK");  // a List of lines
+    if (tb != NULLOBJECT && tb != c->Nil()) {
+        RexxObjectPtr a = c->SendMessage0(tb, "MAKEARRAY");
+        if (a != NULLOBJECT && c->IsArray(a)) {
+            luaL_Buffer lines;                  // (no C++ object here: Lua may raise
+            luaL_buffinit(L, &lines);           // out of memory)
+            size_t n = c->ArrayItems((RexxArrayObject)a), k = 0;
+            for (size_t i = 1; i <= n; i++) {
+                RexxObjectPtr line = c->ArrayAt((RexxArrayObject)a, i);
+                if (line == NULLOBJECT || !c->IsString(line)) continue;
+                if (k++ > 0) luaL_addchar(&lines, '\n');
+                luaL_addlstring(&lines, c->StringData((RexxStringObject)line), c->StringLength((RexxStringObject)line));
+                release(c, line);
+            }
+            luaL_pushresult(&lines);
+            lua_setfield(L, -2, "traceback");
+        }
+        release(c, a);
+        release(c, tb);
+    }
+    c->ClearCondition();                    // (in case MAKEARRAY raised one)
+    pushRxErrMeta(L);
+    lua_setmetatable(L, -2);
+    State *st = stateOf(L);
+    if (st != NULL && st->tc == c && !st->closed) {         // the condition object, for the way back
+        lua_State *saved = st->L;
+        st->L = L;
+        lua_rawgetp(L, LUA_REGISTRYINDEX, &RXCOND);
+        if (!lua_istable(L, -1)) {
+            lua_pop(L, 1);
+            lua_newtable(L);
+            lua_createtable(L, 0, 1);
+            lua_pushliteral(L, "k");
+            lua_setfield(L, -2, "__mode");
+            lua_setmetatable(L, -2);
+            lua_pushvalue(L, -1);
+            lua_rawsetp(L, LUA_REGISTRYINDEX, &RXCOND);
+        }
+        lua_pushvalue(L, -2);                               // e conds e
+        pushBox(st, cond);                                  // e conds e box
+        lua_rawset(L, -3);
+        lua_pop(L, 1);
+        st->L = saved;
+    }
+    release(c, cond);                       // the userdata keeps it
+}
+
+// The Rexx condition that the Lua error value at idx came from (a table of
+// pushRexxCondition), or NULLOBJECT
+static RexxObjectPtr conditionOf(lua_State *L, int idx)
+{
+    idx = lua_absindex(L, idx);
+    if (!isRxErr(L, idx)) return NULLOBJECT;
+    lua_rawgetp(L, LUA_REGISTRYINDEX, &RXCOND);
+    if (!lua_istable(L, -1)) { lua_pop(L, 1); return NULLOBJECT; }
+    lua_pushvalue(L, idx);
+    lua_rawget(L, -2);
+    RexxBox *b = (RexxBox *)luaL_testudata(L, -1, REXXOBJ);
+    RexxObjectPtr cond = b != NULL ? b->obj : NULLOBJECT;
+    lua_pop(L, 2);
+    return cond;
+}
 
 // The string value of a Rexx object, or false with a condition pending (its
 // `string` method can raise one: ObjectToString then returns NULL)
@@ -1369,9 +1643,12 @@ static NOINLINE bool pushValue(State *st, RexxObjectPtr v)
     return true;
 }
 
-// After a failed pushValue: raise its message as a Rexx error and pop it.
+// After a failed pushValue: raise its message as a Rexx error and pop it (a
+// Rexx error, from a string method: that condition again).
 static void raiseTop(State *st)
 {
+    RexxObjectPtr cond = conditionOf(st->L, -1);
+    if (cond != NULLOBJECT) { raiseCondition(st->tc, cond); lua_pop(st->L, 1); return; }
     size_t length;
     const char *s = lua_tolstring(st->L, -1, &length);
     std::string m = "Lua error: ";
@@ -3222,25 +3499,28 @@ static RexxObjectPtr RexxEntry addressLua(RexxExitContext *c, RexxStringObject a
             return addressCondition(c, command, ADDRESS_RUNTIME, error);
         }
     }
-    st->halted = false;
-    int n = pcallQuiet(st, 0, error);
+    LuaFailure f;
+    int n = pcallQuiet(st, 0, f);
+    // a HALT in a callback (its error, back here): Error 4.1, as ~eval.  Any
+    // other Rexx error is a Lua error of the command: ERROR, with its text
+    RexxObjectPtr cond = n < 0 ? conditionOf(L, -1) : NULLOBJECT;
+    bool halt = cond != NULLOBJECT && isHalt(tc, cond);
     if (redirected) {
         rdRestore(L, top + 1);
         lua_remove(L, top + 1);
         st->redirect = rd.prev;
     }
-    if (takeInterrupt(st) && !haltError(st, error)) {   // Ctrl-C: the HALT comes after the command
+    if (takeInterrupt(st) && !halt) {           // Ctrl-C: the HALT comes after the command
         tc->HaltThread();
         if (n < 0) { lua_settop(L, top); return c->WholeNumber(ADDRESS_RUNTIME); }
     }
     if (n < 0) {
         lua_settop(L, top);
-        if (haltError(st, error)) {             // a HALT in a callback: Error 4.1, as ~eval
-            st->halted = false;                 // (a HALT raised here would be ignored
+        if (halt) {                             // (a HALT raised here would be ignored
             c->RaiseException1(Rexx_Error_Program_interrupted_condition, c->String("HALT"));
             return NULLOBJECT;                  // when not trapped)
         }
-        return addressCondition(c, command, ADDRESS_RUNTIME, error);
+        return addressCondition(c, command, ADDRESS_RUNTIME, f.full());
     }
     if (n == 0) { c->DropContextVariable("RESULT"); return c->WholeNumber(0); }
     RexxObjectPtr r = n == 1 ? firstResult(st, 1) : allResults(st, n);

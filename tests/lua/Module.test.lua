@@ -104,6 +104,49 @@ T.test("Rexx conditions are Lua errors", function()
   T.fails("boom", rexx.eval, ".lua~eval(\"error('boom')\")")
 end)
 
+T.test("Rexx errors are tables with the condition's fields", function()
+  local ok, e = pcall(rexx.routine("x = 1\nreturn x + 'a'", "BAD"))
+  T.ok(not ok)
+  T.eq(type(e), "table")
+  T.eq(e.condition, "SYNTAX")
+  T.eq(e.code, "41.1")
+  T.eq(e.rc, 41)
+  T.eq(e.errortext, "Bad arithmetic conversion.")
+  T.eq(e.message, 'Nonnumeric value ("a") used in arithmetic operation.')
+  T.eq(e.program, "BAD")
+  T.eq(e.line, 2)
+  T.ok(e.traceback:find("*-* return x + 'a'", 1, true), e.traceback)
+  T.eq(tostring(e), 'Rexx error 41.1: Nonnumeric value ("a") used in arithmetic operation.')
+  T.eq("> " .. e, '> Rexx error 41.1: Nonnumeric value ("a") used in arithmetic operation.')
+  T.eq(e .. "!", 'Rexx error 41.1: Nonnumeric value ("a") used in arithmetic operation.!')
+  T.eq(getmetatable(e), "RexxError")
+  -- a Rexx object the host calls outside any Rexx code
+  local d = rexx.eval(".directory~new")
+  ok, e = pcall(function() return d:put() end)
+  T.eq(e.code, "88.901")
+  -- in another instance
+  local r = rexx.interpreter{}
+  ok, e = pcall(r.eval, "1 + 'a'")
+  T.eq(e.code, "41.1")
+  r.close()
+end)
+
+T.test("errors come back as themselves", function()
+  -- a Rexx error that Lua raises again is that Rexx error in Rexx
+  local relay = rexx.routine("use arg f; signal on syntax; f~call; return 'none'; syntax: return 'code' condition('O')~code")
+  T.eq(relay(function() local ok, e = pcall(rexx.eval, "1 + 'a'"); error(e) end), "code 41.1")
+  T.eq(relay(function() error("boom") end), "code 98.900")
+  -- a Lua error value that goes through Rexx is that value in Lua
+  local mine = {code = 42}
+  local ok, e = pcall(rexx.routine("use arg f; f~call"), function() error(mine) end)
+  T.ok(rawequal(e, mine), "the same table")
+  ok, e = pcall(rexx.eval, ".lua~eval(\"error('boom', 0)\")")
+  T.eq(e, "boom")
+  -- through two levels of Rexx and Lua
+  ok, e = pcall(rexx.routine("use arg f; return .lua~eval('local f = ...; return f()', f)"), function() error(mine) end)
+  T.ok(rawequal(e, mine), "the same table, twice through")
+end)
+
 T.test("callbacks both ways, nested", function()
   function twice(f, v) return f(f(v)) end
   T.eq(rexx.eval(".lua~global('twice')~call(arg(1), 3)", rexx.routine("return arg(1) * 10")), 300)

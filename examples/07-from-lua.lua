@@ -32,6 +32,9 @@ local t = {3, 1, 2}
 rexx.routine("use arg t; .lua~global('table')~sort(t)")(t)
 print(table.concat(t, " "))                                        -- 1 2 3
 
--- 6. Rexx conditions are Lua errors
+-- 6. Rexx conditions are Lua errors: tables with the condition's fields,
+--    whose tostring is the message
 print(pcall(rexx.eval, "1 + 'a'"))
 -- false Rexx error 41.1: Nonnumeric value ("a") used in arithmetic operation.
+local ok, e = pcall(rexx.eval, "1 + 'a'")
+print(e.condition, e.code, e.rc, e.errortext, e.line)            -- SYNTAX 41.1 41 Bad arithmetic conversion. 1

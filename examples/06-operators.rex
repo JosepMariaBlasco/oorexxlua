@@ -38,7 +38,7 @@ say \.lua~box("integer", 0)                        -- -1: Lua's ~0
 -- 5. An operator a Lua value does not support is a Lua error
 signal on syntax name e1
 say .lua~table + 1
-e1: say "Rexx catches:" condition("O")~message~makeArray("0a"x)[1]
+e1: say "Rexx catches:" condition("O")~message
 exit
 
 ::requires "lua.cls"

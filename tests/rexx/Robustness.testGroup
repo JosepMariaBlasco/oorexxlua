@@ -51,7 +51,7 @@ syntax:
 ::method test_close_from_a_callback
   s = .LuaState~new
   closer = .routine~new("closer", "use arg s; s~close")
-  self~assertEquals("Lua error: Rexx error 98.900: Lua error: a LuaState cannot be closed while Lua code in it is running.", -
+  self~assertEquals("Lua error: a LuaState cannot be closed while Lua code in it is running.", -
                     self~errorOf(s, "EVAL", "local f, s = ...; f(s); return 1", closer, s))
   self~assertFalse(s~isClosed, "the state is still open")
   self~assertEquals(2, s~eval("1 + 1"))
@@ -59,7 +59,7 @@ syntax:
 
 -- A string method that fails is an error, not a crash
 ::method test_failing_string_method
-  self~assertEquals('Lua error: Rexx error 40.1: External routine "Bad~string" failed.', -
+  self~assertEquals('External routine "Bad~string" failed.', -
                     self~errorOf(.lua, "EVAL", "local o = ...; return tostring(o)", .Bad~new))
   self~assertEquals('External routine "Bad~string" failed.', self~errorOf(.lua, "BOX", "string", .Bad~new))
 
@@ -67,7 +67,7 @@ syntax:
 ::method test_finalized_object
   .lua~eval("local b = ...; setmetatable({box = b}, {__gc = function(t) saved = t.box end})", .directory~new)
   .lua~eval("collectgarbage(); collectgarbage()")
-  self~assertEquals("Lua error: a Rexx object used after Lua finalized it", -
+  self~assertEquals("Lua error: a Rexx object used after Lua finalized it.", -
                     self~errorOf(.lua, "EVAL", "tostring(saved)"))
   .lua~eval("saved = nil")
 

@@ -43,7 +43,7 @@ byLength = .routine~new("cmp", "return length(arg(1)) < length(arg(2))")
 words = .lua~table(.array~of("ccc", "a", "bb", "dddd"))
 signal on syntax name e0
 .lua~global("table")~sort(words, byLength)         -- "0" is true in Lua...
-e0: say "Without predicate:" firstLine(condition("O")~message)
+e0: say "Without predicate:" condition("O")~message
 signal off syntax
 .lua~global("table")~sort(words, .lua~predicate(byLength))
 say .lua~global("table")~concat(words, " ")        -- a bb ccc dddd
@@ -53,13 +53,11 @@ say .lua~eval("local d = ...; return d:at('NAME') .. ' / ' .. tostring(d)", d)
 
 -- 8. Errors, both ways
 signal on syntax name e1
-say .lua~eval("error('boom')")
-e1: say "Rexx catches:" firstLine(condition("O")~message)
-signal on syntax name e2
+say .lua~eval("error('boom')")                     -- a Lua error: SYNTAX 98.900
+e1: say "Rexx catches:" condition("O")~code condition("O")~additional[2]
+signal on syntax name e2                           -- a Rexx error through Lua: itself
 say .lua~eval("local f = ...; return f()", .routine~new("bad", "return 1 + 'a'"))
-e2: say "Rexx catches:" firstLine(condition("O")~message)
+e2: say "Rexx catches:" condition("O")~code condition("O")~message
 exit
-
-firstLine: return arg(1)~makeArray("0a"x)[1]
 
 ::requires "lua.cls"

@@ -24,13 +24,15 @@ keys = .lua~eval("function(d) local r = {} for k, v in pairs(d) do" -
 say keys~call(d)                                   -- LANG:Rexx NAME:JM
 say .lua~eval("local d = ...; return d:at('NAME') .. ' ' .. #d", d)   -- JM 2: string keys go by message
 
--- 4. A Rexx error inside Lua is a Lua error, which comes back to Rexx
+-- 4. A Rexx error inside Lua is a Lua error (a table with its fields), and
+--    back in Rexx it is that Rexx error again
+say .lua~eval("local p = ...; local ok, e = pcall(p.nonsense, p); return e.condition .. ' ' .. e.code", p)   -- SYNTAX 97.1
 signal on syntax name e1
 say .lua~eval("local a = ...; return a[0]", .lua~box("reference", a))
-e1: say "Rexx catches:" condition("O")~message~makeArray("0a"x)[1]
+e1: say "Rexx catches:" condition("O")~code condition("O")~message
 signal on syntax name e2
 say .lua~eval("local p = ...; return p:nonsense()", p)
-e2: say "Rexx catches:" condition("O")~message~makeArray("0a"x)[1]
+e2: say "Rexx catches:" condition("O")~code condition("O")~message
 exit
 
 ::requires "lua.cls"

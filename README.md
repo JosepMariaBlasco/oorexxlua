@@ -10,7 +10,9 @@ Both directions work. **Lua embedded in ooRexx**: an ooRexx native package,
 `.LuaState~new` makes more, independent ones, and `.LuaObject` proxies let
 Rexx use Lua tables, functions and objects as Rexx objects. Rexx routines and
 objects are passed to Lua as functions and userdata that Lua can call back.
-Errors cross in both directions, nested, and a Ctrl-C stops Lua code with a
+Errors cross in both directions (a Rexx error is a table with its fields in
+Lua; a Lua error keeps its value in Rexx) and come back as themselves after a
+round trip, and a Ctrl-C stops Lua code with a
 HALT, as it stops Rexx code. Several Rexx threads can use Lua at once, and
 Lua C modules (LuaRocks's) load.
 
@@ -71,6 +73,11 @@ it: `examples/latex/README.md`):
 \newcommand\rexx[1]{\directlua{tex.sprint(rexx.eval("\luaescapestring{\detokenize{#1}}"))}}
 $2^{100}$ is \rexx{2**100}, and a price: \rexx{format(3.1, , 2)} EUR.
 ```
+
+A Rexx error is a Lua error whose value is a table (with the condition's
+fields, and the text as `tostring`), and LuaTeX reports an error that is not a
+string with no text: the example document wraps its calls in a small
+`rexxcall` that turns the error into its text.
 
 `examples/latex/` has a whole document, where a Rexx program writes a table
 into the page through `ADDRESS LUA`.

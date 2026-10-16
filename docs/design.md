@@ -325,17 +325,72 @@ and friends) the message is always `r[2]`.
 
 ## Errors
 
-Lua errors become SYNTAX 98.900 "Lua error: ...", with Lua's traceback. A
-Rexx condition raised inside a callback becomes a Lua error, and so it can
-come back to Rexx, nested. Messages cross whole both ways: a NUL in one
-does not cut it short. A HALT is the exception: when it ends a callback (the
-callback's Rexx code did not trap it, and it became Error 4.1 there), and
-that error is the one that ends the Lua code (it may have caught it with
-`pcall`, and failed otherwise since), the call into Lua gives Error 4.1 too,
-not a 98.900 around it, so that the
-program stops as a HALT stops it (until 0.2.0, `~eval` and the other calls
-gave the 98.900; ADDRESS LUA already did this, *ADDRESS LUA*). A Ctrl-C while
-Lua code runs: *Ctrl-C*.
+The ooRexx bridges share these rules (the owner's decision of 2026-10-16,
+for the four of them: ooRexx/Python, ooRexx/.NET, ooRexx/WASM and this one).
+
+**A Lua error in Rexx** is SYNTAX 98.900, with `condition("O")~additional`
+as in BSF4ooRexx:
+
+| `additional` | |
+|---|---|
+| `[1]` | `"Lua error: "` and the error's text (`tostring`, so `__tostring` too): the condition's message |
+| `[2]` | the error value: a string as it is; the Rexx object, if Lua raised one it holds; any other value (a table, a number, a boolean) a `.LuaObject`. `error()` (nil) leaves it out |
+| `[3]` | Lua's traceback (`"stack traceback:..."`), when there is one (not when out of memory) |
+
+So `error({code = 42})` arrives with `condition("O")~additional[2]~code`
+= 42. The traceback is not in the message (until 0.3.0 it was, after a line
+end). The message handler of the bridge's `lua_pcall` keeps the value,
+its text and the traceback; it runs `__tostring` there, inside the protected
+call, so a `__tostring` that fails is that error, not a crash. The bridge's
+own errors ("the LuaState is closed"...) are 98.900 "Lua error: ..." with
+`[1]` only.
+
+**A Rexx condition in Lua** (in a callback, or in a call from the Lua
+module) is a Lua error whose value is a table with the condition's fields,
+named as the other bridges name them, in Lua's lowercase:
+
+| Field | |
+|---|---|
+| `condition` | `"SYNTAX"` |
+| `code` | `"41.1"` (a string: `41.10` is not `41.1`) |
+| `rc` | `41` |
+| `errortext` | `"Bad arithmetic conversion."` |
+| `message` | the secondary message, `'Nonnumeric value ("a") used in arithmetic operation.'` |
+| `program` | the program's name |
+| `line` | the line (absent when the error was not in Rexx code: a message sent by the bridge) |
+| `traceback` | the Rexx traceback, as Rexx shows it, lines joined by `"\n"` |
+
+Its metatable, shared and protected (`getmetatable(e)` is `"RexxError"`,
+which tells a Rexx error from other values), has `__tostring`, which gives the
+string the error was until 0.3.0 (`"Rexx error 41.1: Nonnumeric value..."`),
+and `__concat`, so `print(e)`, `tostring(e)`, `"x" .. e`, `error(e)` and
+the standalone `lua`'s report work as before. `type(e) == "string"` and
+string methods on `e` (`e:match`) do not: `tostring(e)` first. Messages
+cross whole both ways: a NUL in one does not cut it short.
+
+**Round trips: each error comes back as itself.**
+
+- A Rexx condition that goes through Lua and back to Rexx (the Lua code did
+  not catch it, or raised the same table again with `error(e)`) is raised
+  again: the same code and substitutions (SYNTAX), or the same condition,
+  description, additional and result (any other), with a new traceback,
+  from where it came back. Not a 98.900 around it. The table keeps its
+  condition object (a weak-keyed table in the registry: the table, the
+  object's userdata), and the bridge recognizes the table by its metatable.
+  So a HALT that ends a callback (Error 4.1 there) gives Error 4.1 in the
+  call into Lua too, and the program stops as a HALT stops it (until
+  0.2.0, `~eval` and the other calls gave the 98.900; until 0.3.0 the HALT
+  was recognized by its text). `error(tostring(e))` is a new Lua error.
+  The table is the condition wherever it goes: a HALT's table that Lua keeps
+  and raises in a later call into Lua gives Error 4.1 there too.
+- A Lua error that goes through Rexx and back to Lua (the 98.900 above,
+  which the Rexx code did not trap) is the error value again, not a Rexx
+  error around it: the same table, the same string. A `.LuaObject` of
+  another state cannot come back as itself, and is the 98.900's table.
+
+ADDRESS LUA keeps its own rules (*ADDRESS LUA*): an error in the command is
+ERROR or FAILURE, with the text and traceback as `condition('A')`, except a
+HALT. A Ctrl-C while Lua code runs: *Ctrl-C*.
 
 Getting a field, indexing, `tostring` and `#` can all run Lua code
 (metamethods), and a Lua error outside a protected call does not come back
@@ -676,8 +731,9 @@ made for both directions: results and arguments that Rexx gets from Lua are
 `.LuaObject`s (tables, functions) or plain strings, and what Lua gets from
 Rexx follows the rule that loses nothing (`rexx.eval("format(3.1, , 2)")` is
 the string `"3.10"`), with Arrays as tables and other objects as userdata.
-Rexx conditions are Lua errors ("Rexx error 41.1: ..."); Lua errors inside
-them come back nested, as from Rexx.
+Rexx conditions are Lua errors, tables with the condition's fields whose
+`tostring` is "Rexx error 41.1: ..."; a Lua error that goes through Rexx
+comes back as itself (*Errors*).
 
 **The host's state.** In Rexx, `.lua` is the `lua_State` of the Lua that
 loaded the module (its main thread), adopted, not made: Rexx sees the host's
@@ -747,7 +803,11 @@ could pass.
 **LuaTeX.** `lualatex --shell-escape` (LuaTeX loads no C module without it),
 with the module on `package.cpath`: `\directlua{rexx = require "oorexx"}`,
 and then `tex.sprint(rexx.eval(...))`, or Rexx code that drives TeX itself
-through `.lua~global("tex")`. LuaTeX is Lua 5.3. On Linux and macOS, TeX
+through `.lua~global("tex")`. LuaTeX reports an uncaught error whose value
+is not a string with no text (it does not use `__tostring`; TeX Live 2026's
+LuaTeX 1.24), so a Rexx error (a table, *Errors*) not caught in `\directlua`
+would show none: `examples/latex/rexx-in-latex.tex` calls through a
+`rexxcall` that makes it its text. LuaTeX is Lua 5.3. On Linux and macOS, TeX
 Live's `luatex` exports the `lua_*` symbols (checked: 115 on Linux, 168 in
 both macOS architectures), so the module built against Lua 5.3 works. On
 Windows LuaTeX's Lua is a DLL of its own, `lua53w64.dll`, and a module's

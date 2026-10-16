@@ -5,11 +5,19 @@
 \documentclass{article}
 \usepackage{booktabs}
 
-% The module, once.  Then \rexx{expression}: a Rexx expression, evaluated by
-% rexx.eval; its value goes into the page.  \detokenize keeps the expression
-% as it is written (a ~ stays a ~, not LaTeX's tie).
-\directlua{rexx = require "oorexx"}
-\newcommand\rexx[1]{\directlua{tex.sprint(rexx.eval("\luaescapestring{\detokenize{#1}}"))}}
+% The module, once.  A Rexx error is a Lua error whose value is a table, and
+% LuaTeX shows no text for an error that is not a string: rexxcall(f, ...)
+% calls f and turns such an error into its text.
+\directlua{rexx = require "oorexx"
+  function rexxcall(f, ...)
+    local r = table.pack(pcall(f, ...))
+    if not r[1] then error(tostring(r[2]), 0) end
+    return table.unpack(r, 2, r.n)
+  end}
+% Then \rexx{expression}: a Rexx expression, evaluated by rexx.eval; its value
+% goes into the page.  \detokenize keeps the expression as it is written (a ~
+% stays a ~, not LaTeX's tie).
+\newcommand\rexx[1]{\directlua{tex.sprint(rexxcall(rexx.eval, "\luaescapestring{\detokenize{#1}}"))}}
 
 \begin{document}
 
@@ -26,7 +34,7 @@ as Lua code that calls \texttt{tex.sprint} in Lua\TeX's own Lua. With
 \texttt{NUMERIC DIGITS 40}, every value is exact.
 
 \begin{center}
-\directlua{luatexVersion = rexx.run("powers.rex", 40)}
+\directlua{luatexVersion = rexxcall(rexx.run, "powers.rex", 40)}
 \end{center}
 
 \paragraph{Both ways.} \texttt{powers.rex} also asked Lua\TeX\ for its

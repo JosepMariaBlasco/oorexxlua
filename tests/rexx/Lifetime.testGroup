@@ -69,3 +69,14 @@ return testResult
   after = rss()
   self~assertTrue(before > 0 & after > 0, "memory measured (KB" before "->" after")")
   self~assertTrue(after - before < 1000000, "memory bounded (< 1 GB growth; KB" before "->" after")")
+
+-- Rexx errors that Lua catches are let go: each keeps its condition object
+-- only while Lua holds the error (docs/design.md, *Errors*)
+::method test_rexx_errors_caught_by_lua_are_released
+  s = .LuaState~new
+  bad = .routine~new("bad", "return 1 + 'a'")
+  s~eval("local f = ...; for i = 1, 20000 do local ok, e = pcall(f); assert(e.code == '41.1') end", bad)
+  s~eval("collectgarbage(); collectgarbage()")
+  parse value s~"LUA.STATS" with . kept
+  self~assertEquals(0, kept, "no condition object kept")
+  s~close
