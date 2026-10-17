@@ -143,7 +143,7 @@ Rexx -> Lua (the string: as converted / boxed as float)
 ' 1.5 '                            string:" 1.5 " / float:1.5
 '-0'                               integer:0 / float:-0 (negative)
 'NaN'                              string:"NaN" / error 98.900
-'nan'                              string:"nan" / float:nan (NaN)
+'nan'                              string:"nan" / float:NaN
 'Infinity'                         string:"Infinity" / error 98.900
 'inf'                              string:"inf" / error 98.900
 '1E+999'                           string:"1E+999" / float:inf

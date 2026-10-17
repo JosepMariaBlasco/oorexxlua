@@ -122,11 +122,12 @@ do while list \= ""
 end
 exit
 
--- what .lua~box("float", v) gives in Lua, or its error message
+-- what .lua~box("float", v) gives in Lua, or its error message (a NaN as
+-- "NaN": MSVC's printf writes the one ooRexx makes from "nan" as "nan(snan)")
 ::routine boxFloat
   use strict arg v
   signal on syntax
-  return .lua~eval("local x = ... return describe(x) .. (x ~= x and ' (NaN)' or '') .. (1/x < 0 and ' (negative)' or '')", .lua~box("float", v))
+  return .lua~eval("local x = ... if x ~= x then return math.type(x) .. ':NaN' end return describe(x) .. (1/x < 0 and ' (negative)' or '')", .lua~box("float", v))
 syntax:
   return "error" condition("O")~code
 
