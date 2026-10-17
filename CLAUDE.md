@@ -37,6 +37,12 @@ the workflow is run by hand with `oorexx_fixes` (`gh workflow run build.yml
 -f oorexx_fixes=true`).
 
 Any change of behaviour updates the expected output and `docs/design.md`.
+The conversion probes (`tests/probes/`, run by `Probes.testGroup`) are the
+master of the Lua column of `oorexx-bridges`' `topics/conversion-rules/`:
+when their output changes on purpose, the same commit updates their `.out`,
+and the probes and outputs are copied to `oorexx-bridges`
+(`topics/conversion-rules/probes/lua/`), with `lua.md` and the table updated
+(`topics/probes-in-ci.md`).
 Before a commit that touches `src/`, run the tests with Lua 5.3, 5.4 and 5.5
 (`LUA_VERSION=5.3 BUILD=... scripts/build.sh && LUA_VERSION=5.3 BUILD=...
 tests/run.sh`; 5.5 comes from `scripts/setup-lua.sh`). The CI runs the same

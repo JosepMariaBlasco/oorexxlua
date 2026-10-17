@@ -2,7 +2,9 @@
 # Run the test groups (tests/rexx/*.testGroup, ooRexxUnit:
 # scripts/setup-oorexxunit.sh) against the build, each in its own process
 # under a timeout (a deadlock is a failure).  Examples.testGroup runs every
-# example and compares its output with the NAME.out next to it.  Then the
+# example and compares its output with the NAME.out next to it;
+# Probes.testGroup does the same with the conversion probes (tests/probes).
+# Then the
 # tests of the Lua module (tests/lua/*.test.lua), each run by a standalone
 # lua of the build's version: LUA_EXE, else the one scripts/setup-lua.sh
 # built next to the clone.

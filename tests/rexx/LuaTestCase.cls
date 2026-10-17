@@ -24,6 +24,68 @@
 syntax:
   return condition("O")~message~makeArray("0a"x)[1]
 
+/** assertOutputs(dir, minimum, what)
+ * Runs each .rex (with rexx) and .lua (with the standalone lua in ORXLUA_LUA)
+ * file in dir, in its own process with dir as the current directory, and
+ * compares what it prints (stdout and stderr) with the NAME.out next to it.
+ * At least minimum files must be there.  Used by Examples.testGroup and
+ * Probes.testGroup.
+ */
+::method assertOutputs
+  use strict arg dir, minimum, what
+  -- librexxlua is found by name through the library path; macOS drops
+  -- DYLD_* variables when it starts /bin/sh (ADDRESS SYSTEM), so the command
+  -- sets it itself
+  parse upper source platform .
+  windows = platform~abbrev("WIN")
+  libvar = ""
+  if platform~pos("DARWIN") > 0 | platform~pos("MAC") > 0 then
+    libvar = "DYLD_LIBRARY_PATH='"value("ORXLUA_BUILD", , "ENVIRONMENT")"' "
+
+  names = .array~new
+  do f over .File~new(dir)~listFiles
+    if f~name~endsWith(".rex") | f~name~endsWith(".lua") then names~append(f~absolutePath)
+  end
+  names = names~sort
+  self~assertTrue(names~items >= minimum, what "found in" dir)
+  lua = value("ORXLUA_LUA", , "ENVIRONMENT")
+
+  failures = .array~new
+  do path over names
+    outFile = path~left(path~length - 4) || ".out"
+    if \SysFileExists(outFile) then do
+      failures~append(path": no" outFile)
+      iterate
+    end
+    s = .stream~new(outFile)
+    expected = s~arrayIn~makeString("L", "0a"x)
+    s~close
+    runner = "rexx"
+    if path~endsWith(".lua") then do
+      if lua == "" then do
+        failures~append(path": no standalone lua (ORXLUA_LUA)")
+        iterate
+      end
+      runner = '"'lua'"'
+    end
+    if windows then                    -- cmd.exe
+      cmd = 'cd /d "'dir'" && 'runner '"'path'" 2>&1'
+    else
+      cmd = 'cd "'dir'" && 'libvar || runner '"'path'" 2>&1'
+    out = .array~new
+    address system cmd with output using (out)
+    do i = 1 to out~items              -- Windows: lines may end in CR
+      if out[i]~right(1) == "0d"x then out[i] = out[i]~left(out[i]~length - 1)
+    end
+    got = out~makeString("L", "0a"x)
+    if got == expected then self~assertTrue(.true)
+    else failures~append(.File~new(path)~name || "0a"x ||,
+                         "  expected: [" || expected~changeStr("0a"x, "|") || "]" || "0a"x ||,
+                         "  got:      [" || got~changeStr("0a"x, "|") || "]")
+  end
+  if failures~items > 0 then
+    self~fail(failures~items what"(s) differ:" || "0a"x || failures~makeString("L", "0a"x))
+
 /** rss()
  * The resident memory of this process, in KB: /proc on Linux, ps on macOS,
  * the working set on Windows.  0 if it cannot be measured.

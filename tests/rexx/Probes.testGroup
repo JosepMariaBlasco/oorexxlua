@@ -1,0 +1,34 @@
+#!/usr/bin/env rexx
+/*----------------------------------------------------------------------------*/
+/* Probes.testGroup: the conversion probes (tests/probes: edges.rex from      */
+/* Rexx, edges-module.lua from the Lua module) print exactly what their .out  */
+/* files say.  They are the master of oorexx-bridges' column for Lua          */
+/* (topics/conversion-rules/lua.md, probes/lua, a mirror): a change in a      */
+/* conversion fails here; when it is on purpose, the same commit updates the  */
+/* .out, and the mirror is updated (topics/probes-in-ci.md).                  */
+/*                                                                            */
+/* Environment: what tests/run.sh sets (see Examples.testGroup).              */
+/*                                                                            */
+/* Licensed under the Apache License, Version 2.0.                            */
+/*----------------------------------------------------------------------------*/
+  parse source . . fileSpec
+
+  group = .TestGroup~new(fileSpec)
+  group~add(.Probes.testGroup)
+
+  if group~isAutomatedTest then return group
+
+  testResult = group~suite~execute~~print
+
+return testResult
+-- End of entry point.
+
+::requires 'LuaTestCase.cls'
+
+::class "Probes.testGroup" subclass LuaTestCase public
+
+::method test_the_conversion_probes
+  parse source . . me
+  sl = .File~separator
+  dir = .File~new(me)~parentFile~parentFile~absolutePath || sl || "probes"
+  self~assertOutputs(dir, 2, "probe")
