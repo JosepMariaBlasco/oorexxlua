@@ -238,8 +238,11 @@ of `oorexx-bridges`' `shared/boolean/boolean.cls`, **version 1** (SHA-256
 `65310b4c525c...`), never changed here; `lua.cls` requires it, so a program
 that requires `lua.cls` sees `.Boolean`, and it ships next to `lua.cls`.
 When the class reaches the ooRexx core, the copy goes. `lua.cls` puts the
-class in `.local` (`LUA.BOOLEAN`), where the bridge finds each interpreter
-instance's own. `tests/rexx/boolean-test.rex` is the class's own tests,
+class in `.local` (`LUA.BOOLEAN`), where the bridge finds it from any
+interpreter instance: calls from Lua run in no package that could name it.
+It is one class for the whole process (ooRexx shares a package loaded from
+one file among the instances; measured with two instances of the Lua
+module, `oorexx-bridges` `topics/booleans.md`). `tests/rexx/boolean-test.rex` is the class's own tests,
 verbatim too, run by `Booleans.testGroup`.
 
 ## Rexx objects in Lua
