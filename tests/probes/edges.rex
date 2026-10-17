@@ -106,7 +106,29 @@ signal on syntax name e3
 .lua~eval("local r = ... r()", r)
 e3: c = condition("O")
 say left("Rexx error through Lua to Rexx", 34) c~code c~message
+say "--- The text of a float (oorexx-bridges, topics/float-text.md)"
+say "Lua -> Rexx (value made in Lua: the string, its length, datatype N)"
+e = "1.0|1/3|0.1 + 0.2|1e16|1e21|1e-7|-0.0|2^53 + 1|math.tointeger(2^53) + 1|1.7976931348623157e308|5e-324|0/0|1/0|-1/0"
+do while e \= ""
+  parse var e x "|" e
+  r = .lua~eval("return" x)
+  say left(x, 34) "'"r"'" "len" r~length "datatype N" datatype(r, "N")
+end
+say "Rexx -> Lua (the string: as converted / boxed as float)"
+list = '1E+16|1e16|1E16| 1.5 |-0|NaN|nan|Infinity|inf|1E+999'
+do while list \= ""
+  parse var list v "|" list
+  say left("'"v"'", 34) .lua~eval("return describe(...)", v) "/" boxFloat(v)
+end
 exit
+
+-- what .lua~box("float", v) gives in Lua, or its error message
+::routine boxFloat
+  use strict arg v
+  signal on syntax
+  return .lua~eval("local x = ... return describe(x) .. (x ~= x and ' (NaN)' or '') .. (1/x < 0 and ' (negative)' or '')", .lua~box("float", v))
+syntax:
+  return "error" condition("O")~code
 
 -- s with the address after each "table: ", "function: ", "thread: ",
 -- "userdata: " or "file (" as 0x... (Windows prints addresses without 0x)

@@ -120,3 +120,30 @@ Rexx error 41.1 seen in Lua        table SYNTAX 41.1 rc 41 line 1 | Rexx error 4
 Rexx raise syntax 98.900 in Lua    table SYNTAX 98.900 rc 98 line 1 | Rexx error 98.900: my message.
 Lua table error through Rexx back  table:{code=integer:7} #0
 Rexx error through Lua to Rexx     41.1 Nonnumeric value ("a") used in arithmetic operation.
+--- The text of a float (oorexx-bridges, topics/float-text.md)
+Lua -> Rexx (value made in Lua: the string, its length, datatype N)
+1.0                                '1.0' len 3 datatype N 1
+1/3                                '0.3333333333333333' len 18 datatype N 1
+0.1 + 0.2                          '0.30000000000000004' len 19 datatype N 1
+1e16                               '1e+16' len 5 datatype N 1
+1e21                               '1e+21' len 5 datatype N 1
+1e-7                               '1e-07' len 5 datatype N 1
+-0.0                               '-0.0' len 4 datatype N 1
+2^53 + 1                           '9007199254740992.0' len 18 datatype N 1
+math.tointeger(2^53) + 1           '9007199254740993' len 16 datatype N 1
+1.7976931348623157e308             '1.7976931348623157e+308' len 23 datatype N 1
+5e-324                             '4.94065645841247e-324' len 21 datatype N 1
+0/0                                'nan' len 3 datatype N 0
+1/0                                'inf' len 3 datatype N 0
+-1/0                               '-inf' len 4 datatype N 0
+Rexx -> Lua (the string: as converted / boxed as float)
+'1E+16'                            string:"1E+16" / float:10000000000000000
+'1e16'                             string:"1e16" / float:10000000000000000
+'1E16'                             string:"1E16" / float:10000000000000000
+' 1.5 '                            string:" 1.5 " / float:1.5
+'-0'                               integer:0 / float:-0 (negative)
+'NaN'                              string:"NaN" / error 98.900
+'nan'                              string:"nan" / float:nan (NaN)
+'Infinity'                         string:"Infinity" / error 98.900
+'inf'                              string:"inf" / error 98.900
+'1E+999'                           string:"1E+999" / float:inf
