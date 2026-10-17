@@ -201,7 +201,7 @@ the same rule, so `t[1]` from Rexx is `t[1]` in Lua.
 | `.nil` | `nil` |
 | `.Boolean~true`, `.Boolean~false` (`isA(.Boolean)`: subclasses too) | `true`, `false` |
 | `.LuaObject` | its value (of the same state) |
-| Array | a new sequence table (a copy), each item by this rule |
+| Array | a new sequence table (a copy), each item by this rule; `n` = its size if it has empty slots; more dimensions: nested tables (below) |
 | a string (literal numbers included) | integer, float or string, by the rule above |
 | Routine | a real Lua function (a C closure) |
 | any other object | a `RexxObject` userdata, by reference (see *Rexx objects in Lua*) |
@@ -276,6 +276,28 @@ is a Lua error, which can come back to Rexx (*Errors*).
 Only Arrays are copied (to a sequence table), as ooRexx/Python copies them to
 lists; `s~box("reference", array)` passes one by reference instead, and
 `s~table(d)` copies a Directory or a StringTable to a table.
+
+The copy keeps the Array's shape (`oorexx-bridges`, `topics/array-shape.md`,
+decided 17/10/2026; until then a sparse Array lost its size and a
+multi-dimensional one was flattened):
+
+- **Empty slots.** An empty slot, or an item `.nil`, is `nil` in Lua, a hole,
+  and with holes `#t` cannot give the size. So such a table also gets the
+  field `n` with the Array's `size`, Lua's own convention (`table.pack`,
+  `table.unpack(t, 1, t.n)`): `[1, , "x", ]` (size 4) is
+  `{1, nil, "x", n = 4}`. An Array without holes is a plain sequence, with
+  no `n`: its size is `#t`. In Lua, the size is `t.n or #t`. The size is
+  Rexx's: `.array~new(100)` with one item appended is `{1, n = 100}`.
+- **Several dimensions.** Nested tables, the first dimension outermost: a
+  2×3 Array `m` is `{{m[1,1], m[1,2], m[1,3]}, {m[2,1], m[2,2], m[2,3]}}`,
+  and each innermost table follows the rule above (`n` if it has holes;
+  the outer ones never have holes). The way back is not symmetric: in Lua a
+  table is a `.LuaObject`, and `~makeArray` of a nested one gives an Array
+  of `.LuaObject`s.
+- **`~makeArray`** of a `.LuaObject` takes the items `1` to `t.n` when the
+  table has an integer `n` (raw), else to `#t`, and leaves a `nil` as an
+  empty slot (until 17/10/2026: `.nil`), so a sparse Array that goes to Lua
+  and comes back with `~makeArray` has its size and its items again.
 
 ## Boxing
 

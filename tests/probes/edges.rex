@@ -33,6 +33,10 @@ a = .array~new(4); a[1] = 1; a[3] = "x"
 say left("sparse Array [1,,x,] (size 4)", 34) .lua~eval("return describe(...)", a)
 m = .array~new(2,2); m[1,1] = 1; m[2,2] = 4
 say left("2-D Array 2x2", 34) .lua~eval("return describe(...)", m)
+f = .array~new(2,3); do i = 1 to 2; do j = 1 to 3; f[i,j] = i * 10 + j; end; end
+say left("2-D Array 2x3, full", 34) .lua~eval("return describe(...)", f)
+r = .lua~eval("return ...", a)~makeArray
+say left("sparse there and ~makeArray back", 34) "size" r~size "items" r~items "r[3]" r[3]
 say left("nested ((1,2),(3,'a'))", 34) .lua~eval("return describe(...)", ((1,2),(3,"a")))
 s.1 = "a"; s.0 = 1
 say left("stem s.", 34) .lua~eval("return describe(...)", s.)

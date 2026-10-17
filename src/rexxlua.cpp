@@ -645,7 +645,19 @@ static int p_assign(lua_State *L)
 static int p_gettable(lua_State *L) { lua_gettable(L, 1); return 1; }          // obj, key -> obj[key]
 static int p_settable(lua_State *L) { lua_settable(L, 1); return 0; }          // obj, key, value
 static int p_tostring(lua_State *L) { luaL_tolstring(L, 1, NULL); return 1; }  // v -> tostring(v)
-static int p_len(lua_State *L) { lua_pushinteger(L, luaL_len(L, 1)); return 1; }   // v -> #v
+// v -> its size as a sequence: a table's integer field n (raw: an Array with
+// empty slots carries it, as table.pack does; docs/design.md, *Values*), else #v
+static int p_size(lua_State *L)
+{
+    if (lua_type(L, 1) == LUA_TTABLE) {
+        lua_pushstring(L, "n");
+        lua_rawget(L, 1);
+        if (lua_isinteger(L, -1) && lua_tointeger(L, -1) >= 0) return 1;
+        lua_settop(L, 1);
+    }
+    lua_pushinteger(L, luaL_len(L, 1));
+    return 1;
+}
 static int p_getglobal(lua_State *L) { lua_getglobal(L, lua_tostring(L, 1)); return 1; }
 // op, a[, b] -> lua_arith(op): a op b, or op a for the unary ones
 static int p_arith(lua_State *L)
@@ -1628,6 +1640,81 @@ static Proxy *proxyOf(RexxThreadContext *c, RexxObjectPtr v)
     return p == NULLOBJECT ? NULL : (Proxy *)c->PointerValue((RexxPointerObject)p);
 }
 
+/* Rexx Array -> a new table (docs/design.md, *Values*).  One dimension: a
+ * sequence, with the field n = the Array's size when some slot in 1..size
+ * is nil in Lua (empty, or .nil), since #t cannot tell the size then.  More
+ * dimensions: nested sequences, the first dimension outermost, each row by
+ * the same rule (an outer table has no holes: its rows are tables).  An
+ * Array keeps its items with the FIRST index varying fastest (measured:
+ * m[2,1] is at linear position 2 of a 2x3), so the item at (i1, ..., ik) is
+ * the one at linear position 1 + sum((ij - 1) * stride(j)), with stride(1)
+ * = 1 and stride(j) = stride(j-1) * dim(j-1).                             */
+enum { MAX_ARRAY_DIMS = 32 };
+
+static bool pushArrayLevel(State *st, RexxArrayObject a, const size_t *dims, size_t ndims,
+                           size_t level, size_t offset, const size_t *strides)
+{
+    RexxThreadContext *c = st->tc;
+    lua_State *L = st->L;
+    if (!lua_checkstack(L, 4)) { lua_pushstring(L, "an Array nested too deeply"); return false; }
+    size_t count = dims[level];
+    if (level + 1 < ndims) {
+        lua_createtable(L, (int)count, 0);
+        for (size_t i = 1; i <= count; i++) {
+            if (!pushArrayLevel(st, a, dims, ndims, level + 1, offset + (i - 1) * strides[level], strides)) {
+                lua_remove(L, -2); return false;
+            }
+            lua_rawseti(L, -2, (lua_Integer)i);
+        }
+        return true;
+    }
+    lua_createtable(L, (int)count, 0);
+    bool holes = false;
+    for (size_t i = 1; i <= count; i++) {
+        RexxObjectPtr item = c->ArrayAt(a, 1 + offset + (i - 1) * strides[level]);
+        if (item == NULLOBJECT || item == c->Nil()) { holes = true; continue; }
+        if (!pushValue(st, item)) { lua_remove(L, -2); return false; }
+        lua_rawseti(L, -2, (lua_Integer)i);
+    }
+    if (holes) {
+        lua_pushinteger(L, (lua_Integer)count);
+        lua_setfield(L, -2, "n");
+    }
+    return true;
+}
+
+static NOINLINE bool pushArray(State *st, RexxArrayObject a)
+{
+    RexxThreadContext *c = st->tc;
+    size_t dims[MAX_ARRAY_DIMS], strides[MAX_ARRAY_DIMS];
+    size_t ndims = c->ArrayDimension(a);
+    if (ndims <= 1) {
+        dims[0] = c->ArraySize(a); strides[0] = 1;
+        return pushArrayLevel(st, a, dims, 1, 0, 0, strides);
+    }
+    if (ndims > MAX_ARRAY_DIMS) {
+        lua_pushstring(st->L, "an Array of more than 32 dimensions");
+        return false;
+    }
+    for (size_t j = 0; j < ndims; j++) {
+        RexxObjectPtr idx = c->WholeNumberToObject((wholenumber_t)(j + 1));
+        RexxObjectPtr d = c->SendMessage1(a, "DIMENSION", idx);
+        release(c, idx);
+        size_t size = 0;
+        if (d == NULLOBJECT || !c->ObjectToStringSize(d, &size)) {
+            if (d != NULLOBJECT) release(c, d);
+            c->ClearCondition();
+            lua_pushstring(st->L, "an Array whose dimensions cannot be read");
+            return false;
+        }
+        release(c, d);
+        dims[j] = size;
+    }
+    strides[0] = 1;
+    for (size_t j = 1; j < ndims; j++) strides[j] = strides[j - 1] * dims[j - 1];
+    return pushArrayLevel(st, a, dims, ndims, 0, 0, strides);
+}
+
 /* Push a Rexx value.  False if it cannot go to this state (a .LuaObject of
  * another state, or of a closed one): then the error message is pushed
  * instead, for lua_error or for raiseTop.                                  */
@@ -1646,20 +1733,7 @@ static NOINLINE bool pushValue(State *st, RexxObjectPtr v)
         lua_rawgeti(L, LUA_REGISTRYINDEX, p->ref);
         return true;
     }
-    if (c->IsArray(v)) {
-        RexxArrayObject a = (RexxArrayObject)v;
-        size_t n = c->ArrayItems(a);
-        size_t size = c->ArraySize(a);
-        if (!lua_checkstack(L, 4)) { lua_pushstring(L, "an Array nested too deeply"); return false; }
-        lua_createtable(L, (int)n, 0);
-        for (size_t i = 1; i <= size; i++) {
-            RexxObjectPtr item = c->ArrayAt(a, i);
-            if (item == NULLOBJECT) continue;
-            if (!pushValue(st, item)) { lua_remove(L, -2); return false; }
-            lua_rawseti(L, -2, (lua_Integer)i);
-        }
-        return true;
-    }
+    if (c->IsArray(v)) return pushArray(st, (RexxArrayObject)v);
     if (c->IsString(v) || c->IsOfType(v, "STRING")) {   // Integers from literals too
         RexxStringObject s;
         if (!stringValue(c, v, s)) {
@@ -2141,7 +2215,7 @@ RexxMethod1(RexxObjectPtr, LuaObj_MakeArray, CSELF, self)
     pushSelf(px);
     int obj = lua_gettop(L);
     lua_pushvalue(L, obj);
-    if (!protect(st, p_len, 1)) { lua_settop(L, top); return emptyArray(c); }
+    if (!protect(st, p_size, 1)) { lua_settop(L, top); return emptyArray(c); }
     lua_Integer n = lua_tointeger(L, -1);
     lua_pop(L, 1);
     RexxArrayObject a = c->NewArray(n > 0 ? (size_t)n : 0);
@@ -2149,7 +2223,7 @@ RexxMethod1(RexxObjectPtr, LuaObj_MakeArray, CSELF, self)
         lua_pushvalue(L, obj);
         lua_pushinteger(L, i);
         if (!protect(st, p_gettable, 2)) { lua_settop(L, top); return emptyArray(c); }
-        c->ArrayPut(a, toRexx(st, -1), (size_t)i);
+        if (!lua_isnil(L, -1)) c->ArrayPut(a, toRexx(st, -1), (size_t)i);   // nil: an empty slot
         lua_pop(L, 1);
     }
     lua_settop(L, top);
