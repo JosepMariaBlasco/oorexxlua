@@ -26,6 +26,15 @@ T.test("eval: arguments are arg(1), arg(2) ...", function()
   T.eq(rexx.eval("arg()", 1, nil, 3), 3)
   T.eq(rexx.eval("arg(2, 'O')", 1, nil, 3), 1)       -- nil: an omitted argument
   T.eq(rexx.eval("arg(1) arg(2)", true, false), "1 0")
+  -- booleans are .Boolean in Rexx, and booleans again back in Lua
+  T.eq(rexx.eval("arg(1)~class~id arg(2)~isA(.Boolean)", true, false), "Boolean 1")
+  T.eq(rexx.eval("arg(1)", false), false)
+  T.eq(rexx.eval(".Boolean~true"), true)
+  T.eq(rexx.eval(".true"), 1)                          -- .true is the string "1"
+  local r = rexx.interpreter{}                         -- each instance its own .Boolean
+  T.eq(r.eval("arg(1)~isA(.Boolean)", true), 1)        -- (isA gives .true, the string "1")
+  T.eq(r.eval(".Boolean~false"), false)
+  r.close()
   T.eq(rexx.eval("arg(1)", 2^10), 1024.0)            -- a float makes the round trip
   T.eq(rexx.eval("arg(1)", 0.1 + 0.2), 0.1 + 0.2)
 end)
@@ -174,7 +183,7 @@ T.test("coroutines", function()
 end)
 
 T.test("require 'oorexx' in Lua that Rexx runs: the running instance", function()
-  T.eq(rexx.eval(".lua~eval(\"return require('oorexx') == ...\", arg(1))", rexx), 1)
+  T.eq(rexx.eval(".lua~eval(\"return require('oorexx') == ...\", arg(1))", rexx), true)
   T.eq(rexx.eval([[.LuaState~new~eval("return require('oorexx').eval('2 + 2')")]]), 4)
   T.eq(rexx.eval([[.LuaState~new~eval("return require('oorexx').interpreter")]]), nil)
 end)

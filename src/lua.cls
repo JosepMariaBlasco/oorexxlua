@@ -13,7 +13,10 @@
  *     s~predicate(routine)     a Lua function whose Rexx 1/0 result is a boolean
  *     s~box(type, value)       value as a Lua boolean, integer, float or string,
  *                              or (type "reference") a Rexx object by reference
- *     s~true, s~false          Lua's booleans (Rexx 1/0 are both true in Lua)
+ *     s~true, s~false          .Boolean~true, .Boolean~false (aliases): Lua's
+ *                              booleans (Rexx 1/0 are both true in Lua)
+ *   .Boolean                   boolean.cls (shared by the ooRexx bridges): its
+ *                              two instances are Lua's true and false, both ways
  *     s~close                  lua_close: frees everything; its objects are dead
  *     s~isClosed
  *
@@ -43,10 +46,12 @@
  * while Lua runs, so another thread using the same object would wait for it.
  */
 
+.local["LUA.BOOLEAN"] = .Boolean         -- for the bridge: this instance's (rexxlua.cpp)
 .local~lua = .LuaState~"LUA.DEFAULT"
 .LuaState~"LUA.ADDRESS"                 -- ADDRESS LUA (in rexxlua.cpp)
 
 ::requires "rexxlua" LIBRARY
+::requires "boolean.cls"                -- .Boolean: a verbatim copy of oorexx-bridges' shared/boolean
 
 ::class LuaState public
 ::method init
@@ -74,8 +79,8 @@
 ::method table unguarded        external "LIBRARY rexxlua LuaState_Table"
 ::method predicate unguarded    external "LIBRARY rexxlua LuaState_Predicate"
 ::method box unguarded          external "LIBRARY rexxlua LuaState_Box"
-::method true unguarded         ; return self~box("boolean", 1)
-::method false unguarded        ; return self~box("boolean", 0)
+::method true unguarded         ; return .Boolean~true     -- (aliases: Lua's true and false)
+::method false unguarded        ; return .Boolean~false
 ::method "LUA.STATS" unguarded  external "LIBRARY rexxlua LuaState_Stats"   -- for the tests
 
 ::class LuaObject public

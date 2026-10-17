@@ -1,0 +1,75 @@
+#!/usr/bin/env rexx
+/*----------------------------------------------------------------------------*/
+/* Booleans.testGroup: .Boolean (boolean.cls, a verbatim copy of              */
+/* oorexx-bridges' shared/boolean, version 1) and Lua's booleans              */
+/* (docs/design.md, *Values*).                                                */
+/*                                                                            */
+/* Licensed under the Apache License, Version 2.0.                            */
+/*----------------------------------------------------------------------------*/
+  parse source . . fileSpec
+
+  group = .TestGroup~new(fileSpec)
+  group~add(.Booleans.testGroup)
+
+  if group~isAutomatedTest then return group
+
+  testResult = group~suite~execute~~print
+
+return testResult
+-- End of entry point.
+
+::requires 'LuaTestCase.cls'
+
+::class "Booleans.testGroup" subclass LuaTestCase public
+
+-- The shared class's own tests (boolean-test.rex, verbatim from shared/boolean)
+::method test_the_shared_class
+  parse source . . me
+  call (me~left(me~lastPos(.File~separator)) || "boolean-test.rex")
+  self~assertEquals(0, result, "boolean-test.rex: all pass")
+
+::method test_Lua_booleans_are_Booleans
+  t = .lua~eval("return true"); f = .lua~eval("return false")
+  self~assertSame(.Boolean~true, t)
+  self~assertSame(.Boolean~false, f)
+  self~assertTrue(t, "IF works")
+  self~assertTrue(t = 1 & f = 0 & t == "1", "as 1 and 0")
+  r = .lua~eval("return 1 < 2, nil, false")
+  self~assertSame(.Boolean~true, r)
+  a = .lua~eval("function() return true, nil, false end")~callAll
+  self~assertSame(.Boolean~false, a[3])
+
+::method test_Booleans_are_Lua_booleans
+  self~assertEquals("boolean true", .lua~eval("return type(...) .. ' ' .. tostring(...)", .Boolean~true))
+  self~assertEquals("boolean false", .lua~eval("return type(...) .. ' ' .. tostring(...)", .Boolean~false))
+  self~assertEquals("number", .lua~eval("return math.type(...) and 'number'", .true), ".true is the string 1")
+  -- in a table, as an Array item
+  self~assertEquals("boolean", .lua~eval("return type((...)[2])", .array~of(1, .Boolean~false)))
+  -- a subclass's instances too
+  self~assertEquals("boolean", .lua~eval("return type(...)", .JsonLike~true))
+
+::method test_the_aliases
+  self~assertSame(.Boolean~true, .lua~true)
+  self~assertSame(.Boolean~false, .lua~false)
+  s = .LuaState~new
+  self~assertSame(.Boolean~true, s~true, "of any state")
+  s~close
+  -- ~box("boolean", ...) stays a .LuaObject, a Lua value of that type
+  b = .lua~box("boolean", 0)
+  self~assertTrue(b~isA(.LuaObject))
+  self~assertEquals("boolean", b~luaType)
+
+::method test_round_trips
+  self~assertSame(.Boolean~false, .lua~eval("return ...", .Boolean~false))
+  self~assertEquals("boolean", .lua~eval("local f = ...; return type(f(false))", .routine~new("id", "return arg(1)")))
+
+::method test_a_routine_returning_a_Boolean_sorts
+  less = .routine~new("less", "return .Boolean~of(arg(1) < arg(2))")
+  w = .lua~table(.array~of(3, 1, 2))
+  .lua~global("table")~sort(w, less)
+  self~assertEquals("1,2,3", .lua~global("table")~concat(w, ","))
+  w = .lua~table(.array~of(3, 1, 2))
+  .lua~global("table")~sort(w, .lua~predicate(less))
+  self~assertEquals("1,2,3", .lua~global("table")~concat(w, ","), "and through predicate")
+
+::class JsonLike subclass Boolean

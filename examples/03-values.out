@@ -14,8 +14,11 @@ inf -inf nan
 1
 string float integer
 false
-false
 x,y
 x,y
 Error: Lua error: box: an integer must be a whole number that fits in 64 bits, not "1.5".
 Error: Lua error: box: a boolean must be 1 or 0, not "yes".
+boolean boolean integer
+Boolean 1
+IF takes it
+false

@@ -5,11 +5,11 @@
  * docs/design.md (the comments name its sections, e.g. *States*).
  *
  * Values (docs/design.md, *Values*), Lua -> Rexx: nil -> .nil; boolean ->
- *   1/0; integer -> its decimal string; float -> the shortest string that
+ *   .Boolean~true/.Boolean~false; integer -> its decimal string; float -> the shortest string that
  *   gives it back; string -> string; a Rexx object passed in earlier -> that
  *   object; anything else -> a .LuaObject proxy.
- * Rexx -> Lua: .nil -> nil; .LuaObject -> its value; Array -> a new sequence
- *   table (copy); a string -> integer, float or string, by a rule that
+ * Rexx -> Lua: .nil -> nil; a .Boolean -> boolean; .LuaObject -> its value;
+ *   Array -> a new sequence table (copy); a string -> integer, float or string, by a rule that
  *   loses nothing (numberKind, pushRexxString); Routine -> a Lua function;
  *   any other object -> userdata "RexxObject" that Lua can call or send
  *   messages to.
@@ -1106,7 +1106,7 @@ static int routine_closure(lua_State *L)
     RexxBox *b = upvalueBox(L);
     bool predicate = lua_toboolean(L, lua_upvalueindex(2));
     int n = rexxCallBack(L, b->obj, NULL, 1);
-    if (predicate && n == 1) {
+    if (predicate && n == 1 && !lua_isboolean(L, -1)) {        // (a .Boolean is one already)
         size_t len; const char *s = lua_tolstring(L, -1, &len);
         bool t = s && len == 1 && s[0] == '1';
         lua_pop(L, 1);
@@ -1554,6 +1554,34 @@ static RexxObjectPtr newProxy(State *st, int idx)
     return o;
 }
 
+/* .Boolean (boolean.cls, shared by the ooRexx bridges: docs/design.md,
+ * *Values*), which lua.cls puts in .local as LUA.BOOLEAN when it loads: each
+ * interpreter instance has its own (the Lua module may make several).  A
+ * local reference, or NULLOBJECT where lua.cls is not loaded.             */
+static RexxObjectPtr booleanClass(RexxThreadContext *c)
+{
+    RexxDirectoryObject local = c->GetLocalEnvironment();
+    if (local == NULLOBJECT) return NULLOBJECT;
+    RexxObjectPtr cls = c->DirectoryAt(local, "LUA.BOOLEAN");
+    release(c, local);
+    if (cls == NULLOBJECT || cls == c->Nil()) return NULLOBJECT;
+    return cls;
+}
+
+// Is v a .Boolean (or of a subclass)?  Its logical value in *value.
+static bool isBoolean(RexxThreadContext *c, RexxObjectPtr v, bool *value)
+{
+    RexxObjectPtr cls = booleanClass(c);
+    if (cls == NULLOBJECT) return false;
+    bool is = c->IsInstanceOf(v, (RexxClassObject)cls) != 0;
+    release(c, cls);
+    if (!is) return false;
+    logical_t b = 0;
+    if (!c->ObjectToLogical(v, &b)) { c->ClearCondition(); return false; }
+    *value = b != 0;
+    return true;
+}
+
 static NOINLINE RexxObjectPtr toRexx(State *st, int idx)
 {
     RexxThreadContext *c = st->tc;
@@ -1561,7 +1589,13 @@ static NOINLINE RexxObjectPtr toRexx(State *st, int idx)
     idx = lua_absindex(L, idx);
     switch (lua_type(L, idx)) {
     case LUA_TNIL:     return c->Nil();
-    case LUA_TBOOLEAN: return lua_toboolean(L, idx) ? c->True() : c->False();
+    case LUA_TBOOLEAN: {                    // .Boolean~true, .Boolean~false (*Values*)
+        RexxObjectPtr cls = booleanClass(c);
+        if (cls == NULLOBJECT) return lua_toboolean(L, idx) ? c->True() : c->False();
+        RexxObjectPtr b = c->SendMessage0(cls, lua_toboolean(L, idx) ? "TRUE" : "FALSE");
+        release(c, cls);
+        return b != NULLOBJECT ? b : (lua_toboolean(L, idx) ? c->True() : c->False());
+    }
     case LUA_TNUMBER: {
         if (lua_isinteger(L, idx)) {
             char buf[32];
@@ -1636,8 +1670,10 @@ static NOINLINE bool pushValue(State *st, RexxObjectPtr v)
         if ((RexxObjectPtr)s != v) release(c, s);   // a new String (from a number): see release
         return true;
     }
-    // A Routine: a real Lua function. Any other object: a userdata Lua can
-    // send messages to (obj:name(...)).
+    // A .Boolean: Lua's boolean.  A Routine: a real Lua function.  Any other
+    // object: a userdata Lua can send messages to (obj:name(...)).
+    bool b;
+    if (isBoolean(c, v, &b)) { lua_pushboolean(L, b ? 1 : 0); return true; }
     if (c->IsRoutine(v)) { pushRoutine(st, v, false); return true; }
     pushBox(st, v);
     return true;

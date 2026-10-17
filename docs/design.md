@@ -199,6 +199,7 @@ the same rule, so `t[1]` from Rexx is `t[1]` in Lua.
 | Rexx | Lua |
 |---|---|
 | `.nil` | `nil` |
+| `.Boolean~true`, `.Boolean~false` (`isA(.Boolean)`: subclasses too) | `true`, `false` |
 | `.LuaObject` | its value (of the same state) |
 | Array | a new sequence table (a copy), each item by this rule |
 | a string (literal numbers included) | integer, float or string, by the rule above |
@@ -210,7 +211,7 @@ Lua → Rexx:
 | Lua | Rexx |
 |---|---|
 | `nil` | `.nil` |
-| boolean | `1` / `0` |
+| boolean | `.Boolean~true` / `.Boolean~false` |
 | integer | its decimal string |
 | float | the shortest of `%.15g`, `%.16g`, `%.17g` that gives back the same number, with `.0` if it looks like an integer |
 | string | a string, bytes unchanged |
@@ -222,6 +223,24 @@ Floats are written as Python's `repr` writes them: `2^10` is `1024.0`,
 lose digits (`0.3`), and a float that went from Lua to Rexx and back would no
 longer be the same number. `inf`, `-inf` and `nan` come as those strings,
 which are not Rexx numbers.
+
+**Booleans.** In Rexx, `.true` and `.false` are the strings `"1"` and `"0"`,
+which nothing can tell from the numbers. `.Boolean` is the class the ooRexx
+bridges share for this (the owner's decision of 2026-10-17, proposed for the
+ooRexx core in RFE #880): two instances, `.Boolean~true` and
+`.Boolean~false`, that behave as `"1"` and `"0"` in every Rexx context
+(`IF`, operators, `DATATYPE`, string methods, collection indexes) and answer
+`isA(.Boolean)`. Any object that is `isA(.Boolean)` goes to Lua as a
+boolean, and Lua's booleans come to Rexx as those two instances, so a Lua
+boolean that goes through Rexx and back is still a boolean. `.true`, a
+string, still goes as the integer `1`. `src/boolean.cls` is a verbatim copy
+of `oorexx-bridges`' `shared/boolean/boolean.cls`, **version 1** (SHA-256
+`65310b4c525c...`), never changed here; `lua.cls` requires it, so a program
+that requires `lua.cls` sees `.Boolean`, and it ships next to `lua.cls`.
+When the class reaches the ooRexx core, the copy goes. `lua.cls` puts the
+class in `.local` (`LUA.BOOLEAN`), where the bridge finds each interpreter
+instance's own. `tests/rexx/boolean-test.rex` is the class's own tests,
+verbatim too, run by `Booleans.testGroup`.
 
 ## Rexx objects in Lua
 
@@ -266,9 +285,12 @@ when the rule of *Values* does not give the type needed:
 | `"reference"` | a Rexx object that is not a string | the object by reference (an Array that Lua can change) |
 
 Rexx's `1` and `0` are both true in Lua, and `.true` is just the string
-`"1"`, so booleans cannot be converted automatically: `s~box("boolean",
-flag)`, or the shorthands `s~true` and `s~false`. For the results of Rexx
-callbacks that Lua uses as conditions (`table.sort`'s comparator),
+`"1"`, so they cannot be converted automatically: a boolean is a `.Boolean`
+(`.Boolean~true`, `.Boolean~of(a > b)`; *Values*). `s~true` and `s~false`
+are aliases of `.Boolean~true` and `.Boolean~false` (until 0.3.0, they were
+`.LuaObject`s of Lua's booleans, `s~box("boolean", ...)`, which still makes
+one). For the results of Rexx callbacks that Lua uses as conditions
+(`table.sort`'s comparator), a routine can return a `.Boolean`, or
 `s~predicate(routine)` makes a Lua function that turns the routine's `1` or
 `0` into a boolean. The results of other callbacks are not converted: a
 routine that returns `0` as a number must not become `false`.

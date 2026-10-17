@@ -10,7 +10,9 @@ Both directions work. **Lua embedded in ooRexx**: an ooRexx native package,
 `.LuaState~new` makes more, independent ones, and `.LuaObject` proxies let
 Rexx use Lua tables, functions and objects as Rexx objects. Rexx routines and
 objects are passed to Lua as functions and userdata that Lua can call back.
-Errors cross in both directions (a Rexx error is a table with its fields in
+Lua's booleans are `.Boolean~true` and `.Boolean~false` in Rexx, and back
+(`boolean.cls`, the class the ooRexx bridges share). Errors cross in both
+directions (a Rexx error is a table with its fields in
 Lua; a Lua error keeps its value in Rexx) and come back as themselves after a
 round trip, and a Ctrl-C stops Lua code with a
 HALT, as it stops Rexx code. Several Rexx threads can use Lua at once, and
@@ -207,4 +209,6 @@ Written by Josep Maria Blasco, with Claude (Anthropic) as coding assistant.
 
 ## License
 
-Apache License 2.0 (`LICENSE`).
+Apache License 2.0 (`LICENSE`). `src/boolean.cls`, a copy of the class
+proposed for the ooRexx core (RFE #880), is under the Common Public License
+1.0, as ooRexx (its header).

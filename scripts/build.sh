@@ -76,7 +76,7 @@ if [ "$OS" = Windows ]; then
         -I"$(W "$LUADIR")" -I"$(W "$OOREXX_HOME/include")" "$(W "$SRC/rexxlua.cpp")" -Fe"$(W "$BUILD/texlive/$MOD")" \
         -link -DEBUG -OPT:REF -OPT:ICF -LIBPATH:"$(W "$OOREXX_HOME/lib")" rexx.lib rexxapi.lib "$(W "$OBJ/lua53w64.lib")"
     rm -f "$BUILD"/texlive/*.exp "$BUILD"/texlive/*.lib
-    cp "$SRC/lua.cls" "$BUILD/texlive/"
+    cp "$SRC/lua.cls" "$SRC/boolean.cls" "$BUILD/texlive/"
   fi
 else
   if [ -z "${LUA_CFLAGS:-}${LUA_LIBS:-}" ]; then
@@ -106,5 +106,5 @@ else
   # shellcheck disable=SC2086
   "$CXX" $CXXFLAGS $MODFLAGS $LUA_CFLAGS $ORX "$SRC/rexxlua.cpp" -o "$BUILD/$MOD" -lrexx -lrexxapi
 fi
-cp "$SRC/lua.cls" "$BUILD/"
-echo "build.sh: $BUILD/$PKG, $BUILD/$MOD, $BUILD/lua.cls (Lua $V; ooRexx: $OOREXX_HOME)"
+cp "$SRC/lua.cls" "$SRC/boolean.cls" "$BUILD/"
+echo "build.sh: $BUILD/$PKG, $BUILD/$MOD, $BUILD/lua.cls, boolean.cls (Lua $V; ooRexx: $OOREXX_HOME)"

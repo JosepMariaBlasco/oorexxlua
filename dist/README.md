@@ -79,7 +79,7 @@ local f = rexx.routine("use arg a, b; return a * b")
 print(f(6, 7))                              -- 42
 ```
 
-Lua finds it through `LUA_CPATH` (`lua.cls` must stay next to it):
+Lua finds it through `LUA_CPATH` (`lua.cls` and `boolean.cls` must stay next to it):
 `export LUA_CPATH="/path/to/oorexxlua/?.so;;"` (on Windows,
 `set LUA_CPATH=C:\path\to\oorexxlua\?.dll;;`). It needs ooRexx's
 libraries (`librexx`, `librexxapi`; `rexx.dll`, `rexxapi.dll`) where the
@@ -95,7 +95,7 @@ Live's LuaTeX needs the module in `texlive\` (its Lua is `lua53w64.dll`).
 LaTeX replaces Lua's searchers with kpathsea's, so LuaLaTeX ignores
 `LUA_CPATH` and `package.cpath`: give the module's directory in
 `CLUAINPUTS` (`CLUAINPUTS=/path/to/oorexxlua lualatex --shell-escape doc.tex`),
-or put the module and `lua.cls` next to the document, or load it by its path
+or put the module, `lua.cls` and `boolean.cls` next to the document, or load it by its path
 in the document:
 
 ```latex
