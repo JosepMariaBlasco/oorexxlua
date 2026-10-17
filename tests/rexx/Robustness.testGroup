@@ -93,6 +93,26 @@ syntax:
   self~assertTrue(msg~pos("more than 100000000 items") > 0, msg)
   self~assertEquals(5, .lua~eval("return {1, 2, n = 5}")~makeArray~size)
 
+-- An Array that contains itself is a table that contains itself (it crashed
+-- the process, recursing in C, until 17/10/2026); one Array is one table.
+::method test_an_Array_that_contains_itself
+  a = .array~of(1, 2); a~append(a)
+  self~assertTrue(.lua~eval("local t = ... return t[3] == t and t[3][3][2] == 2", a))
+  b = .array~of("b"); c = .array~of("c", b); b~append(c)
+  self~assertTrue(.lua~eval("local t = ... return t[2][2] == t", b))
+  x = .array~of(9)
+  self~assertTrue(.lua~eval("local t = ... return t[1] == t[2]", .array~of(x, x)))
+  self~assertFalse(.lua~eval("local t = ... return t[1] == t[2]", .array~of(.array~of(9), .array~of(9))))
+  m = .array~new(2,2); m[1,1] = m
+  self~assertTrue(.lua~eval("local t = ... return t[1][1] == t", m))
+
+::method test_Arrays_nested_too_deep_are_an_error
+  deep = .array~of(1); do 999; deep = .array~of(deep); end
+  self~assertEquals(1000, .lua~eval("local t = ... local n = 0 while type(t) == 'table' do t = t[1] n = n + 1 end return n", deep))
+  msg = self~errorOf(.lua, "EVAL", "return 1", .array~of(deep))
+  self~assertTrue(msg~pos("nested more than 1000 deep") > 0, msg)
+  self~assertEquals(3, .lua~eval("return #(...)", .array~of(1, 2, 3)))
+
 ::class Bad
 ::method string
   raise syntax 40.1 array ("Bad~string")

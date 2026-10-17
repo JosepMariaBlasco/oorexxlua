@@ -312,7 +312,7 @@ static NOINLINE std::string formatFloat(double d)
 }
 
 static RexxObjectPtr toRexx(State *st, int idx);
-static bool pushValue(State *st, RexxObjectPtr v);
+static bool pushValue(State *st, RexxObjectPtr v, int memo = 0, int depth = 0);
 
 static bool takeInterrupt(State *st);
 static void coClear(State *st);
@@ -1648,12 +1648,21 @@ static Proxy *proxyOf(RexxThreadContext *c, RexxObjectPtr v)
  * Array keeps its items with the FIRST index varying fastest (measured:
  * m[2,1] is at linear position 2 of a 2x3), so the item at (i1, ..., ik) is
  * the one at linear position 1 + sum((ij - 1) * stride(j)), with stride(1)
- * = 1 and stride(j) = stride(j-1) * dim(j-1).                             */
-enum { MAX_ARRAY_DIMS = 32 };
+ * = 1 and stride(j) = stride(j-1) * dim(j-1).
+ *
+ * One table per Array: while one value is converted, a table on Lua's stack
+ * (memo, its index; 0 before the first Array) maps each Array already
+ * converted to its table, so an Array that contains itself, or appears
+ * twice, is the same table again (t[3] == t in Lua for a~append(a)), as it
+ * is the same object in Rexx.  The memo lives on the stack, not in the
+ * State, so an error that unwinds the conversion leaves nothing behind.
+ * Nesting deeper than MAX_ARRAY_DEPTH Arrays is an error: the conversion
+ * recurses in C.                                                          */
+enum { MAX_ARRAY_DIMS = 32, MAX_ARRAY_DEPTH = 1000 };
 static const lua_Integer MAX_MAKEARRAY = 100000000;     // ~makeArray's limit
 
 static bool pushArrayLevel(State *st, RexxArrayObject a, const size_t *dims, size_t ndims,
-                           size_t level, size_t offset, const size_t *strides)
+                           size_t level, size_t offset, const size_t *strides, int memo, int depth)
 {
     RexxThreadContext *c = st->tc;
     lua_State *L = st->L;
@@ -1661,8 +1670,9 @@ static bool pushArrayLevel(State *st, RexxArrayObject a, const size_t *dims, siz
     size_t count = dims[level];
     if (level + 1 < ndims) {
         lua_createtable(L, (int)count, 0);
+        if (level == 0) { lua_pushvalue(L, -1); lua_rawsetp(L, memo, a); }
         for (size_t i = 1; i <= count; i++) {
-            if (!pushArrayLevel(st, a, dims, ndims, level + 1, offset + (i - 1) * strides[level], strides)) {
+            if (!pushArrayLevel(st, a, dims, ndims, level + 1, offset + (i - 1) * strides[level], strides, memo, depth)) {
                 lua_remove(L, -2); return false;
             }
             lua_rawseti(L, -2, (lua_Integer)i);
@@ -1670,11 +1680,12 @@ static bool pushArrayLevel(State *st, RexxArrayObject a, const size_t *dims, siz
         return true;
     }
     lua_createtable(L, (int)count, 0);
+    if (level == 0) { lua_pushvalue(L, -1); lua_rawsetp(L, memo, a); }
     bool holes = false;
     for (size_t i = 1; i <= count; i++) {
         RexxObjectPtr item = c->ArrayAt(a, 1 + offset + (i - 1) * strides[level]);
         if (item == NULLOBJECT || item == c->Nil()) { holes = true; continue; }
-        if (!pushValue(st, item)) { lua_remove(L, -2); return false; }
+        if (!pushValue(st, item, memo, depth)) { lua_remove(L, -2); return false; }
         lua_rawseti(L, -2, (lua_Integer)i);
     }
     if (holes) {
@@ -1686,7 +1697,7 @@ static bool pushArrayLevel(State *st, RexxArrayObject a, const size_t *dims, siz
 
 // (Its own frame: the dimensions' arrays are not on the C stack of every
 // level of a nested one-dimensional Array.)
-static NOINLINE bool pushArrayDims(State *st, RexxArrayObject a, size_t ndims)
+static NOINLINE bool pushArrayDims(State *st, RexxArrayObject a, size_t ndims, int memo, int depth)
 {
     RexxThreadContext *c = st->tc;
     size_t dims[MAX_ARRAY_DIMS], strides[MAX_ARRAY_DIMS];
@@ -1710,21 +1721,40 @@ static NOINLINE bool pushArrayDims(State *st, RexxArrayObject a, size_t ndims)
     }
     strides[0] = 1;
     for (size_t j = 1; j < ndims; j++) strides[j] = strides[j - 1] * dims[j - 1];
-    return pushArrayLevel(st, a, dims, ndims, 0, 0, strides);
+    return pushArrayLevel(st, a, dims, ndims, 0, 0, strides, memo, depth);
 }
 
-static NOINLINE bool pushArray(State *st, RexxArrayObject a)
+static NOINLINE bool pushArrayIn(State *st, RexxArrayObject a, int memo, int depth)
 {
+    lua_State *L = st->L;
+    if (lua_rawgetp(L, memo, a) != LUA_TNIL) return true;      // converted already
+    lua_pop(L, 1);
+    if (depth >= MAX_ARRAY_DEPTH) {
+        lua_pushstring(L, "an Array nested more than 1000 deep");
+        return false;
+    }
     size_t ndims = st->tc->ArrayDimension(a);
-    if (ndims > 1) return pushArrayDims(st, a, ndims);
+    if (ndims > 1) return pushArrayDims(st, a, ndims, memo, depth + 1);
     size_t size = st->tc->ArraySize(a), stride = 1;
-    return pushArrayLevel(st, a, &size, 1, 0, 0, &stride);
+    return pushArrayLevel(st, a, &size, 1, 0, 0, &stride, memo, depth + 1);
+}
+
+static NOINLINE bool pushArray(State *st, RexxArrayObject a, int memo, int depth)
+{
+    if (memo != 0) return pushArrayIn(st, a, memo, depth);
+    lua_State *L = st->L;                   // the outermost Array: a memo for it
+    if (!lua_checkstack(L, 4)) { lua_pushstring(L, "an Array nested too deeply"); return false; }
+    lua_newtable(L);
+    int m = lua_gettop(L);
+    bool ok = pushArrayIn(st, a, m, 0);
+    lua_remove(L, m);                       // the table, or the message, stays
+    return ok;
 }
 
 /* Push a Rexx value.  False if it cannot go to this state (a .LuaObject of
  * another state, or of a closed one): then the error message is pushed
  * instead, for lua_error or for raiseTop.                                  */
-static NOINLINE bool pushValue(State *st, RexxObjectPtr v)
+static NOINLINE bool pushValue(State *st, RexxObjectPtr v, int memo, int depth)
 {
     RexxThreadContext *c = st->tc;
     lua_State *L = st->L;
@@ -1739,7 +1769,7 @@ static NOINLINE bool pushValue(State *st, RexxObjectPtr v)
         lua_rawgeti(L, LUA_REGISTRYINDEX, p->ref);
         return true;
     }
-    if (c->IsArray(v)) return pushArray(st, (RexxArrayObject)v);
+    if (c->IsArray(v)) return pushArray(st, (RexxArrayObject)v, memo, depth);
     if (c->IsString(v) || c->IsOfType(v, "STRING")) {   // Integers from literals too
         RexxStringObject s;
         if (!stringValue(c, v, s)) {

@@ -294,6 +294,12 @@ multi-dimensional one was flattened):
   the outer ones never have holes). The way back is not symmetric: in Lua a
   table is a `.LuaObject`, and `~makeArray` of a nested one gives an Array
   of `.LuaObject`s.
+- **One table per Array.** An Array that appears twice in what is converted
+  is one table, and an Array that contains itself (`a~append(a)`) is a table
+  that contains itself: `t[3] == t` in Lua, as `a[3] == a` in Rexx (until
+  17/10/2026 that recursed in C until the process crashed). Arrays nested
+  more than 1000 deep are Error 98.900 ("an Array nested more than 1000
+  deep"): the copy recurses in C.
 - **`~makeArray`** of a `.LuaObject` takes the items `1` to `t.n` when the
   table has an integer `n` (raw), else to `#t`, and leaves a `nil` as an
   empty slot (until 17/10/2026: `.nil`), so a sparse Array that goes to Lua
