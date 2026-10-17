@@ -1685,7 +1685,9 @@ static bool pushArrayLevel(State *st, RexxArrayObject a, const size_t *dims, siz
     for (size_t i = 1; i <= count; i++) {
         RexxObjectPtr item = c->ArrayAt(a, 1 + offset + (i - 1) * strides[level]);
         if (item == NULLOBJECT || item == c->Nil()) { holes = true; continue; }
-        if (!pushValue(st, item, memo, depth)) { lua_remove(L, -2); return false; }
+        bool ok = pushValue(st, item, memo, depth);
+        release(c, item);           // the Array keeps it (a million items held 30 MB more)
+        if (!ok) { lua_remove(L, -2); return false; }
         lua_rawseti(L, -2, (lua_Integer)i);
     }
     if (holes) {
