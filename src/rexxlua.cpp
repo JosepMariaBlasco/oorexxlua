@@ -1555,8 +1555,9 @@ static RexxObjectPtr newProxy(State *st, int idx)
 }
 
 /* .Boolean (boolean.cls, shared by the ooRexx bridges: docs/design.md,
- * *Values*), which lua.cls puts in .local as LUA.BOOLEAN when it loads: each
- * interpreter instance has its own (the Lua module may make several).  A
+ * *Values*), which lua.cls puts in .local as LUA.BOOLEAN when it loads (the
+ * bridge's own name: .environment's BOOLEAN could be anything).  One class
+ * per process, also with several instances of the Lua module.  A
  * local reference, or NULLOBJECT where lua.cls is not loaded.             */
 static RexxObjectPtr booleanClass(RexxThreadContext *c)
 {

@@ -40,7 +40,14 @@
 /* Standalone version of the class proposed for the ooRexx core               */
 /* (interpreter/RexxClasses/CoreClasses.orx). The name (.Boolean or           */
 /* .Logical) is still open.                                                   */
+/*                                                                            */
+/* Version: 2                                                                 */
 /*----------------------------------------------------------------------------*/
+
+-- Make the class visible everywhere, as a core class would be, without
+-- replacing an entry that is already there (a core .Boolean, or the copy
+-- another package loaded first).
+if \.environment~hasEntry("BOOLEAN") then .environment~setEntry("BOOLEAN", .Boolean)
 
 /** A logical value that can be recognized as such. There are two instances per
 *   class, <code>~true</code> and <code>~false</code>; they behave as the Rexx
@@ -90,6 +97,14 @@
 
 /** @return <code>"1"</code> or <code>"0"</code>, so that the object is a plain logical value for Rexx */
 ::method makeString unguarded
+  expose value
+  return value
+
+/** @return <code>"1"</code> or <code>"0"</code>: what an Array shows for the object in
+*   <code>makeString</code> and <code>toString</code>, which use the default name, not
+*   <code>STRING</code> (found by oorexxnet, 17/10/2026)
+*/
+::method defaultName unguarded
   expose value
   return value
 

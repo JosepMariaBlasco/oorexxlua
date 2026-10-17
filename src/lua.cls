@@ -46,7 +46,7 @@
  * while Lua runs, so another thread using the same object would wait for it.
  */
 
-.local["LUA.BOOLEAN"] = .Boolean         -- for the bridge: this instance's (rexxlua.cpp)
+.local["LUA.BOOLEAN"] = .Boolean         -- for the bridge (rexxlua.cpp)
 .local~lua = .LuaState~"LUA.DEFAULT"
 .LuaState~"LUA.ADDRESS"                 -- ADDRESS LUA (in rexxlua.cpp)
 

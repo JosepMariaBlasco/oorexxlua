@@ -1,7 +1,7 @@
 #!/usr/bin/env rexx
 /*----------------------------------------------------------------------------*/
 /* Booleans.testGroup: .Boolean (boolean.cls, a verbatim copy of              */
-/* oorexx-bridges' shared/boolean, version 1) and Lua's booleans              */
+/* oorexx-bridges' shared/boolean, version 2) and Lua's booleans              */
 /* (docs/design.md, *Values*).                                                */
 /*                                                                            */
 /* Licensed under the Apache License, Version 2.0.                            */
@@ -27,6 +27,10 @@ return testResult
   parse source . . me
   call (me~left(me~lastPos(.File~separator)) || "boolean-test.rex")
   self~assertEquals(0, result, "boolean-test.rex: all pass")
+
+::method test_the_class_is_in_the_environment     -- version 2
+  self~assertSame(.Boolean, .environment~boolean)
+  self~assertSame(.Boolean, .local~"LUA.BOOLEAN")
 
 ::method test_Lua_booleans_are_Booleans
   t = .lua~eval("return true"); f = .lua~eval("return false")

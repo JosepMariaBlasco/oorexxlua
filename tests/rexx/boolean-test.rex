@@ -60,6 +60,8 @@ call ok "new is private", trapNew()
 call ok "of rejects 2", trapOf(2)
 call ok "datatype O", datatype(t, "O") & datatype(f, "O")
 call ok "select when", sel(f) == "f"
+call ok "Array makeString", .array~of(t, f, t)~makeString("L", " ") == "1 0 1"
+call ok "Array toString", .array~of(t, f)~toString(, ",") == "1,0"
 say "all" pass "passed," fail "failed"
 exit fail > 0
 

@@ -234,11 +234,14 @@ ooRexx core in RFE #880): two instances, `.Boolean~true` and
 boolean, and Lua's booleans come to Rexx as those two instances, so a Lua
 boolean that goes through Rexx and back is still a boolean. `.true`, a
 string, still goes as the integer `1`. `src/boolean.cls` is a verbatim copy
-of `oorexx-bridges`' `shared/boolean/boolean.cls`, **version 1** (SHA-256
-`65310b4c525c...`), never changed here; `lua.cls` requires it, so a program
+of `oorexx-bridges`' `shared/boolean/boolean.cls`, **version 2** (SHA-256
+`080fd7e21beb...`), never changed here; `lua.cls` requires it, so a program
 that requires `lua.cls` sees `.Boolean`, and it ships next to `lua.cls`.
-When the class reaches the ooRexx core, the copy goes. `lua.cls` puts the
-class in `.local` (`LUA.BOOLEAN`), where the bridge finds it from any
+Its prolog also puts the class in `.environment` as `BOOLEAN` (unless an
+entry is there already: a core class, or the copy another package loaded
+first), so code that requires nothing sees it too, as it would see a core
+class. When the class reaches the ooRexx core, the copy goes. `lua.cls` puts
+the class in `.local` (`LUA.BOOLEAN`), where the bridge finds it from any
 interpreter instance: calls from Lua run in no package that could name it.
 It is one class for the whole process (ooRexx shares a package loaded from
 one file among the instances; measured with two instances of the Lua
