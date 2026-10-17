@@ -87,6 +87,12 @@ syntax:
   self~assertTrue(before > 0 & during > 0, "memory measured (KB" before "->" during")")
   self~assertTrue(during - before < 50000, "memory stays flat (< 50 MB growth; KB" before "->" during")")
 
+::method test_a_huge_n_is_an_error_not_a_crash
+  t = .lua~eval("return {n = math.maxinteger}")
+  msg = self~errorOf(t, "MAKEARRAY")
+  self~assertTrue(msg~pos("more than 100000000 items") > 0, msg)
+  self~assertEquals(5, .lua~eval("return {1, 2, n = 5}")~makeArray~size)
+
 ::class Bad
 ::method string
   raise syntax 40.1 array ("Bad~string")

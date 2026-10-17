@@ -297,7 +297,9 @@ multi-dimensional one was flattened):
 - **`~makeArray`** of a `.LuaObject` takes the items `1` to `t.n` when the
   table has an integer `n` (raw), else to `#t`, and leaves a `nil` as an
   empty slot (until 17/10/2026: `.nil`), so a sparse Array that goes to Lua
-  and comes back with `~makeArray` has its size and its items again.
+  and comes back with `~makeArray` has its size and its items again. More
+  than 100,000,000 items (an `n` or a `__len` that large) is Error 98.900,
+  not an attempt to allocate them.
 
 ## Boxing
 

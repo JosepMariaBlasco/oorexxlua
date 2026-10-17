@@ -1650,6 +1650,7 @@ static Proxy *proxyOf(RexxThreadContext *c, RexxObjectPtr v)
  * the one at linear position 1 + sum((ij - 1) * stride(j)), with stride(1)
  * = 1 and stride(j) = stride(j-1) * dim(j-1).                             */
 enum { MAX_ARRAY_DIMS = 32 };
+static const lua_Integer MAX_MAKEARRAY = 100000000;     // ~makeArray's limit
 
 static bool pushArrayLevel(State *st, RexxArrayObject a, const size_t *dims, size_t ndims,
                            size_t level, size_t offset, const size_t *strides)
@@ -1683,15 +1684,12 @@ static bool pushArrayLevel(State *st, RexxArrayObject a, const size_t *dims, siz
     return true;
 }
 
-static NOINLINE bool pushArray(State *st, RexxArrayObject a)
+// (Its own frame: the dimensions' arrays are not on the C stack of every
+// level of a nested one-dimensional Array.)
+static NOINLINE bool pushArrayDims(State *st, RexxArrayObject a, size_t ndims)
 {
     RexxThreadContext *c = st->tc;
     size_t dims[MAX_ARRAY_DIMS], strides[MAX_ARRAY_DIMS];
-    size_t ndims = c->ArrayDimension(a);
-    if (ndims <= 1) {
-        dims[0] = c->ArraySize(a); strides[0] = 1;
-        return pushArrayLevel(st, a, dims, 1, 0, 0, strides);
-    }
     if (ndims > MAX_ARRAY_DIMS) {
         lua_pushstring(st->L, "an Array of more than 32 dimensions");
         return false;
@@ -1713,6 +1711,14 @@ static NOINLINE bool pushArray(State *st, RexxArrayObject a)
     strides[0] = 1;
     for (size_t j = 1; j < ndims; j++) strides[j] = strides[j - 1] * dims[j - 1];
     return pushArrayLevel(st, a, dims, ndims, 0, 0, strides);
+}
+
+static NOINLINE bool pushArray(State *st, RexxArrayObject a)
+{
+    size_t ndims = st->tc->ArrayDimension(a);
+    if (ndims > 1) return pushArrayDims(st, a, ndims);
+    size_t size = st->tc->ArraySize(a), stride = 1;
+    return pushArrayLevel(st, a, &size, 1, 0, 0, &stride);
 }
 
 /* Push a Rexx value.  False if it cannot go to this state (a .LuaObject of
@@ -2218,6 +2224,11 @@ RexxMethod1(RexxObjectPtr, LuaObj_MakeArray, CSELF, self)
     if (!protect(st, p_size, 1)) { lua_settop(L, top); return emptyArray(c); }
     lua_Integer n = lua_tointeger(L, -1);
     lua_pop(L, 1);
+    if (n > MAX_MAKEARRAY) {            // t.n or __len: NewArray would not survive it
+        lua_settop(L, top);
+        raise(c, "a Lua table of more than 100000000 items cannot become an Array");
+        return NULLOBJECT;
+    }
     RexxArrayObject a = c->NewArray(n > 0 ? (size_t)n : 0);
     for (lua_Integer i = 1; i <= n; i++) {
         lua_pushvalue(L, obj);
