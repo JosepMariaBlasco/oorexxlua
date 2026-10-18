@@ -682,6 +682,44 @@ static int p_size(lua_State *L)
     return 1;
 }
 static int p_getglobal(lua_State *L) { lua_getglobal(L, lua_tostring(L, 1)); return 1; }
+// obj -> keys, values, n: what pairs(obj) gives, as two sequences.  pairs
+// honours __pairs (Lua 5.3 to 5.5), so this does too; without it, the raw
+// table (lua_next), whatever the global pairs is now
+static int p_pairs(lua_State *L)
+{
+    lua_settop(L, 1);
+    lua_newtable(L);                                    // 2: keys
+    lua_newtable(L);                                    // 3: values
+    lua_Integer n = 0;
+    if (luaL_getmetafield(L, 1, "__pairs") != LUA_TNIL) {        // 4
+        lua_pushvalue(L, 1);
+        lua_call(L, 1, 3);                              // 4 f, 5 s, 6 control
+        for (;;) {
+            lua_pushvalue(L, 4); lua_pushvalue(L, 5); lua_pushvalue(L, 6);
+            lua_call(L, 2, 2);                          // 7 k, 8 v
+            if (lua_isnil(L, 7)) break;
+            n++;
+            lua_rawseti(L, 3, n);                       // v
+            lua_pushvalue(L, 7);
+            lua_rawseti(L, 2, n);
+            lua_replace(L, 6);                          // k: the next control
+        }
+        lua_settop(L, 3);
+    }
+    else {
+        if (lua_type(L, 1) != LUA_TTABLE)
+            return luaL_error(L, "only a table, or a value with __pairs, can be enumerated");
+        lua_pushnil(L);
+        while (lua_next(L, 1)) {
+            n++;
+            lua_rawseti(L, 3, n);
+            lua_pushvalue(L, -1);
+            lua_rawseti(L, 2, n);
+        }
+    }
+    lua_pushinteger(L, n);
+    return 3;
+}
 // op, a[, b] -> lua_arith(op): a op b, or op a for the unary ones
 static int p_arith(lua_State *L)
 {
@@ -2421,6 +2459,59 @@ RexxMethod1(RexxObjectPtr, LuaObj_MakeArray, CSELF, self)
     return a;
 }
 
+// ~supplier: Lua's pairs (every key and value, by the usual rules, in Lua's
+// order, __pairs honoured), so that DO WITH INDEX k ITEM v OVER t works
+// (oorexx-bridges, topics/positions.md, *Related, Lua only*)
+RexxMethod1(RexxObjectPtr, LuaObj_Supplier, CSELF, self)
+{
+    PROXY_ENTRY
+    int top = lua_gettop(L);
+    pushSelf(px);
+    if (!protect(st, p_pairs, 1)) {
+        lua_settop(L, top);
+        return c->CheckCondition() ? NULLOBJECT : (RexxObjectPtr)c->NewSupplier(c->NewArray(0), c->NewArray(0));
+    }
+    lua_Integer n = lua_tointeger(L, -1);
+    int keys = lua_gettop(L) - 2, values = keys + 1;
+    RexxArrayObject ks = c->NewArray((size_t)n), vs = c->NewArray((size_t)n);
+    for (lua_Integer i = 1; i <= n; i++) {
+        lua_rawgeti(L, keys, i);
+        c->ArrayPut(ks, toRexx(st, -1), (size_t)i);
+        lua_pop(L, 1);
+        lua_rawgeti(L, values, i);
+        c->ArrayPut(vs, lua_isnil(L, -1) ? c->Nil() : toRexx(st, -1), (size_t)i);
+        lua_pop(L, 1);
+    }
+    lua_settop(L, top);
+    return c->NewSupplier(vs, ks);
+}
+
+// ~makeStringTable: the string keys only, as stored (case kept), values by
+// the usual rules (a table by reference); other keys are left out, as
+// makeArray leaves out what is not a position (topics/positions.md)
+RexxMethod1(RexxObjectPtr, LuaObj_MakeStringTable, CSELF, self)
+{
+    PROXY_ENTRY
+    int top = lua_gettop(L);
+    pushSelf(px);
+    RexxStringTableObject r = c->NewStringTable();
+    if (!protect(st, p_pairs, 1)) { lua_settop(L, top); return c->CheckCondition() ? NULLOBJECT : (RexxObjectPtr)r; }
+    lua_Integer n = lua_tointeger(L, -1);
+    int keys = lua_gettop(L) - 2, values = keys + 1;
+    for (lua_Integer i = 1; i <= n; i++) {
+        lua_rawgeti(L, keys, i);
+        lua_rawgeti(L, values, i);
+        if (lua_type(L, -2) == LUA_TSTRING && !lua_isnil(L, -1)) {
+            size_t len;
+            const char *k = lua_tolstring(L, -2, &len);
+            c->SendMessage2(r, "PUT", toRexx(st, -1), c->NewString(k, len));
+        }
+        lua_pop(L, 2);
+    }
+    lua_settop(L, top);
+    return r;
+}
+
 /*
  * Rexx operators on a .LuaObject: Lua's (docs/design.md, *Operators*), with
  * its metamethods, as ooRexx/Python's are Python's.  The left operand must be
@@ -3879,6 +3970,8 @@ RexxMethodEntry rexxlua_methods[] = {
     REXX_METHOD(LuaObj_Put,         LuaObj_Put),
     REXX_METHOD(LuaObj_String,      LuaObj_String),
     REXX_METHOD(LuaObj_MakeArray,   LuaObj_MakeArray),
+    REXX_METHOD(LuaObj_Supplier,    LuaObj_Supplier),
+    REXX_METHOD(LuaObj_MakeStringTable, LuaObj_MakeStringTable),
     REXX_METHOD(LuaObj_Type,        LuaObj_Type),
     REXX_METHOD(LuaObj_Operator,    LuaObj_Operator),
     REXX_METHOD(LuaObj_HashCode,    LuaObj_HashCode),

@@ -113,6 +113,8 @@
 ::method "[]=" unguarded        external "LIBRARY rexxlua LuaObj_Put"
 ::method string unguarded       external "LIBRARY rexxlua LuaObj_String"
 ::method makeArray unguarded    external "LIBRARY rexxlua LuaObj_MakeArray"
+::method supplier unguarded     external "LIBRARY rexxlua LuaObj_Supplier"
+::method makeStringTable unguarded external "LIBRARY rexxlua LuaObj_MakeStringTable"
 ::method luaType unguarded      external "LIBRARY rexxlua LuaObj_Type"
 -- Rexx operators: Lua's (a + b, -a, a < b...); == is identity (rawequal)
 ::method "+" unguarded      external "LIBRARY rexxlua LuaObj_Operator"

@@ -340,6 +340,24 @@ multi-dimensional one was flattened):
   and comes back with `~makeArray` has its size and its items again. More
   than 100,000,000 items (an `n` or a `__len` that large) is Error 98.900,
   not an attempt to allocate them.
+- **`~supplier`** is Lua's `pairs`: every key and value, by the usual rules,
+  in Lua's order (unspecified, as a Rexx Directory's is), honouring
+  `__pairs`. So `DO WITH INDEX k ITEM v OVER t` gives every pair, and
+  `DO v OVER t` the sequence (`~makeArray`), as a Rexx Directory's two loops
+  already differ. A supplier is a sequence of pairs, so Lua's `1`, `"1"` and
+  `true` are three keys there (`true` as `.Boolean~true`). Anything but a
+  table, or a value with `__pairs`, is Error 98.900.
+- **`~makeStringTable`** is the string keys only, as stored (case kept), in
+  a Rexx StringTable, with values by the usual rules (a nested table by
+  reference). Other keys are left out, as `~makeArray` leaves out what is
+  not a position; `n` is a string key like any other. There is no
+  `~makeTable` (every key into a Rexx Table): Lua's `1`, `"1"` and `true`
+  would be one index in Rexx, and `t[key]` already reads and writes any key,
+  live.
+
+These names (`supplier`, `makeStringTable`, `makeArray`, ...) are methods,
+not fields: an element with such a key is `t["supplier"]` (oorexx-bridges,
+`topics/positions.md`, *Related, Lua only*, 2026-10-18).
 
 ## Boxing
 

@@ -1,0 +1,94 @@
+#!/usr/bin/env rexx
+/*----------------------------------------------------------------------------*/
+/* Enumerate.testGroup: a Lua table enumerated from Rexx: ~supplier (Lua's    */
+/* pairs, so DO WITH ... OVER), ~makeStringTable (the string keys) and        */
+/* ~makeArray (the sequence) (docs/design.md, *Lua objects in Rexx*;          */
+/* oorexx-bridges, topics/positions.md, *Related, Lua only*).                 */
+/*                                                                            */
+/* Licensed under the Apache License, Version 2.0.                            */
+/*----------------------------------------------------------------------------*/
+  parse source . . fileSpec
+
+  group = .TestGroup~new(fileSpec)
+  group~add(.Enumerate.testGroup)
+
+  if group~isAutomatedTest then return group
+
+  testResult = group~suite~execute~~print
+
+return testResult
+-- End of entry point.
+
+::requires 'LuaTestCase.cls'
+
+::class "Enumerate.testGroup" subclass LuaTestCase public
+
+-- what DO WITH INDEX k ITEM v OVER t gives, "k=v" sorted
+::method pairs
+  use strict arg t
+  r = .array~new
+  do with index k item v over t
+    if v~isA(.LuaObject) then v = "table"
+    r~append(k"="v)
+  end
+  return r~sort~toString("L", " ")
+
+::method test_a_sequence
+  t = .lua~eval("return {10, 20, 30}")
+  self~assertSame("1=10 2=20 3=30", self~pairs(t))
+  r = ""; do v over t; r = r v; end
+  self~assertSame(" 10 20 30", r, "DO OVER is still the sequence")
+
+::method test_a_dictionary
+  t = .lua~eval("return {Name = 'x', low = 'y', sub = {}}")
+  self~assertSame("Name=x low=y sub=table", self~pairs(t))
+  st = t~makeStringTable
+  self~assertSame("StringTable", st~class~id)
+  self~assertSame("x", st["Name"], "case kept")
+  self~assertSame(.nil, st["NAME"])
+  self~assertTrue(st["sub"]~isA(.LuaObject), "a nested table by reference")
+  self~assertSame(0, t~makeArray~items, "no sequence")
+
+::method test_a_mixed_table_with_n
+  t = .lua~eval("return {1, nil, 3, n = 3, k = 'v'}")
+  self~assertSame("1=1 3=3 k=v n=3", self~pairs(t), "every pair")
+  st = t~makeStringTable
+  self~assertSame(2, st~items, "n and k: the string keys")
+  self~assertSame(3, st["n"])
+  a = t~makeArray
+  self~assertSame(3, a~size, "makeArray unchanged: n")
+  self~assertSame(2, a~items)
+
+::method test_pairs_metamethod
+  t = .lua~eval("return setmetatable({hidden = 1}, {__pairs = function(t)" -
+    " local i = 0 return function() i = i + 1 if i <= 2 then return 'k' .. i, i * 10 end end, t, nil end})")
+  self~assertSame("k1=10 k2=20", self~pairs(t), "its own enumeration")
+  self~assertSame("k1 k2", t~makeStringTable~allIndexes~sort~toString("L", " "))
+
+::method test_a_boolean_key
+  t = .lua~eval("return {[true] = 'yes', [1] = 'one', ['1'] = 'string one'}")
+  n = 0
+  do with index k item v over t
+    n += 1
+    if k~isA(.Boolean) then self~assertSame("yes", v, "true is .Boolean~true")
+  end
+  self~assertSame(3, n, "three keys, no collision in a supplier")
+  st = t~makeStringTable
+  self~assertSame(1, st~items, "only the string key")
+  self~assertSame("string one", st["1"])
+
+::method test_a_key_named_supplier
+  t = .lua~eval("return {supplier = 'mine', 1}")
+  self~assertSame("mine", t["supplier"], "the element by []")
+  self~assertTrue(t~supplier~isA(.Supplier), "the message is the method")
+  self~assertSame("1=1 supplier=mine", self~pairs(t))
+
+::method test_an_empty_table_and_a_non_table
+  self~assertSame("", self~pairs(.lua~eval("return {}")))
+  self~assertSame(0, .lua~eval("return {}")~makeStringTable~items)
+  f = .lua~eval("return print")
+  signal on syntax
+  f~supplier
+  self~fail("a function cannot be enumerated")
+syntax:
+  self~assertSame("98.900", condition("O")~code)
