@@ -149,3 +149,9 @@ Rexx -> Lua (the string: as converted / boxed as float)
 '+infinity'                        string:"+infinity" / float:inf
 '-infinity'                        string:"-infinity" / float:-inf
 '1E+999'                           string:"1E+999" / float:inf
+'-1E+999'                          string:"-1E+999" / float:-inf
+'1E-999'                           string:"1E-999" / float:0
+'-1E-999'                          string:"-1E-999" / float:-0 (negative)
+'5E-324'                           float:4.9406564584124654e-324 / float:4.9406564584124654e-324
+'1.7976931348623157E+308'          float:1.7976931348623157e+308 / float:1.7976931348623157e+308
+'1.8E+308'                         string:"1.8E+308" / float:inf
