@@ -301,12 +301,13 @@ static NOINLINE void pushRexxString(lua_State *L, const char *d, size_t n)
 // fraction more than 34, else one digit, a point, the rest, "E", the sign
 // and the exponent (1E+17, 1.5E-35); ".0" when the value is an integer
 // written without an exponent, because Lua tells integers from floats by the
-// text (1.0, -0.0, 9007199254740992.0); NaN, Infinity, -Infinity.  Lua's own
-// %.14g would lose digits: 0.1 + 0.2 would be "0.3".
+// text (1.0, -0.0, 9007199254740992.0); nan, +infinity, -infinity, as ooRexx
+// writes them (DoubleToObject) and reads them back (ObjectToDouble).  Lua's
+// own %.14g would lose digits: 0.1 + 0.2 would be "0.3".
 static NOINLINE std::string formatFloat(double d)
 {
-    if (std::isnan(d)) return "NaN";
-    if (std::isinf(d)) return d > 0 ? "Infinity" : "-Infinity";
+    if (std::isnan(d)) return "nan";
+    if (std::isinf(d)) return d > 0 ? "+infinity" : "-infinity";
     std::string sign = std::signbit(d) ? "-" : "";
     if (d == 0) return sign + "0.0";
     // The shortest digits: %.*e with 1 to 17 significant digits
@@ -1990,16 +1991,9 @@ RexxMethod3(RexxObjectPtr, LuaState_Box, CSTRING, type, RexxObjectPtr, value, CS
     }
     else if (t == "float") {
         double d;
-        RexxStringObject s;
-        // NaN, Infinity, -Infinity: what a float that is not a number becomes
-        // in Rexx (topics/float-text.md), which ObjectToDouble rejects
-        std::string special;
-        if (c->IsString(value) && stringValue(c, value, s))
-            special.assign(c->StringData(s), c->StringLength(s));
-        if (special == "NaN") lua_pushnumber(L, (lua_Number)NAN);
-        else if (special == "Infinity") lua_pushnumber(L, (lua_Number)HUGE_VAL);
-        else if (special == "-Infinity") lua_pushnumber(L, (lua_Number)-HUGE_VAL);
-        else if (c->ObjectToDouble(value, &d)) lua_pushnumber(L, (lua_Number)d);
+        // ObjectToDouble reads nan, +infinity, -infinity too: what a float
+        // that is not a number becomes in Rexx (topics/float-text.md)
+        if (c->ObjectToDouble(value, &d)) lua_pushnumber(L, (lua_Number)d);
         else bad = "a float must be a number";
     }
     else if (t == "string") {

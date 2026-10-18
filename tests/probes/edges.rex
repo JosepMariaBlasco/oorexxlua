@@ -115,7 +115,7 @@ do while e \= ""
   say left(x, 34) "'"r"'" "len" r~length "datatype N" datatype(r, "N")
 end
 say "Rexx -> Lua (the string: as converted / boxed as float)"
-list = '1E+16|1e16|1E16| 1.5 |-0|NaN|nan|Infinity|inf|1E+999'
+list = '1E+16|1e16|1E16| 1.5 |-0|NaN|nan|Infinity|inf|+infinity|-infinity|1E+999'
 do while list \= ""
   parse var list v "|" list
   say left("'"v"'", 34) .lua~eval("return describe(...)", v) "/" boxFloat(v)

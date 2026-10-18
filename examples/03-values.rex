@@ -27,7 +27,7 @@ say .lua~eval("1 + 2") .lua~eval("1.0 + 2") .lua~eval("2^10")   -- 3 3.0 1024.0
 say .lua~eval("0.1 + 0.2")                         -- 0.30000000000000004
 say .lua~eval("1/3")                               -- 0.3333333333333333
 say .lua~eval("1e100") .lua~eval("1e-7")           -- 1E+100 0.0000001: as Rexx writes them
-say .lua~eval("-0.0") .lua~eval("1/0") .lua~eval("-1/0") .lua~eval("0/0")   -- -0.0 Infinity -Infinity NaN
+say .lua~eval("-0.0") .lua~eval("1/0") .lua~eval("-1/0") .lua~eval("0/0")   -- -0.0 +infinity -infinity nan
 x = .lua~eval("1/3")
 say .lua~eval("return ... == 1/3", x)              -- 1: a float comes back exact
 

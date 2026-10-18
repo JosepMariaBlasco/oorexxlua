@@ -10,7 +10,7 @@ one
 0.30000000000000004
 0.3333333333333333
 1E+100 0.0000001
--0.0 Infinity -Infinity NaN
+-0.0 +infinity -infinity nan
 1
 string float integer
 false

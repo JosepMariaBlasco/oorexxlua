@@ -31,7 +31,7 @@ return testResult
     "1.7976931348623157e308=1.7976931348623157E+308|5e-324=5E-324|" -
     "1.0=1.0|-0.0=-0.0|0.0=0.0|2^53=9007199254740992.0|0.1+0.2=0.30000000000000004|" -
     "1/3=0.3333333333333333|-1.5=-1.5|123.456=123.456|1e15+0.5=1000000000000000.5|" -
-    "2^63=9.223372036854776E+18|0/0=NaN|1/0=Infinity|-1/0=-Infinity|-(0/0)=NaN"
+    "2^63=9.223372036854776E+18|0/0=nan|1/0=+infinity|-1/0=-infinity|-(0/0)=nan"
   do while list \= ""
     parse var list x "=" text "|" list
     self~assertEquals(text, .lua~eval("return" x), x)
@@ -61,9 +61,13 @@ return testResult
 ::method test_box_float_reads_every_form
   check = .lua~eval("function(x, kind) if kind == 'nan' then return x ~= x end" -
     " if kind == '-0' then return x == 0 and 1/x < 0 end return x == tonumber(kind) end")
-  self~assertTrue(check~call(.lua~box("float", "NaN"), "nan"), "NaN")
-  self~assertTrue(check~call(.lua~box("float", "Infinity"), "1e999"), "Infinity")
-  self~assertTrue(check~call(.lua~box("float", "-Infinity"), "-1e999"), "-Infinity")
+  self~assertTrue(check~call(.lua~box("float", "nan"), "nan"), "nan")
+  self~assertTrue(check~call(.lua~box("float", "+infinity"), "1e999"), "+infinity")
+  self~assertTrue(check~call(.lua~box("float", "-infinity"), "-1e999"), "-infinity")
+  -- and back from Lua: the same three
+  self~assertTrue(check~call(.lua~box("float", .lua~eval("return 0/0")), "nan"), "Lua's NaN")
+  self~assertTrue(check~call(.lua~box("float", .lua~eval("return 1/0")), "1e999"), "Lua's inf")
+  self~assertTrue(check~call(.lua~box("float", .lua~eval("return -1/0")), "-1e999"), "Lua's -inf")
   self~assertTrue(check~call(.lua~box("float", "-0"), "-0"), "-0")
   self~assertTrue(check~call(.lua~box("float", "-0.0"), "-0"), "-0.0")
   self~assertTrue(check~call(.lua~box("float", "1E+17"), "1e17"), "1E+17")
@@ -78,8 +82,9 @@ return testResult
   self~assertEquals("float", kind~call("-0.0"))
   self~assertEquals("string", kind~call("1e+17"))
   self~assertEquals("string", kind~call("1E17"))
-  self~assertEquals("string", kind~call("NaN"))
-  self~assertEquals("string", kind~call("Infinity"))
+  self~assertEquals("string", kind~call("nan"))
+  self~assertEquals("string", kind~call("+infinity"))
+  self~assertEquals("string", kind~call("-infinity"))
   numeric digits 9
   self~assertEquals("float", kind~call(2**100), "1.2676506E+30")
   -- and the round trip of any float, through Rexx arithmetic too

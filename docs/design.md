@@ -184,9 +184,9 @@ becomes:
 - anything else → a Lua string: `"007"`, `" 5"`, `"+5"`, text; integers
   that do not fit in 64 bits, which a float would round silently; and the
   Rexx numbers a float would write differently, `3.10` (from
-  `format(x, , 2)`), `1E3`, `1e+17`, `.5`, numbers with more digits than a float
-  keeps (`2**100` under `numeric digits 30`); `NaN`, `Infinity` and `-Infinity`,
-  which are not Rexx numbers (`box("float")` reads them).
+  `format(x, , 2)`), `1E3`, `1e+17`, `.5`, numbers with more digits than a
+  float keeps (`2**100` under `numeric digits 30`); `nan`, `+infinity` and
+  `-infinity`, which are not Rexx numbers (`box("float")` reads them).
 
 Lua converts strings to numbers in arithmetic only: `"10" == 10` is false,
 and `"10" < 20` and `math.max("1", 2)` fail. With strings always, a Lua
@@ -216,7 +216,7 @@ Lua → Rexx:
 | `nil` | `.nil` |
 | boolean | `.Boolean~true` / `.Boolean~false` |
 | integer | its decimal string |
-| float | the shortest digits that give back the same number, written as ooRexx writes `x + 0` under `numeric digits 17`, with `.0` if it is an integer written without an exponent; `NaN`, `Infinity`, `-Infinity` |
+| float | the shortest digits that give back the same number, written as ooRexx writes `x + 0` under `numeric digits 17`, with `.0` if it is an integer written without an exponent; `nan`, `+infinity`, `-infinity` |
 | string | a string, bytes unchanged |
 | a Rexx object passed in earlier | that same object |
 | table, function, userdata, thread | a `.LuaObject` proxy |
@@ -240,9 +240,12 @@ Floats are written by the rule the ooRexx bridges share (oorexx-bridges,
   keeps its sign), so that it comes back as a float. Integers never have
   one. In Rexx only `==` sees the difference (`1.0 = 1`), and Rexx's
   arithmetic keeps it (`1.0 + 1` is `2.0`).
-- **NaN and the infinities** are `NaN`, `Infinity` and `-Infinity`. They
-  are not Rexx numbers, so Rexx arithmetic on them is an error. Going back,
-  they stay strings by the rule above, and `box("float")` reads them.
+- **NaN and the infinities** are `nan`, `+infinity` and `-infinity`,
+  ooRexx's own spelling: what it writes for a `double` an extension hands
+  it, and the only spelling its `ObjectToDouble` reads. They are not Rexx
+  numbers, so Rexx arithmetic on them is an error. Going back, they stay
+  strings by the rule above, and `box("float")` reads them (and no other
+  spelling: not Lua's `inf`, not `NaN` or `Infinity`).
 
 **Booleans.** In Rexx, `.true` and `.false` are the strings `"1"` and `"0"`,
 which nothing can tell from the numbers. `.Boolean` is the class the ooRexx
@@ -336,7 +339,7 @@ when the rule of *Values* does not give the type needed:
 |---|---|---|
 | `"boolean"` | `1` or `0` | `true` / `false` |
 | `"integer"` | a whole number that fits in 64 bits (`"007"` too) | an integer |
-| `"float"` | any Rexx number; `NaN`, `Infinity`, `-Infinity` | a float |
+| `"float"` | any Rexx number; `nan`, `+infinity`, `-infinity` | a float |
 | `"string"` | anything | its string value |
 | `"reference"` | a Rexx object that is not a string | the object by reference (an Array that Lua can change) |
 

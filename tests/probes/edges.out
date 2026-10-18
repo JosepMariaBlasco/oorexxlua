@@ -85,10 +85,10 @@ math.mininteger                    '-9223372036854775808' len 20 datatype NUM
 1e-7                               '0.0000001' len 9 datatype NUM
 1.0                                '1.0' len 3 datatype NUM
 100/3                              '33.333333333333336' len 18 datatype NUM
-1/0                                'Infinity' len 8 datatype CHAR
--1/0                               '-Infinity' len 9 datatype CHAR
-0/0                                'NaN' len 3 datatype CHAR
--(0/0)                             'NaN' len 3 datatype CHAR
+1/0                                '+infinity' len 9 datatype CHAR
+-1/0                               '-infinity' len 9 datatype CHAR
+0/0                                'nan' len 3 datatype CHAR
+-(0/0)                             'nan' len 3 datatype CHAR
 'café'                            'café' len 5 datatype CHAR
 ''                                 '' len 0 datatype CHAR
 'a\0b'                             'a\0b' len 3 datatype CHAR
@@ -133,17 +133,19 @@ Lua -> Rexx (value made in Lua: the string, its length, datatype N)
 math.tointeger(2^53) + 1           '9007199254740993' len 16 datatype N 1
 1.7976931348623157e308             '1.7976931348623157E+308' len 23 datatype N 1
 5e-324                             '5E-324' len 6 datatype N 1
-0/0                                'NaN' len 3 datatype N 0
-1/0                                'Infinity' len 8 datatype N 0
--1/0                               '-Infinity' len 9 datatype N 0
+0/0                                'nan' len 3 datatype N 0
+1/0                                '+infinity' len 9 datatype N 0
+-1/0                               '-infinity' len 9 datatype N 0
 Rexx -> Lua (the string: as converted / boxed as float)
 '1E+16'                            string:"1E+16" / float:10000000000000000
 '1e16'                             string:"1e16" / float:10000000000000000
 '1E16'                             string:"1E16" / float:10000000000000000
 ' 1.5 '                            string:" 1.5 " / float:1.5
 '-0'                               integer:0 / float:-0 (negative)
-'NaN'                              string:"NaN" / float:NaN
+'NaN'                              string:"NaN" / error 98.900
 'nan'                              string:"nan" / float:NaN
-'Infinity'                         string:"Infinity" / float:inf
+'Infinity'                         string:"Infinity" / error 98.900
 'inf'                              string:"inf" / error 98.900
+'+infinity'                        string:"+infinity" / float:inf
+'-infinity'                        string:"-infinity" / float:-inf
 '1E+999'                           string:"1E+999" / float:inf
