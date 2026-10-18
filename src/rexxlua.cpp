@@ -2062,6 +2062,90 @@ RexxMethod2(RexxObjectPtr, LuaState_Predicate, RexxObjectPtr, routine, CSELF, se
     return r;
 }
 
+// s~table of an Array subclass: the shape from DIMENSIONS (nested tables, as
+// array-shape.md keeps it), the items from SUPPLIER (the stored ones, so an
+// own SUPPLIER is honoured), then n in each row with holes.  0: done, the
+// table pushed; 1: a message pushed; 2: a Rexx condition is pending
+static void shapeLevel(lua_State *L, const size_t *dims, size_t ndims, size_t level)
+{
+    lua_createtable(L, (int)dims[level], 0);
+    if (level + 1 == ndims) return;
+    for (size_t i = 1; i <= dims[level]; i++) {
+        shapeLevel(L, dims, ndims, level + 1);
+        lua_rawseti(L, -2, (lua_Integer)i);
+    }
+}
+
+static void holesLevel(lua_State *L, const size_t *dims, size_t ndims, size_t level)
+{
+    if (level + 1 < ndims) {
+        for (size_t i = 1; i <= dims[level]; i++) {
+            lua_rawgeti(L, -1, (lua_Integer)i);
+            holesLevel(L, dims, ndims, level + 1);
+            lua_pop(L, 1);
+        }
+        return;
+    }
+    for (size_t i = 1; i <= dims[level]; i++) {
+        bool hole = lua_rawgeti(L, -1, (lua_Integer)i) == LUA_TNIL;
+        lua_pop(L, 1);
+        if (hole) {
+            lua_pushinteger(L, (lua_Integer)dims[level]);
+            lua_setfield(L, -2, "n");
+            return;
+        }
+    }
+}
+
+static NOINLINE int pushArraySubclass(State *st, RexxObjectPtr a)
+{
+    RexxThreadContext *c = st->tc;
+    lua_State *L = st->L;
+    RexxObjectPtr ds = c->SendMessage0(a, "DIMENSIONS");
+    if (c->CheckCondition()) return 2;
+    size_t ndims = c->ArrayItems((RexxArrayObject)ds), dims[MAX_ARRAY_DIMS];
+    if (ndims > MAX_ARRAY_DIMS) { lua_pushstring(L, "an Array of more than 32 dimensions"); return 1; }
+    if (ndims == 0) { lua_newtable(L); return 0; }
+    for (size_t j = 0; j < ndims; j++)
+        if (!c->ObjectToStringSize(c->ArrayAt((RexxArrayObject)ds, j + 1), &dims[j])) {
+            c->ClearCondition();
+            lua_pushstring(L, "an Array whose dimensions cannot be read");
+            return 1;
+        }
+    if (!lua_checkstack(L, (int)ndims + 8)) { lua_pushstring(L, "an Array nested too deeply"); return 1; }
+    shapeLevel(L, dims, ndims, 0);
+    int t = lua_gettop(L);
+    RexxSupplierObject sup = (RexxSupplierObject)c->SendMessage0(a, "SUPPLIER");
+    if (c->CheckCondition()) return 2;
+    while (c->SupplierAvailable(sup)) {
+        RexxObjectPtr index = c->SupplierIndex(sup), item = c->SupplierItem(sup);
+        size_t pos[MAX_ARRAY_DIMS];
+        bool ok = true;
+        if (ndims == 1) ok = c->ObjectToStringSize(index, &pos[0]);
+        else if (!c->IsArray(index) || c->ArrayItems((RexxArrayObject)index) != ndims) ok = false;
+        else for (size_t j = 0; ok && j < ndims; j++)
+            ok = c->ObjectToStringSize(c->ArrayAt((RexxArrayObject)index, j + 1), &pos[j]);
+        for (size_t j = 0; ok && j < ndims; j++) ok = pos[j] >= 1 && pos[j] <= dims[j];
+        if (!ok) {
+            c->ClearCondition();
+            lua_settop(L, t - 1);
+            lua_pushstring(L, "an Array subclass whose SUPPLIER gives an index outside its DIMENSIONS");
+            return 1;
+        }
+        lua_pushvalue(L, t);
+        for (size_t j = 0; j + 1 < ndims; j++) { lua_rawgeti(L, -1, (lua_Integer)pos[j]); lua_remove(L, -2); }
+        if (item != NULLOBJECT && item != c->Nil()) {
+            if (!pushValue(st, item)) { lua_remove(L, -2); lua_remove(L, t); return 1; }
+            lua_rawseti(L, -2, (lua_Integer)pos[ndims - 1]);
+        }
+        lua_pop(L, 1);
+        c->SupplierNext(sup);
+        if (c->CheckCondition()) { lua_settop(L, t - 1); return 2; }
+    }
+    holesLevel(L, dims, ndims, 0);
+    return 0;
+}
+
 // ~table(array | directory | stringtable): a new Lua table (copy)
 RexxMethod2(RexxObjectPtr, LuaState_Table, OPTIONAL_RexxObjectPtr, src, CSELF, self)
 {
@@ -2074,9 +2158,16 @@ RexxMethod2(RexxObjectPtr, LuaState_Table, OPTIONAL_RexxObjectPtr, src, CSELF, s
     else if (c->IsArray(src)) {
         if (!pushValue(st, src)) { raiseTop(st); return NULLOBJECT; }
     }
-    else if (c->IsDirectory(src) || c->IsStringTable(src)) {
+    // A subclass is copied as its class is, read as ooRexx enumerates it, by
+    // SUPPLIER (what DO WITH ... OVER sees): an own SUPPLIER is honoured, and
+    // what it only computes (UNKNOWN) is not copied (oorexx-bridges,
+    // topics/directory-crossing.md, the amendment to point 2)
+    else if (c->IsDirectory(src) || c->IsStringTable(src) ||
+             c->IsInstanceOf(src, c->FindClass("DIRECTORY")) ||
+             c->IsInstanceOf(src, c->FindClass("STRINGTABLE"))) {
         lua_newtable(L);
         RexxObjectPtr sup = c->SendMessage0(src, "SUPPLIER");
+        if (c->CheckCondition()) { lua_settop(L, top); return NULLOBJECT; }
         while (c->SupplierAvailable((RexxSupplierObject)sup)) {
             if (!pushValue(st, c->SupplierIndex((RexxSupplierObject)sup)) ||
                 !pushValue(st, c->SupplierItem((RexxSupplierObject)sup))) {
@@ -2086,47 +2177,10 @@ RexxMethod2(RexxObjectPtr, LuaState_Table, OPTIONAL_RexxObjectPtr, src, CSELF, s
             c->SupplierNext((RexxSupplierObject)sup);
         }
     }
-    // A subclass is copied as its class is, but read by messages, so that an
-    // AT of its own is honoured; what it only computes (UNKNOWN) is not data
-    // and is not copied (oorexx-bridges, topics/directory-crossing.md)
-    else if (c->IsInstanceOf(src, c->FindClass("DIRECTORY")) ||
-             c->IsInstanceOf(src, c->FindClass("STRINGTABLE"))) {
-        lua_newtable(L);
-        RexxObjectPtr idx = c->SendMessage0(src, "ALLINDEXES");
-        if (c->CheckCondition()) { lua_settop(L, top); return NULLOBJECT; }
-        size_t n = c->ArrayItems((RexxArrayObject)idx);
-        for (size_t i = 1; i <= n; i++) {
-            RexxObjectPtr k = c->ArrayAt((RexxArrayObject)idx, i);
-            RexxObjectPtr v = c->SendMessage1(src, "AT", k);
-            if (c->CheckCondition()) { lua_settop(L, top); return NULLOBJECT; }
-            if (!pushValue(st, k) || !pushValue(st, v == NULLOBJECT ? c->Nil() : v)) {
-                raiseTop(st); lua_settop(L, top); return NULLOBJECT;
-            }
-            lua_settable(L, -3);
-        }
-    }
     else if (c->IsInstanceOf(src, c->FindClass("ARRAY"))) {
-        // one dimension (DIMENSION), by SIZE and AT; holes (or .nil) give n, as an Array
-        RexxObjectPtr dims = c->SendMessage0(src, "DIMENSION");
-        if (c->CheckCondition()) { lua_settop(L, top); return NULLOBJECT; }
-        size_t d = 0, size = 0;
-        c->ObjectToStringSize(dims, &d);
-        if (d > 1) {
-            raise(c, "Lua error: table: a multi-dimensional Array subclass is not copied; send it by box(\"reference\")");
-            return NULLOBJECT;
-        }
-        RexxObjectPtr sz = c->SendMessage0(src, "SIZE");
-        if (c->CheckCondition() || !c->ObjectToStringSize(sz, &size)) { lua_settop(L, top); return NULLOBJECT; }
-        lua_newtable(L);
-        bool holes = false;
-        for (size_t i = 1; i <= size; i++) {
-            RexxObjectPtr v = c->SendMessage1(src, "AT", c->StringSizeToObject(i));
-            if (c->CheckCondition()) { lua_settop(L, top); return NULLOBJECT; }
-            if (v == NULLOBJECT || v == c->Nil()) { holes = true; continue; }
-            if (!pushValue(st, v)) { raiseTop(st); lua_settop(L, top); return NULLOBJECT; }
-            lua_rawseti(L, -2, (lua_Integer)i);
-        }
-        if (holes) { lua_pushinteger(L, (lua_Integer)size); lua_setfield(L, -2, "n"); }
+        int r = pushArraySubclass(st, src);
+        if (r == 2) { lua_settop(L, top); return NULLOBJECT; }
+        if (r == 1) { raiseTop(st); lua_settop(L, top); return NULLOBJECT; }
     }
     else lua_newtable(L);
     RexxObjectPtr r = newProxy(st, -1);

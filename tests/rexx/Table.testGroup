@@ -24,47 +24,56 @@ return testResult
 
 ::method init
   forward class (super) continue
-  -- the table's pairs, sorted, "k=v k=v", and its #
+  -- the table, its pairs sorted, nested tables in braces: "k=v k={...}"
   self~setMethod("SHOW", "use arg t; return .lua~eval(" -
-    "'local t = ... local r = {} for k, v in pairs(t) do r[#r + 1] = tostring(k) .. ''='' .. tostring(v) end" -
-    " table.sort(r) return table.concat(r, '' '') .. '' #'' .. #t', t)", "OBJECT")
+    "'local function show(t) local r = {} for k, v in pairs(t) do" -
+    " r[#r + 1] = tostring(k) .. ''='' .. (type(v) == ''table'' and ''{'' .. show(v) .. ''}'' or tostring(v)) end" -
+    " table.sort(r) return table.concat(r, '' '') end return show(...)', t)", "OBJECT")
 
 -- Keys as stored: d~name stores NAME, d["name"] keeps the case
 ::method test_keys_as_stored
   d = .directory~new; d~name = "x"; d["low"] = "y"
-  self~assertSame("NAME=x low=y #0", self~show(.lua~table(d)))
+  self~assertSame("NAME=x low=y", self~show(.lua~table(d)))
   s = .stringtable~new; s["A"] = 1; s["b"] = 2
-  self~assertSame("A=1 b=2 #0", self~show(.lua~table(s)))
+  self~assertSame("A=1 b=2", self~show(.lua~table(s)))
 
 -- A subclass is copied as its class is
 ::method test_subclasses_are_copied
   d = .TDir~new; d~name = "x"; d["low"] = "y"
-  self~assertSame("NAME=x low=y #0", self~show(.lua~table(d)))
+  self~assertSame("NAME=x low=y", self~show(.lua~table(d)))
   s = .TStringTable~new; s["A"] = 1
-  self~assertSame("A=1 #0", self~show(.lua~table(s)))
+  self~assertSame("A=1", self~show(.lua~table(s)))
   a = .TArray~of(1, "two", 3)
-  self~assertSame("1=1 2=two 3=3 #3", self~show(.lua~table(a)))
-  h = .TArray~new(4); h[1] = 1; h[3] = "x"
-  self~assertSame("1=1 3=x n=4 #1", self~show(.lua~table(h)), "holes, and n")
+  self~assertSame("1=1 2=two 3=3", self~show(.lua~table(a)))
 
--- Read by messages: an AT of its own is honoured; a computed entry is not data
-::method test_subclasses_are_read_by_messages
+-- Read as ooRexx enumerates it, by SUPPLIER (what DO WITH ... OVER sees): an
+-- own SUPPLIER is honoured, an own AT only as far as SUPPLIER uses it, and a
+-- computed entry (UNKNOWN) is not data (topics/directory-crossing.md)
+::method test_subclasses_are_read_by_supplier
   d = .TAtDir~new; d~k = "stored"
-  self~assertSame("K=AT:stored #0", self~show(.lua~table(d)))
+  self~assertSame("K=stored", self~show(.lua~table(d)), "own AT")
+  do with index k item v over d; self~assertSame("K stored", k v, "as DO WITH sees it"); end
+  s = .TSupplierDir~new; s~k = "stored"
+  self~assertSame("Z=99", self~show(.lua~table(s)), "own SUPPLIER")
   u = .TUnknownDir~new; u~k = "stored"
   self~assertSame("stored", u~computed, "UNKNOWN answers")
-  self~assertSame("K=stored #0", self~show(.lua~table(u)), "but is not copied")
+  self~assertSame("K=stored", self~show(.lua~table(u)), "but is not copied")
   a = .TAtArray~of(1, 2)
-  self~assertSame("1=10 2=20 #2", self~show(.lua~table(a)))
+  self~assertSame("1=1 2=2", self~show(.lua~table(a)), "own AT of an Array")
 
--- A multi-dimensional Array subclass is an error (the class itself is nested)
-::method test_multidimensional_subclass
-  m = .TArray~new(2, 2); m[1, 1] = 1
-  signal on syntax
-  .lua~table(m)
-  self~fail("an error")
-syntax:
-  self~assertSame("98.900", condition("O")~code)
+-- An Array subclass keeps its shape (DIMENSIONS): trailing empty slots, and
+-- dimensions, as the class itself (topics/array-shape.md)
+::method test_array_subclass_shape
+  h = .TArray~new(5); h[1] = 1; h[3] = "x"
+  self~assertSame("1=1 3=x n=5", self~show(.lua~table(h)), "trailing empty slots")
+  self~assertSame(self~show(.lua~eval("return ...", .array~new(5)~~put(1, 1)~~put("x", 3))), -
+    self~show(.lua~table(h)), "the same as the class")
+  m = .TArray~new(2, 3); m[1, 1] = "a"
+  self~assertSame("1={1=a n=3} 2={n=3}", self~show(.lua~table(m)), "2x3, only m[1,1]")
+  f = .TArray~new(2, 3); do i = 1 to 2; do j = 1 to 3; f[i, j] = i * 10 + j; end; end
+  self~assertSame("1={1=11 2=12 3=13} 2={1=21 2=22 3=23}", self~show(.lua~table(f)), "2x3 full")
+  e = .TArray~new(2, 3)
+  self~assertSame("1={n=3} 2={n=3}", self~show(.lua~table(e)), "2x3 empty")
 
 ::class TDir subclass directory
 ::class TStringTable subclass stringtable
@@ -73,6 +82,9 @@ syntax:
 ::method at
   use arg i
   return "AT:" || self~at:super(i)
+::class TSupplierDir subclass directory
+::method supplier                       -- what it enumerates is its own
+  return .supplier~new(.array~of(99), .array~of("Z"))
 ::class TUnknownDir subclass directory
 ::method unknown                        -- COMPUTED is computed; the rest as a Directory
   use arg name
