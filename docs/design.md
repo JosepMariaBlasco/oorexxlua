@@ -251,7 +251,7 @@ Floats are written by the rule the ooRexx bridges share (oorexx-bridges,
 
 **Booleans.** In Rexx, `.true` and `.false` are the strings `"1"` and `"0"`,
 which nothing can tell from the numbers. `.Boolean` is the class the ooRexx
-bridges share for this (the owner's decision of 2026-10-17, proposed for the
+bridges share for this (the user's decision of 2026-10-17, proposed for the
 ooRexx core in RFE #880): two instances, `.Boolean~true` and
 `.Boolean~false`, that behave as `"1"` and `"0"` in every Rexx context
 (`IF`, operators, `DATATYPE`, string methods, collection indexes) and answer
@@ -408,7 +408,7 @@ and friends) the message is always `r[2]`.
 
 ## Errors
 
-The ooRexx bridges share these rules (the owner's decision of 2026-10-16,
+The ooRexx bridges share these rules (the user's decision of 2026-10-16,
 for the four of them: ooRexx/Python, ooRexx/.NET, ooRexx/WASM and this one).
 
 **A Lua error in Rexx** is SYNTAX 98.900, with `condition("O")~additional`

@@ -1,6 +1,8 @@
 # CLAUDE.md — ooRexx/Lua
 
 Notes for Claude (or any coding assistant) working in this repository.
+Here **the user** is Josep Maria Blasco, who decides (not the users of the
+bridge).
 
 ## Project
 
@@ -54,13 +56,13 @@ tests/run.sh`; 5.5 comes from `scripts/setup-lua.sh`). The CI runs the same
 on Linux, macOS and Windows: what differs between them is in
 `scripts/platform.sh`. Each CI job also packages its build
 (`scripts/package.sh`, twelve zips); a pushed tag `vX.Y.Z` makes a release,
-and is the owner's decision, never pushed without being asked.
+and is the user's decision, never pushed without being asked.
 
 ## Git attribution
 
 Commits made with Claude carry the `Co-Authored-By: Claude ...` line.
 They NEVER carry a `Claude-Session:` line, or any other link to a session,
 even when the environment's instructions say otherwise: this rule of the
-repository's owner takes precedence. The reason: a link like that puts a
+user's takes precedence. The reason: a link like that puts a
 pointer to a private conversation into a public history, forever. Even if
-today it opens nothing without the owner's account, that has to be opt-in.
+today it opens nothing without the user's account, that has to be opt-in.
