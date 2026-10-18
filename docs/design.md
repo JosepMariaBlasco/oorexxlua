@@ -243,9 +243,11 @@ Floats are written by the rule the ooRexx bridges share (oorexx-bridges,
 - **NaN and the infinities** are `nan`, `+infinity` and `-infinity`,
   ooRexx's own spelling: what it writes for a `double` an extension hands
   it, and the only spelling its `ObjectToDouble` reads. They are not Rexx
-  numbers, so Rexx arithmetic on them is an error. Going back, they stay
-  strings by the rule above, and `box("float")` reads them (and no other
-  spelling: not Lua's `inf`, not `NaN` or `Infinity`).
+  numbers, so Rexx arithmetic on them is an error. Going back, the rule
+  above takes Rexx numbers only, so they reach Lua as strings; the way back
+  to a float is `box("float", x)` (the family's decision, 2026-10-18), which
+  reads these three and no other spelling (not Lua's `inf`, not `NaN` or
+  `Infinity`).
 
 **Booleans.** In Rexx, `.true` and `.false` are the strings `"1"` and `"0"`,
 which nothing can tell from the numbers. `.Boolean` is the class the ooRexx
