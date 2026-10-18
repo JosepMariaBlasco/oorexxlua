@@ -2086,6 +2086,48 @@ RexxMethod2(RexxObjectPtr, LuaState_Table, OPTIONAL_RexxObjectPtr, src, CSELF, s
             c->SupplierNext((RexxSupplierObject)sup);
         }
     }
+    // A subclass is copied as its class is, but read by messages, so that an
+    // AT of its own is honoured; what it only computes (UNKNOWN) is not data
+    // and is not copied (oorexx-bridges, topics/directory-crossing.md)
+    else if (c->IsInstanceOf(src, c->FindClass("DIRECTORY")) ||
+             c->IsInstanceOf(src, c->FindClass("STRINGTABLE"))) {
+        lua_newtable(L);
+        RexxObjectPtr idx = c->SendMessage0(src, "ALLINDEXES");
+        if (c->CheckCondition()) { lua_settop(L, top); return NULLOBJECT; }
+        size_t n = c->ArrayItems((RexxArrayObject)idx);
+        for (size_t i = 1; i <= n; i++) {
+            RexxObjectPtr k = c->ArrayAt((RexxArrayObject)idx, i);
+            RexxObjectPtr v = c->SendMessage1(src, "AT", k);
+            if (c->CheckCondition()) { lua_settop(L, top); return NULLOBJECT; }
+            if (!pushValue(st, k) || !pushValue(st, v == NULLOBJECT ? c->Nil() : v)) {
+                raiseTop(st); lua_settop(L, top); return NULLOBJECT;
+            }
+            lua_settable(L, -3);
+        }
+    }
+    else if (c->IsInstanceOf(src, c->FindClass("ARRAY"))) {
+        // one dimension (DIMENSION), by SIZE and AT; holes (or .nil) give n, as an Array
+        RexxObjectPtr dims = c->SendMessage0(src, "DIMENSION");
+        if (c->CheckCondition()) { lua_settop(L, top); return NULLOBJECT; }
+        size_t d = 0, size = 0;
+        c->ObjectToStringSize(dims, &d);
+        if (d > 1) {
+            raise(c, "Lua error: table: a multi-dimensional Array subclass is not copied; send it by box(\"reference\")");
+            return NULLOBJECT;
+        }
+        RexxObjectPtr sz = c->SendMessage0(src, "SIZE");
+        if (c->CheckCondition() || !c->ObjectToStringSize(sz, &size)) { lua_settop(L, top); return NULLOBJECT; }
+        lua_newtable(L);
+        bool holes = false;
+        for (size_t i = 1; i <= size; i++) {
+            RexxObjectPtr v = c->SendMessage1(src, "AT", c->StringSizeToObject(i));
+            if (c->CheckCondition()) { lua_settop(L, top); return NULLOBJECT; }
+            if (v == NULLOBJECT || v == c->Nil()) { holes = true; continue; }
+            if (!pushValue(st, v)) { raiseTop(st); lua_settop(L, top); return NULLOBJECT; }
+            lua_rawseti(L, -2, (lua_Integer)i);
+        }
+        if (holes) { lua_pushinteger(L, (lua_Integer)size); lua_setfield(L, -2, "n"); }
+    }
     else lua_newtable(L);
     RexxObjectPtr r = newProxy(st, -1);
     lua_pop(L, 1);

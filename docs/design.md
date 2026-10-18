@@ -300,7 +300,14 @@ is a Lua error, which can come back to Rexx (*Errors*).
 
 Only Arrays are copied (to a sequence table), as ooRexx/Python copies them to
 lists; `s~box("reference", array)` passes one by reference instead, and
-`s~table(d)` copies a Directory or a StringTable to a table.
+`s~table(d)` copies a Directory or a StringTable to a table, with the keys
+as stored: `d~name = "x"` stores `NAME`, `d["name"]` keeps the case. A
+subclass of Directory, StringTable or Array is copied as its class is, but
+read by messages (`ALLINDEXES` and `AT`; `SIZE` and `AT`), so an `AT` of its
+own is honoured; what it only computes (`UNKNOWN`) is not data and is not
+copied (`oorexx-bridges`, `topics/directory-crossing.md`, 2026-10-18). A
+multi-dimensional Array subclass is an error there: `box("reference")` sends
+it as it is.
 
 The copy keeps the Array's shape (`oorexx-bridges`, `topics/array-shape.md`,
 decided 17/10/2026; until then a sparse Array lost its size and a
