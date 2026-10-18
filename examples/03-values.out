@@ -1,5 +1,5 @@
 integer integer integer float float float
-string string string string
+string string string float
 string string string string string
 string
 3.10 EUR
@@ -9,8 +9,8 @@ one
 3 3.0 1024.0
 0.30000000000000004
 0.3333333333333333
-1e+100 -0.0
-inf -inf nan
+1E+100 0.0000001
+-0.0 Infinity -Infinity NaN
 1
 string float integer
 false

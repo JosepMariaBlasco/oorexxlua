@@ -294,21 +294,43 @@ static NOINLINE void pushRexxString(lua_State *L, const char *d, size_t n)
     lua_pushlstring(L, d, n);
 }
 
-// A Lua float as Rexx sees it: the shortest of %.15g, %.16g, %.17g that gives
-// the same double back, with ".0" when it looks like an integer (as Python's
-// repr).  Lua's own %.14g loses digits: 0.1 + 0.2 would be "0.3".
+// A Lua float as Rexx sees it (the family's rule, oorexx-bridges
+// topics/float-text.md, decided 18/10/2026): the shortest digits that give
+// the same double back, written as ooRexx writes x + 0 under NUMERIC DIGITS
+// 17: plain unless the integer part needs more than 17 places or the
+// fraction more than 34, else one digit, a point, the rest, "E", the sign
+// and the exponent (1E+17, 1.5E-35); ".0" when the value is an integer
+// written without an exponent, because Lua tells integers from floats by the
+// text (1.0, -0.0, 9007199254740992.0); NaN, Infinity, -Infinity.  Lua's own
+// %.14g would lose digits: 0.1 + 0.2 would be "0.3".
 static NOINLINE std::string formatFloat(double d)
 {
-    if (std::isnan(d)) return "nan";
-    if (std::isinf(d)) return d > 0 ? "inf" : "-inf";
+    if (std::isnan(d)) return "NaN";
+    if (std::isinf(d)) return d > 0 ? "Infinity" : "-Infinity";
+    std::string sign = std::signbit(d) ? "-" : "";
+    if (d == 0) return sign + "0.0";
+    // The shortest digits: %.*e with 1 to 17 significant digits
     char buf[40];
-    for (int prec = 15; prec <= 17; prec++) {
-        snprintf(buf, sizeof buf, "%.*g", prec, d);
-        if (strtod(buf, NULL) == d) break;
+    for (int prec = 1; prec <= 17; prec++) {
+        snprintf(buf, sizeof buf, "%.*e", prec - 1, fabs(d));
+        if (strtod(buf, NULL) == fabs(d)) break;
     }
-    std::string r(buf);
-    if (r.find_first_of(".eE") == std::string::npos) r += ".0";
-    return r;
+    // buf is "D.DDDDe+XX": the digits, without the point, and the exponent
+    char *e = strchr(buf, 'e');
+    int x = atoi(e + 1);                    // d = D.DDD x 10^x
+    std::string digits;
+    for (char *p = buf; p < e; p++) if (*p != '.') digits += *p;
+    while (digits.size() > 1 && digits.back() == '0') digits.pop_back();
+    int n = (int)digits.size();
+    int places = n - 1 - x;                 // after the point, leading zeros included
+    if (x + 1 > 17 || places > 34) {
+        std::string r = sign + digits.substr(0, 1);
+        if (n > 1) r += "." + digits.substr(1);
+        return r + "E" + (x < 0 ? "-" : "+") + std::to_string(x < 0 ? -x : x);
+    }
+    if (x < 0) return sign + "0." + std::string(-x - 1, '0') + digits;
+    if (n <= x + 1) return sign + digits + std::string(x + 1 - n, '0') + ".0";
+    return sign + digits.substr(0, x + 1) + "." + digits.substr(x + 1);
 }
 
 static RexxObjectPtr toRexx(State *st, int idx);
@@ -1968,7 +1990,16 @@ RexxMethod3(RexxObjectPtr, LuaState_Box, CSTRING, type, RexxObjectPtr, value, CS
     }
     else if (t == "float") {
         double d;
-        if (c->ObjectToDouble(value, &d)) lua_pushnumber(L, (lua_Number)d);
+        RexxStringObject s;
+        // NaN, Infinity, -Infinity: what a float that is not a number becomes
+        // in Rexx (topics/float-text.md), which ObjectToDouble rejects
+        std::string special;
+        if (c->IsString(value) && stringValue(c, value, s))
+            special.assign(c->StringData(s), c->StringLength(s));
+        if (special == "NaN") lua_pushnumber(L, (lua_Number)NAN);
+        else if (special == "Infinity") lua_pushnumber(L, (lua_Number)HUGE_VAL);
+        else if (special == "-Infinity") lua_pushnumber(L, (lua_Number)-HUGE_VAL);
+        else if (c->ObjectToDouble(value, &d)) lua_pushnumber(L, (lua_Number)d);
         else bad = "a float must be a number";
     }
     else if (t == "string") {

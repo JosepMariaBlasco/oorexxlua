@@ -176,14 +176,17 @@ becomes:
 
 - a canonical integer (`0`, `42`, `-7`: no leading zeros, blanks or `+`)
   that fits in 64 bits → a Lua integer;
-- a Rexx number with a decimal point that a Lua float writes back
-  unchanged (`3.14`, `-0.5`, `100.0`, `0.333333333`) → a Lua float. "Writes
-  back" is the Lua → Rexx rule below, so such a number makes the round trip
+- a Rexx number with a decimal point or an exponent that a Lua float
+  writes back unchanged (`3.14`, `-0.5`, `100.0`, `0.333333333`, `-0.0`,
+  `1E+17`, `1.2676506E+30` from `2**100`) → a Lua float. "Writes back" is
+  the Lua → Rexx rule below, so such a number makes the round trip
   unchanged;
 - anything else → a Lua string: `"007"`, `" 5"`, `"+5"`, text; integers
   that do not fit in 64 bits, which a float would round silently; and the
   Rexx numbers a float would write differently, `3.10` (from
-  `format(x, , 2)`), `1E3`, `.5`, `1.26765060E+30` (`2**100`).
+  `format(x, , 2)`), `1E3`, `1e+17`, `.5`, numbers with more digits than a float
+  keeps (`2**100` under `numeric digits 30`); `NaN`, `Infinity` and `-Infinity`,
+  which are not Rexx numbers (`box("float")` reads them).
 
 Lua converts strings to numbers in arithmetic only: `"10" == 10` is false,
 and `"10" < 20` and `math.max("1", 2)` fail. With strings always, a Lua
@@ -213,16 +216,33 @@ Lua → Rexx:
 | `nil` | `.nil` |
 | boolean | `.Boolean~true` / `.Boolean~false` |
 | integer | its decimal string |
-| float | the shortest of `%.15g`, `%.16g`, `%.17g` that gives back the same number, with `.0` if it looks like an integer |
+| float | the shortest digits that give back the same number, written as ooRexx writes `x + 0` under `numeric digits 17`, with `.0` if it is an integer written without an exponent; `NaN`, `Infinity`, `-Infinity` |
 | string | a string, bytes unchanged |
 | a Rexx object passed in earlier | that same object |
 | table, function, userdata, thread | a `.LuaObject` proxy |
 
-Floats are written as Python's `repr` writes them: `2^10` is `1024.0`,
-`0.1 + 0.2` is `0.30000000000000004`. Lua's own `tostring` (`%.14g`) would
-lose digits (`0.3`), and a float that went from Lua to Rexx and back would no
-longer be the same number. `inf`, `-inf` and `nan` come as those strings,
-which are not Rexx numbers.
+Floats are written by the rule the ooRexx bridges share (oorexx-bridges,
+`topics/float-text.md`, decided 2026-10-18):
+
+- **The digits**: the shortest that give back the same double:
+  `0.30000000000000004`, `0.3333333333333333`, `5E-324`. Lua's own
+  `tostring` (`%.14g`) would lose digits (`0.3`), and a float that went from
+  Lua to Rexx and back would no longer be the same number.
+- **The exponent** where Rexx puts it, under `numeric digits 17`: plain
+  digits unless the integer part needs more than 17 places or the fraction
+  more than 34; else one digit, the point, the rest, `E`, the sign and the
+  exponent. `1e16` is `10000000000000000.0`, `1e17` is `1E+17`, `1e-7` is
+  `0.0000001`, `1e-35` is `1E-35`. Rexx's own `x + 0`, under `numeric
+  digits 17`, gives the same text (the tests check it on 20,000 doubles).
+- **The `.0`**: Lua tells integers from floats by the text, so this bridge
+  is on the `.0` side of the shared rule. A float whose value is an integer,
+  written without an exponent, ends in `.0` (`2^10` is `1024.0`, `-0.0`
+  keeps its sign), so that it comes back as a float. Integers never have
+  one. In Rexx only `==` sees the difference (`1.0 = 1`), and Rexx's
+  arithmetic keeps it (`1.0 + 1` is `2.0`).
+- **NaN and the infinities** are `NaN`, `Infinity` and `-Infinity`. They
+  are not Rexx numbers, so Rexx arithmetic on them is an error. Going back,
+  they stay strings by the rule above, and `box("float")` reads them.
 
 **Booleans.** In Rexx, `.true` and `.false` are the strings `"1"` and `"0"`,
 which nothing can tell from the numbers. `.Boolean` is the class the ooRexx
@@ -316,7 +336,7 @@ when the rule of *Values* does not give the type needed:
 |---|---|---|
 | `"boolean"` | `1` or `0` | `true` / `false` |
 | `"integer"` | a whole number that fits in 64 bits (`"007"` too) | an integer |
-| `"float"` | any Rexx number | a float |
+| `"float"` | any Rexx number; `NaN`, `Infinity`, `-Infinity` | a float |
 | `"string"` | anything | its string value |
 | `"reference"` | a Rexx object that is not a string | the object by reference (an Array that Lua can change) |
 

@@ -8,7 +8,8 @@ types = .lua~eval("function(...) local r = {}; for i = 1, select('#', ...) do" -
                   " local v = select(i, ...); r[i] = math.type(v) or type(v) end;" -
                   " return table.concat(r, ' ') end")
 say types~call(42, -7, 0, 3.14, 0.5, "100.0")      -- integer integer integer float float float
-say types~call("3.10", "1E3", ".5", 2**100)        -- string string string string
+say types~call("3.10", "1E3", ".5", 2**100)        -- string string string float
+                                                   -- (2**100 is 1.2676506E+30, as a float writes it)
 say types~call("007", " 5", "+5", "abc", "1.2.3")  -- string string string string string
 say types~call(99999999999999999999)               -- string: does not fit in 64 bits
 say .lua~eval("... .. ' EUR'", format(3.1, , 2))   -- 3.10 EUR: Rexx's formatting arrives
@@ -25,8 +26,8 @@ say .lua~eval("return (...)[1]", t)                -- one
 say .lua~eval("1 + 2") .lua~eval("1.0 + 2") .lua~eval("2^10")   -- 3 3.0 1024.0
 say .lua~eval("0.1 + 0.2")                         -- 0.30000000000000004
 say .lua~eval("1/3")                               -- 0.3333333333333333
-say .lua~eval("1e100") .lua~eval("-0.0")           -- 1e+100 -0.0
-say .lua~eval("1/0") .lua~eval("-1/0") .lua~eval("0/0")   -- inf -inf nan
+say .lua~eval("1e100") .lua~eval("1e-7")           -- 1E+100 0.0000001: as Rexx writes them
+say .lua~eval("-0.0") .lua~eval("1/0") .lua~eval("-1/0") .lua~eval("0/0")   -- -0.0 Infinity -Infinity NaN
 x = .lua~eval("1/3")
 say .lua~eval("return ... == 1/3", x)              -- 1: a float comes back exact
 

@@ -10,7 +10,7 @@ print(rexx.eval("reverse(arg(1))", "Lua"))                        -- auL
 
 -- 2. Numbers arrive as numbers when nothing is lost; Rexx's formatting stays
 print(math.type(rexx.eval("6 * 7")), rexx.eval("1/4"))           -- integer 0.25
-print(rexx.eval("format(3.1, , 2)"), rexx.eval("2**100"))         -- 3.10 1.2676506E+30
+print(rexx.eval("format(3.1, , 2)"), rexx.eval("2**100"))         -- 3.10 1.2676506e+30 (a float)
 print(rexx.routine("numeric digits 40; return 2**100")())         -- 1267650600228229401496703205376
 
 -- 3. Routines are Lua functions; Arrays come as tables

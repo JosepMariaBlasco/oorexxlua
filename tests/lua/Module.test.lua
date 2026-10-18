@@ -14,7 +14,8 @@ T.test("eval: Rexx values in Lua, by the rule that loses nothing", function()
   T.eq(rexx.eval("1/3"), 0.333333333)
   T.eq(rexx.eval("format(3.1, , 2)"), "3.10")       -- a float would lose the 0
   T.eq(rexx.eval("1E3"), "1E3")
-  T.eq(rexx.eval("2**100"), "1.2676506E+30")
+  T.eq(rexx.eval("2**100"), 1.2676506e30)          -- Rexx's exponent form, as a float writes it
+  T.eq(rexx.eval("'1E+3'"), "1E+3")                -- a float writes 1000.0
   T.eq(rexx.eval("'007'"), "007")
   T.eq(rexx.eval("12345678901234567890"), "12345678901234567890")   -- not in 64 bits
   T.eq(rexx.eval(".nil"), nil)

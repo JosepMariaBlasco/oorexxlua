@@ -7,7 +7,7 @@
 .Boolean~false	boolean	false
 .nil	nil	nil
 1E3	string	1E3
-2**100	string	1.2676506E+30
+2**100	float	1.2676506e+30
 true through Rexx:	boolean	Boolean
 error:	table	Rexx error 41.1: Nonnumeric value ("a") used in arithmetic operation.
 routine(3.10):	string	3.10
