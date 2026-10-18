@@ -78,16 +78,16 @@ return testResult
 -- float: now also Rexx's exponential form; NaN and the infinities stay text
 ::method test_the_default_rule
   kind = .lua~eval("function(x) return math.type(x) or type(x) end")
-  self~assertEquals("float", kind~call("1E+17"))
-  self~assertEquals("float", kind~call("0.0000001"))
-  self~assertEquals("float", kind~call("-0.0"))
-  self~assertEquals("string", kind~call("1e+17"))
-  self~assertEquals("string", kind~call("1E17"))
-  self~assertEquals("string", kind~call("nan"))
-  self~assertEquals("string", kind~call("+infinity"))
-  self~assertEquals("string", kind~call("-infinity"))
+  self~assertSame("float", kind~call("1E+17"))
+  self~assertSame("float", kind~call("0.0000001"))
+  self~assertSame("float", kind~call("-0.0"))
+  self~assertSame("string", kind~call("1e+17"))
+  self~assertSame("string", kind~call("1E17"))
+  self~assertSame("string", kind~call("nan"))
+  self~assertSame("string", kind~call("+infinity"))
+  self~assertSame("string", kind~call("-infinity"))
   numeric digits 9
-  self~assertEquals("float", kind~call(2**100), "1.2676506E+30")
+  self~assertSame("float", kind~call(2**100), "1.2676506E+30")
   -- and the round trip of any float, through Rexx arithmetic too
-  self~assertEquals("float", kind~call(.lua~eval("return 1.0")))
+  self~assertSame("float", kind~call(.lua~eval("return 1.0")))
   self~assertTrue(.lua~eval("return 1.0") + 1 == "2.0", "1.0 + 1 is 2.0")

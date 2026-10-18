@@ -50,22 +50,22 @@ return testResult
   address lua 'print("hello", 41 + 1, nil, true, 1.5)' with output stem out.
   self~assertEquals(0, rc)
   self~assertEquals(1, out.0)
-  self~assertEquals("hello" || '09'x || "42" || '09'x || "nil" || '09'x || "true" || '09'x || "1.5", out.1)
+  self~assertSame("hello" || '09'x || "42" || '09'x || "nil" || '09'x || "true" || '09'x || "1.5", out.1)
   self~assertTrue(self~restored, "print is Lua's again")
 
 ::method test_print_uses_tostring
   address lua 'print(setmetatable({}, {__tostring = function() return "T!" end}))' with output stem out.
-  self~assertEquals("T!", out.1)
+  self~assertSame("T!", out.1)
 
 ::method test_io_write_lines_are_cut_by_the_redirector
   address lua 'io.write("a", 1, " ", 2.5); io.write("b\n"); io.stdout:write("c"):write("d\ne\n", "f")' -
     with output stem out.
   self~assertEquals(0, rc)
   self~assertEquals(4, out.0)
-  self~assertEquals("a1 2.5b", out.1, "numbers as io.write writes them, a line in two writes")
-  self~assertEquals("cd", out.2, "f:write returns f")
-  self~assertEquals("e", out.3)
-  self~assertEquals("f", out.4, "the last line, without a line end")
+  self~assertSame("a1 2.5b", out.1, "numbers as io.write writes them, a line in two writes")
+  self~assertSame("cd", out.2, "f:write returns f")
+  self~assertSame("e", out.3)
+  self~assertSame("f", out.4, "the last line, without a line end")
 
 ::method test_io_write_returns_stdout
   address lua 'return io.write("") == io.stdout' with output stem out.; r = result
@@ -90,30 +90,30 @@ trapped:
   out.0 = 1; out.1 = "before"
   address lua 'print("after")' with output append stem out.
   self~assertEquals(2, out.0)
-  self~assertEquals("before", out.1)
-  self~assertEquals("after", out.2)
+  self~assertSame("before", out.1)
+  self~assertSame("after", out.2)
 
 ::method test_output_to_an_array
   a = .array~of("x")
   address lua 'print("one"); print("two")' with output using (a)
   self~assertEquals(2, a~items, "replaced")
-  self~assertEquals("one", a[1])
-  self~assertEquals("two", a[2])
+  self~assertSame("one", a[1])
+  self~assertSame("two", a[2])
 
 ::method test_error_stem
   address lua 'io.stderr:write("warning: ", 7, "\n"); return io.stdout == withOrig.stdout' with error stem err.; r = result
   self~assertEquals(0, rc)
   self~assertTrue(r, "only ERROR redirected: io.stdout is Lua's")
   self~assertEquals(1, err.0)
-  self~assertEquals("warning: 7", err.1)
+  self~assertSame("warning: 7", err.1)
   self~assertTrue(self~restored)
 
 ::method test_output_and_error_in_one_stem
   address lua 'print("o1"); io.stderr:write("e1\n"); print("o2")' with output stem s. error stem s.
   self~assertEquals(3, s.0)
-  self~assertEquals("o1", s.1)
-  self~assertEquals("e1", s.2)
-  self~assertEquals("o2", s.3)
+  self~assertSame("o1", s.1)
+  self~assertSame("e1", s.2)
+  self~assertSame("o2", s.3)
 
 ::method test_only_what_is_redirected
   none.0 = 0
@@ -138,9 +138,9 @@ trapped:
   in.0 = 3; in.1 = "first"; in.2 = ""; in.3 = "third"
   address lua 'return io.read(), io.read("L"), io.read("*l"), io.read(), io.read()' with input stem in.; r = result
   self~assertEquals(0, rc)
-  self~assertEquals("first", r[1])
+  self~assertSame("first", r[1])
   self~assertEquals('0a'x, r[2], '"L" keeps the line end')
-  self~assertEquals("third", r[3], 'Lua 5.1''s "*l"')
+  self~assertSame("third", r[3], 'Lua 5.1''s "*l"')
   self~assertSame(.nil, r[4], "nil at the end")
   self~assertTrue(self~restored)
 
@@ -153,11 +153,11 @@ trapped:
   self~assertEquals(31, r[2])
   self~assertEquals(-35, r[3])
   self~assertSame(.nil, r[4], "not a numeral: nil")
-  self~assertEquals("x", r[5], "a failed number read takes the blank, not the x")
+  self~assertSame("x", r[5], "a failed number read takes the blank, not the x")
   self~assertEquals('0a'x || "ab", r[6], "counts cross lines")
-  self~assertEquals("", r[7], '0: "" while there is more')
-  self~assertEquals("cdef" || '0a'x || "rest" || '0a'x, r[8])
-  self~assertEquals("", r[9], '"a" at the end: ""')
+  self~assertSame("", r[7], '0: "" while there is more')
+  self~assertSame("cdef" || '0a'x || "rest" || '0a'x, r[8])
+  self~assertSame("", r[9], '"a" at the end: ""')
   self~assertSame(.nil, r[10], "0 at the end: nil")
   self~assertSame(.nil, r[11])
 
@@ -183,20 +183,20 @@ trapped:
   address lua 'return io.read()' with input stem in.; r = result
   self~assertSame(.nil, r)
   address lua 'return io.read("a")' with input stem in.; r = result
-  self~assertEquals("", r)
+  self~assertSame("", r)
 
 ::method test_lines
   in.0 = 3; in.1 = "a"; in.2 = "b"; in.3 = "c"
   address lua 'for l in io.lines() do print("<" .. l .. ">") end' with input stem in. output stem out.
   self~assertEquals(3, out.0)
-  self~assertEquals("<a>", out.1)
-  self~assertEquals("<c>", out.3)
+  self~assertSame("<a>", out.1)
+  self~assertSame("<c>", out.3)
   address lua 'local t = {} for l in io.stdin:lines("L") do t[#t + 1] = l end return table.concat(t, "|")' -
     with input stem in.; r = result
-  self~assertEquals("a" || '0a'x || "|b" || '0a'x || "|c" || '0a'x, r)
+  self~assertSame("a" || '0a'x || "|b" || '0a'x || "|c" || '0a'x, r)
   address lua 'return io.stdin:read("l"), io.stdin:read("a")' with input stem in.; r = result
-  self~assertEquals("a", r[1])
-  self~assertEquals("b" || '0a'x || "c" || '0a'x, r[2])
+  self~assertSame("a", r[1])
+  self~assertSame("b" || '0a'x || "c" || '0a'x, r[2])
 
 ::method test_lines_with_a_file_is_luas
   file = SysTempFileName("withtest???")       -- in the current directory, Lua's too
@@ -204,13 +204,13 @@ trapped:
   in.0 = 1; in.1 = "redirected"
   .lua~global("_G")["withFile"] = file
   address lua 'for l in io.lines(withFile) do return l end' with input stem in.; r = result
-  self~assertEquals("in the file", r)
+  self~assertSame("in the file", r)
   address lua 'withFile = nil'
   call SysFileDelete file
 
 ::method test_input_from_an_array
   address lua 'return io.read("a")' with input using (.array~of("x", "y")); r = result
-  self~assertEquals("x" || '0a'x || "y" || '0a'x, r)
+  self~assertSame("x" || '0a'x || "y" || '0a'x, r)
 
 ::method test_input_and_output_together
   in.0 = 2; in.1 = "3"; in.2 = "4"
@@ -223,18 +223,18 @@ trapped:
     with output stem out. error stem err.; r = result
   self~assertEquals(.true, r[1])
   self~assertEquals(.true, r[2])
-  self~assertEquals("cannot close standard file", r[3])
-  self~assertEquals("cannot seek a redirected standard file", r[4])
-  self~assertEquals("file (ADDRESS LUA output)", r[5])
-  self~assertEquals("file (ADDRESS LUA error)", r[6])
-  self~assertEquals("file", r[7], "io.type knows the stand-ins")
-  self~assertEquals("file", r[8], "and Lua's files")
+  self~assertSame("cannot close standard file", r[3])
+  self~assertSame("cannot seek a redirected standard file", r[4])
+  self~assertSame("file (ADDRESS LUA output)", r[5])
+  self~assertSame("file (ADDRESS LUA error)", r[6])
+  self~assertSame("file", r[7], "io.type knows the stand-ins")
+  self~assertSame("file", r[8], "and Lua's files")
   self~assertSame(.nil, r[9])
 
 ::method test_io_type_of_a_stand_in_whose_command_ended
   address lua 'withKept = io.stdout' with output stem out.
   address lua 'return io.type(withKept)' with output stem out.; r = result
-  self~assertEquals("closed file", r)
+  self~assertSame("closed file", r)
   address lua 'return io.type(withKept)'; r = result
   self~assertSame(.nil, r, "Lua's io.type, outside a command")
   address lua 'withKept = nil'
@@ -245,7 +245,7 @@ trapped:
   self~assertEquals(.true, r[1])
   self~assertEquals(.true, r[2])
   self~assertEquals(.true, r[3])
-  self~assertEquals("x", out.1)
+  self~assertSame("x", out.1)
 
 ::method test_io_output_to_a_file
   file = SysTempFileName("withtest???")
@@ -254,9 +254,9 @@ trapped:
               'io.output(io.stdout); io.write("back\n")' with output stem out.
   self~assertEquals(0, rc)
   self~assertEquals(2, out.0)
-  self~assertEquals("printed", out.1, "print writes to the standard output")
-  self~assertEquals("back", out.2)
-  self~assertEquals("to the file", linein(file))
+  self~assertSame("printed", out.1, "print writes to the standard output")
+  self~assertSame("back", out.2)
+  self~assertSame("to the file", linein(file))
   call stream file, "c", "close"
   self~assertTrue(self~restored)
   address lua 'return io.output() == io.stdout'; r = result
@@ -268,17 +268,17 @@ trapped:
   address lua 'io.output(io.stderr); io.write("e\n"); io.output(io.stdout); io.write("o\n")' -
     with output stem out. error stem err.
   self~assertEquals(1, out.0)
-  self~assertEquals("o", out.1)
+  self~assertSame("o", out.1)
   self~assertEquals(1, err.0)
-  self~assertEquals("e", err.1)
+  self~assertSame("e", err.1)
   address lua 'io.output(io.stderr); io.write("only e\n"); io.output(withOrig.stdout)' with error stem err.
   self~assertEquals(1, err.0)
-  self~assertEquals("only e", err.1)
+  self~assertSame("only e", err.1)
 
 ::method test_io_close
   address lua 'return select(2, io.close(io.stdout)), select(2, io.close())' with output stem out.; r = result
-  self~assertEquals("cannot close standard file", r[1])
-  self~assertEquals("cannot close standard file", r[2])
+  self~assertSame("cannot close standard file", r[1])
+  self~assertSame("cannot close standard file", r[2])
 
 ::method test_input_only_keeps_luas_output
   in.0 = 0
@@ -294,9 +294,9 @@ trapped:
   address lua 'local k = {} for n in pairs(io) do k[#k + 1] = n end table.sort(k) io.write("w\n")' -
               'return table.concat(k, ",")' with output stem out.; r = result
   address lua 'local same = io.write == withIo.write; io = withIo; withIo = nil; return same'; s = result
-  self~assertEquals("stdout,write", r)
+  self~assertSame("stdout,write", r)
   self~assertEquals(1, out.0)
-  self~assertEquals("w", out.1)
+  self~assertSame("w", out.1)
   self~assertTrue(s, "restored")
 
 ::method test_a_delegated_error_says_where
@@ -320,9 +320,9 @@ trapped:
               'io.input():close(); local same = io.input(io.stdin) == io.stdin return a, n, io.read(), same' -
     with input stem in.; r = result
   self~assertEquals(0, rc)
-  self~assertEquals("in the file", r[1])
+  self~assertSame("in the file", r[1])
   self~assertEquals(0, r[2], "io.lines() reads the default input")
-  self~assertEquals("redirected", r[3])
+  self~assertSame("redirected", r[3])
   self~assertEquals(.true, r[4])
   address lua 'withFile = nil'
   call SysFileDelete file
@@ -334,8 +334,8 @@ trapped:
   address lua 'io.write("to the file\n"); print("printed")' with output stem out.
   address lua 'io.output():close(); io.output(io.stdout)'
   self~assertEquals(1, out.0)
-  self~assertEquals("printed", out.1)
-  self~assertEquals("to the file", linein(file), "as a real redirection of the standard output")
+  self~assertSame("printed", out.1)
+  self~assertSame("to the file", linein(file), "as a real redirection of the standard output")
   call stream file, "c", "close"
   address lua 'withFile = nil'
   call SysFileDelete file
@@ -346,7 +346,7 @@ trapped:
   address lua 'print("before"); error("boom")' with output stem out.
   self~assertEquals(1, rc)
   self~assertEquals(1, out.0, "what was written stays")
-  self~assertEquals("before", out.1)
+  self~assertSame("before", out.1)
   self~assertTrue(self~restored)
   return
 trapped:
@@ -355,7 +355,7 @@ trapped:
 ::method test_a_change_by_the_command_stays
   address lua 'print = function() return "mine" end' with output stem out.
   address lua 'return print()'; r = result
-  self~assertEquals("mine", r, "not put back over the command's own")
+  self~assertSame("mine", r, "not put back over the command's own")
   address lua 'return io.write == withOrig.write'; r = result
   self~assertTrue(r, "the rest is")
 
@@ -384,9 +384,9 @@ trapped:
   address lua 'print("outer 1"); local inner = withInner:run(); print("outer 2"); return inner' with output stem out.; r = result
   self~assertEquals(0, rc)
   self~assertEquals(2, out.0)
-  self~assertEquals("outer 1", out.1)
-  self~assertEquals("outer 2", out.2, "the outer redirection again after the inner one")
-  self~assertEquals("inner", r)
+  self~assertSame("outer 1", out.1)
+  self~assertSame("outer 2", out.2, "the outer redirection again after the inner one")
+  self~assertSame("inner", r)
   address lua 'withInner = nil'
   self~assertTrue(self~restored)
 

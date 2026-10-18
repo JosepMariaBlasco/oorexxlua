@@ -50,7 +50,7 @@ halt:
 after:
   self~assertTrue(halted, "a HALT")
   self~assertEquals(1, out.0)
-  self~assertEquals("before", out.1)
+  self~assertSame("before", out.1)
   self~assertTrue(.lua~eval('return print == withOrigPrint and io.write == withOrigWrite'), "restored")
   .lua~eval('withOrigPrint, withOrigWrite = nil')
   return
@@ -95,7 +95,7 @@ halt:
 
 ::method test_coroutines_as_before
   -- resume and wrap are the bridge's (*Ctrl-C*): Lua's behaviour, as it was
-  self~assertEquals("true 2|false eval:1: boom 5|false cannot resume dead coroutine", -
+  self~assertSame("true 2|false eval:1: boom 5|false cannot resume dead coroutine", -
     .lua~eval('local co = coroutine.create(function(a) local b = coroutine.yield(a + 1); error("boom " .. b) end)' -
     || '; local r = {coroutine.resume(co, 1)}; local r2 = {coroutine.resume(co, 5)}; local r3 = {coroutine.resume(co)}' -
     || '; return tostring(r[1]) .. " " .. r[2] .. "|" .. tostring(r2[1]) .. " " .. r2[2] .. "|" .. tostring(r3[1]) .. " " .. r3[2]'))
@@ -149,7 +149,7 @@ halt:
   if o < 1 then r = "less"; else r = "not less"
   self~fail("no HALT")
 halt:
-  self~assertEquals("unset", r)
+  self~assertSame("unset", r)
 
 ::method test_a_nested_call_does_not_end_it
   -- the Ctrl-C comes during a nested ~eval (from a callback): the outer Lua

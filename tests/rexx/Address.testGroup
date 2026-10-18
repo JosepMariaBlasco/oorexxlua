@@ -49,15 +49,15 @@ return testResult
   address lua '6 * 7'; r = result           -- an expression, as ~eval
   self~assertEquals(42, r)
   address lua 'return "abc"'; r = result
-  self~assertEquals("abc", r)
+  self~assertSame("abc", r)
   address lua 'return nil'; set = var("RESULT"); r = result
   self~assertTrue(set, "return nil is one result")
   self~assertSame(.nil, r)
   address lua 'return {10, 20}'; r = result
-  self~assertEquals("LUAOBJECT", r~class~id)
+  self~assertSame("LUAOBJECT", r~class~id)
   self~assertEquals(20, r[2])
   address lua 'return "3.10", 0.5'; r = result
-  self~assertEquals("3.10", r[1])
+  self~assertSame("3.10", r[1])
   self~assertEquals(0.5, r[2])
 
 ::method test_result_several_is_an_array
@@ -67,10 +67,10 @@ return testResult
   self~assertEquals(3, r~items, "one item per result, nil included")
   self~assertEquals(1, r[1])
   self~assertSame(.nil, r[2])
-  self~assertEquals("m", r[3])
+  self~assertSame("m", r[3])
   address lua 'return nil, "not found"'; r = result     -- a failure by Lua's convention is a value
   self~assertEquals(0, rc)
-  self~assertEquals("not found", r[2])
+  self~assertSame("not found", r[2])
 
 ::method test_runtime_error_is_ERROR
   trace off
@@ -78,9 +78,9 @@ return testResult
   call on failure name trapped
   address lua 'error("boom")'
   self~assertEquals(1, rc)
-  self~assertEquals("ERROR", self~caught)
+  self~assertSame("ERROR", self~caught)
   self~assertEquals('error("boom")', self~description)
-  self~assertEquals("ADDRESS LUA:1: boom", self~additional~makeArray("0a"x)[1])
+  self~assertSame("ADDRESS LUA:1: boom", self~additional~makeArray("0a"x)[1])
   self~assertTrue(self~additional~pos("stack traceback:") > 0, "with Lua's traceback")
   return
 trapped:
@@ -93,7 +93,7 @@ trapped:
   call on failure name trapped
   address lua 'this is not Lua'
   self~assertEquals(-1, rc)
-  self~assertEquals("FAILURE", self~caught)
+  self~assertSame("FAILURE", self~caught)
   self~assertTrue(self~additional~pos("syntax error") > 0, self~additional)
   return
 trapped:
@@ -141,7 +141,7 @@ trapped:
   .local~lua = s
   address lua '1'
   self~assertEquals(-2, rc)
-  self~assertEquals("the LuaState is closed", self~additional)
+  self~assertSame("the LuaState is closed", self~additional)
   .local~lua = saved
   return
 trapped:
@@ -154,7 +154,7 @@ trapped:
   .local~lua = s
   address lua 'where = "mine"'
   .local~lua = saved
-  self~assertEquals("mine", s~global("where"))
+  self~assertSame("mine", s~global("where"))
   self~assertSame(.nil, saved~global("where"))
   s~close
 
@@ -165,7 +165,7 @@ trapped:
   self~fail("a HALT in a callback was lost")
 syntax:
   .lua~global("_G")["addressHalt"] = .nil
-  self~assertEquals(4.1, condition("O")~code, "as ~eval: the program stops unless SYNTAX is trapped")
+  self~assertSame("4.1", condition("O")~code, "as ~eval: the program stops unless SYNTAX is trapped")
 
 ::method test_message_with_a_NUL
   trace off

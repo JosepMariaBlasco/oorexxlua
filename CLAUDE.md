@@ -36,6 +36,11 @@ fixes run only then. The other platforms use the portable builds, unless
 the workflow is run by hand with `oorexx_fixes` (`gh workflow run build.yml
 -f oorexx_fixes=true`).
 
+Tests that check a text compare it with `==` or `assertSame`, never `=` or
+`assertEquals`: between two numbers, Rexx's `=` compares values under
+`numeric digits` 9, so `assertEquals("3.10", "3.1")` passes (oorexx-bridges'
+`CONVENTIONS.md`). `assertEquals` is for values: counts, return codes.
+
 Any change of behaviour updates the expected output and `docs/design.md`.
 The conversion probes (`tests/probes/`, run by `Probes.testGroup`) are the
 master of the Lua column of `oorexx-bridges`' `topics/conversion-rules/`:

@@ -37,7 +37,7 @@ syntax:
   self~assertEquals(5000050000, co~call(add), "100000 of them")
   d = .directory~new; d~x = 5
   co = .lua~eval("coroutine.wrap(function(d) local r = {} for k, v in pairs(d) do r[#r+1] = k .. '=' .. v end return table.concat(r) end)")
-  self~assertEquals("X=5", co~call(d), "pairs in a coroutine")
+  self~assertSame("X=5", co~call(d), "pairs in a coroutine")
 
 -- Many arguments, deep Arrays (Lua's stack is checked)
 ::method test_many_arguments_and_deep_arrays
@@ -51,7 +51,7 @@ syntax:
 ::method test_close_from_a_callback
   s = .LuaState~new
   closer = .routine~new("closer", "use arg s; s~close")
-  self~assertEquals("Lua error: a LuaState cannot be closed while Lua code in it is running.", -
+  self~assertSame("Lua error: a LuaState cannot be closed while Lua code in it is running.", -
                     self~errorOf(s, "EVAL", "local f, s = ...; f(s); return 1", closer, s))
   self~assertFalse(s~isClosed, "the state is still open")
   self~assertEquals(2, s~eval("1 + 1"))
@@ -67,7 +67,7 @@ syntax:
 ::method test_finalized_object
   .lua~eval("local b = ...; setmetatable({box = b}, {__gc = function(t) saved = t.box end})", .directory~new)
   .lua~eval("collectgarbage(); collectgarbage()")
-  self~assertEquals("Lua error: a Rexx object used after Lua finalized it.", -
+  self~assertSame("Lua error: a Rexx object used after Lua finalized it.", -
                     self~errorOf(.lua, "EVAL", "tostring(saved)"))
   .lua~eval("saved = nil")
 
