@@ -91,3 +91,37 @@ return testResult
   -- and the round trip of any float, through Rexx arithmetic too
   self~assertSame("float", kind~call(.lua~eval("return 1.0")))
   self~assertTrue(.lua~eval("return 1.0") + 1 == "2.0", "1.0 + 1 is 2.0")
+
+-- A Rexx number out of a double's range, asked for as a float, is an error
+-- that names the cause; by name, the infinities still work; a zero is a zero
+-- (oorexx-bridges, topics/explicit-float-range.md)
+::method test_box_float_out_of_range
+  big = "too large: it would be"
+  small = "too small: it would be zero"
+  list = "1E+999=" big "+infinity|-1E+999=" big "-infinity|1.8E+308=" big "+infinity|" -
+    " 1E+999 =" big "+infinity|1E-999=" small "|-1E-999=" small "|0.0000001E-999=" small
+  do while list \= ""
+    parse var list v "=" why "|" list
+    why = why~strip
+    c = self~boxError(v)
+    if c == .nil then self~fail(v "should be an error")
+    self~assertSame("98.900", c~code, v)
+    self~assertSame("Lua error: box:" v~strip "is out of range for a float ("why")", c~additional[1], v)
+  end
+  isZero = .lua~eval("function(x) return x == 0 end")
+  do v over "0", "-0", "0.000", "0E-999", "-0E+999", " 0 "
+    self~assertTrue(isZero~call(.lua~box("float", v)), v "is a zero")
+  end
+  fine = .lua~eval("function(x) return x ~= 0 and x == x and x > -math.huge and x < math.huge end")
+  do v over "5E-324", "1.7976931348623157E+308", "-1.7976931348623157E+308", "2.5E-320"
+    self~assertTrue(fine~call(.lua~box("float", v)), v "fits")
+  end
+
+-- the condition object of .lua~box("float", v), or .nil if it works
+::method boxError
+  use strict arg v
+  signal on syntax
+  .lua~box("float", v)
+  return .nil
+syntax:
+  return condition("O")

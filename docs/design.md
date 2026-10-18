@@ -341,9 +341,21 @@ when the rule of *Values* does not give the type needed:
 |---|---|---|
 | `"boolean"` | `1` or `0` | `true` / `false` |
 | `"integer"` | a whole number that fits in 64 bits (`"007"` too) | an integer |
-| `"float"` | any Rexx number; `nan`, `+infinity`, `-infinity` | a float |
+| `"float"` | a Rexx number that a double can hold; `nan`, `+infinity`, `-infinity` | a float |
 | `"string"` | anything | its string value |
 | `"reference"` | a Rexx object that is not a string | the object by reference (an Array that Lua can change) |
+
+A float keeps about 17 digits, so `box("float")` rounds the rest
+(`3.14159265358979323846264` is `3.141592653589793`). But a Rexx number out
+of a double's range is an error, not an infinity or a zero (the family's
+rule, oorexx-bridges `topics/explicit-float-range.md`, 2026-10-18):
+`1E+999` and `1.8E+308` are "too large", `1E-999` and `-1E-999` "too
+small", each a SYNTAX 98.900 whose message names the number and the cause
+(`box: 1E-999 is out of range for a float (too small: it would be zero)`).
+A subnormal is fine (`5E-324`), and so is a Rexx zero (`0E-999`). An
+infinity is asked for by name, `+infinity` or `-infinity`. Only Rexx
+strings are checked: ooRexx's `ObjectToDouble`, which reads them, says
+nothing when a string is out of range, so the bridge checks after it.
 
 Rexx's `1` and `0` are both true in Lua, and `.true` is just the string
 `"1"`, so they cannot be converted automatically: a boolean is a `.Boolean`

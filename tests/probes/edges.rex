@@ -129,7 +129,7 @@ exit
   signal on syntax
   return .lua~eval("local x = ... if x ~= x then return math.type(x) .. ':NaN' end return describe(x) .. (1/x < 0 and ' (negative)' or '')", .lua~box("float", v))
 syntax:
-  return "error" condition("O")~code
+  return "error" condition("O")~code":" condition("O")~additional[1]
 
 -- s with the address after each "table: ", "function: ", "thread: ",
 -- "userdata: " or "file (" as 0x... (Windows prints addresses without 0x)

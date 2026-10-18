@@ -1968,6 +1968,23 @@ RexxMethod2(RexxObjectPtr, LuaState_Require, CSTRING, name, CSELF, self)
     return firstResult(en.st, pcallAll(en.st, 1));
 }
 
+// A Rexx string that ObjectToDouble read as d, an infinity or a zero: the
+// message if that is a number out of a double's range ("" if it is fine:
+// +infinity, -infinity, or a Rexx zero)
+static NOINLINE std::string floatRange(const char *p, size_t n, double d)
+{
+    std::string v(p, n);
+    size_t a = v.find_first_not_of(' '), b = v.find_last_not_of(' ');
+    std::string w = a == std::string::npos ? "" : v.substr(a, b - a + 1);
+    if (std::isinf(d)) {
+        if (w == "+infinity" || w == "-infinity") return "";
+        return w + " is out of range for a float (too large: it would be " + (d > 0 ? "+" : "-") + "infinity)";
+    }
+    size_t e = w.find_first_of("eE");
+    if (w.substr(0, e).find_first_of("123456789") == std::string::npos) return "";   // a zero
+    return w + " is out of range for a float (too small: it would be zero)";
+}
+
 // ~box(type, value): a Lua value of the given type, as a .LuaObject, when
 // the rule of *Values* does not give the one needed (docs/design.md, *Boxing*)
 RexxMethod3(RexxObjectPtr, LuaState_Box, CSTRING, type, RexxObjectPtr, value, CSELF, self)
@@ -1979,6 +1996,7 @@ RexxMethod3(RexxObjectPtr, LuaState_Box, CSTRING, type, RexxObjectPtr, value, CS
     std::string t(type);
     for (auto &ch : t) ch = (char)tolower((unsigned char)ch);
     std::string bad;
+    bool whole = false;                 // bad is the whole message (no ", not ...")
     if (t == "boolean") {
         logical_t b;
         if (c->ObjectToLogical(value, &b)) lua_pushboolean(L, b ? 1 : 0);
@@ -1992,8 +2010,17 @@ RexxMethod3(RexxObjectPtr, LuaState_Box, CSTRING, type, RexxObjectPtr, value, CS
     else if (t == "float") {
         double d;
         // ObjectToDouble reads nan, +infinity, -infinity too: what a float
-        // that is not a number becomes in Rexx (topics/float-text.md)
-        if (c->ObjectToDouble(value, &d)) lua_pushnumber(L, (lua_Number)d);
+        // that is not a number becomes in Rexx (topics/float-text.md).  It
+        // turns a Rexx string out of a double's range into an infinity or a
+        // zero without saying so: that is an error, unless the string asked
+        // for the infinity by name (topics/explicit-float-range.md)
+        if (c->ObjectToDouble(value, &d)) {
+            RexxStringObject s;
+            if (c->IsString(value) && (std::isinf(d) || d == 0) && stringValue(c, value, s))
+                bad = floatRange(c->StringData(s), c->StringLength(s), d);
+            if (bad.empty()) lua_pushnumber(L, (lua_Number)d);
+            else whole = true;
+        }
         else bad = "a float must be a number";
     }
     else if (t == "string") {
@@ -2013,7 +2040,7 @@ RexxMethod3(RexxObjectPtr, LuaState_Box, CSTRING, type, RexxObjectPtr, value, CS
     }
     if (!bad.empty()) {
         RexxStringObject s;
-        if (bad.compare(0, 8, "the type") != 0 && stringValue(c, value, s))
+        if (!whole && bad.compare(0, 8, "the type") != 0 && stringValue(c, value, s))
             bad += ", not \"" + std::string(c->StringData(s), c->StringLength(s)) + "\"";
         if (c->CheckCondition()) return NULLOBJECT;
         raise(c, "Lua error: box: " + bad);

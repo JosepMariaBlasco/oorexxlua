@@ -142,16 +142,16 @@ Rexx -> Lua (the string: as converted / boxed as float)
 '1E16'                             string:"1E16" / float:10000000000000000
 ' 1.5 '                            string:" 1.5 " / float:1.5
 '-0'                               integer:0 / float:-0 (negative)
-'NaN'                              string:"NaN" / error 98.900
+'NaN'                              string:"NaN" / error 98.900: Lua error: box: a float must be a number, not "NaN"
 'nan'                              string:"nan" / float:NaN
-'Infinity'                         string:"Infinity" / error 98.900
-'inf'                              string:"inf" / error 98.900
+'Infinity'                         string:"Infinity" / error 98.900: Lua error: box: a float must be a number, not "Infinity"
+'inf'                              string:"inf" / error 98.900: Lua error: box: a float must be a number, not "inf"
 '+infinity'                        string:"+infinity" / float:inf
 '-infinity'                        string:"-infinity" / float:-inf
-'1E+999'                           string:"1E+999" / float:inf
-'-1E+999'                          string:"-1E+999" / float:-inf
-'1E-999'                           string:"1E-999" / float:0
-'-1E-999'                          string:"-1E-999" / float:-0 (negative)
+'1E+999'                           string:"1E+999" / error 98.900: Lua error: box: 1E+999 is out of range for a float (too large: it would be +infinity)
+'-1E+999'                          string:"-1E+999" / error 98.900: Lua error: box: -1E+999 is out of range for a float (too large: it would be -infinity)
+'1E-999'                           string:"1E-999" / error 98.900: Lua error: box: 1E-999 is out of range for a float (too small: it would be zero)
+'-1E-999'                          string:"-1E-999" / error 98.900: Lua error: box: -1E-999 is out of range for a float (too small: it would be zero)
 '5E-324'                           float:4.9406564584124654e-324 / float:4.9406564584124654e-324
 '1.7976931348623157E+308'          float:1.7976931348623157e+308 / float:1.7976931348623157e+308
-'1.8E+308'                         string:"1.8E+308" / float:inf
+'1.8E+308'                         string:"1.8E+308" / error 98.900: Lua error: box: 1.8E+308 is out of range for a float (too large: it would be +infinity)
