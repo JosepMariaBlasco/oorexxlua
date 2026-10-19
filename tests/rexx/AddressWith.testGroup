@@ -5,8 +5,7 @@
 /* ERROR, io.read, io.lines and io.stdin read INPUT, while the command runs;  */
 /* io.output, io.input and io.type know the stand-ins, and io.write, io.read  */
 /* and io.lines follow Lua's default files.                                   */
-/* Needs ooRexx r13275 or later (#2111, #2112): tests/run.sh runs it only    */
-/* with ORXLUA_OOREXX_FIXES=1.                                                */
+/* Needs ooRexx r13275 or later (#2111, #2112).                               */
 /*                                                                            */
 /* Licensed under the Apache License, Version 2.0.                            */
 /*----------------------------------------------------------------------------*/

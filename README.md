@@ -45,8 +45,7 @@ address lua
 'n'; say result                                    -- 55
 ```
 
-With `WITH`, Lua's `print`, `io.write` and `io.read` use the redirection
-(this needs ooRexx trunk r13275 or later):
+With `WITH`, Lua's `print`, `io.write` and `io.read` use the redirection:
 
 ```rexx
 in.0 = 2; in.1 = 3; in.2 = 4
@@ -117,8 +116,10 @@ also makes them, as artifacts of the CI run, without a release.
 ## Getting started
 
 You need a C++ compiler (on Windows, MSVC, used from Git Bash in a developer
-command prompt's environment), an ooRexx 5.3.0 with its API headers (the one
-installed in `/usr/local`, say, or a portable build) on the `PATH`, and a
+command prompt's environment), an ooRexx 5.3.0 r13275 or later with its API
+headers (the one installed in `/usr/local`, say, or a portable build) on the
+`PATH` (`WITH` and threads registering command environments need the fixes
+of ooRexx bugs #2111 and #2112, r13274 and r13275), and a
 Lua: 5.4 by default, or `LUA_VERSION=5.3` or `5.5`.
 
 - On Linux, the distribution's development files (Debian/Ubuntu:
@@ -200,9 +201,7 @@ LUA_VERSION=5.3 BUILD=build53 TESTS="Module.test.lua" oorexxlua/tests/run.sh`.
   Linux, macOS and Windows), `setup-lua.sh` (builds a Lua from lua.org, and
   its standalone `lua`), `setup-luatex.sh` (fetches TeX Live's LuaTeX),
   `build-cmodule.sh` (the test C module), `package.sh` (the zip of
-  binaries), `setup-oorexxunit.sh` (fetches ooRexxUnit) and
-  `setup-oorexx.sh` (builds ooRexx trunk from its sources, r13275 by
-  default, on Linux, macOS and Windows).
+  binaries) and `setup-oorexxunit.sh` (fetches ooRexxUnit).
 - `dist/` — what goes into the zip besides the binaries: its `README.md`,
   `check.rex` and `check.lua`.
 - `.github/workflows/build.yml` — the CI, the packages and the releases.

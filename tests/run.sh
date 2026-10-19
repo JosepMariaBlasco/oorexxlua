@@ -13,11 +13,8 @@
 # with the same Lua as the build's (scripts/build-cmodule.sh: LUA_VERSION,
 # default 5.4, LUA_STATIC, LUA_CFLAGS).  TESTS="Threads.testGroup" to choose;
 # TIMEOUT= seconds per group (default 300); logs in OUT (default
-# /tmp/orxlua-tests).  The tests of ADDRESS LUA ... WITH run only with
-# ORXLUA_OOREXX_FIXES=1, ooRexx trunk r13275 or later (#2111, #2112)
-# (scripts/setup-oorexx.sh): AddressWith.testGroup, and one in Module.test.lua;
-# so does, in CommandHandlers.testGroup, the test of names registered while
-# other threads address them.
+# /tmp/orxlua-tests).  Needs ooRexx r13275 or later (#2111, #2112: WITH, and
+# command environments registered while other threads run).
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 WORK=${ORXLUA_WORK:-$(cd "$HERE/../.." && pwd)}
@@ -47,10 +44,6 @@ OUT=${OUT:-/tmp/orxlua-tests}; mkdir -p "$OUT"
 status=0
 for t in $TESTS; do
   log="$OUT/${t%.*}-lua$V.log"
-  # ADDRESS LUA ... WITH needs ooRexx r13275 or later
-  if [ "$t" = AddressWith.testGroup ] && [ "${ORXLUA_OOREXX_FIXES:-}" != 1 ]; then
-    echo "SKIP lua$V $t: needs ORXLUA_OOREXX_FIXES=1 (ooRexx r13275 or later)"; continue
-  fi
   case $t in
     *.lua)
       if [ -z "$LUA_EXE" ]; then

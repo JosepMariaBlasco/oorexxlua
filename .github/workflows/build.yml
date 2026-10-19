@@ -2,12 +2,9 @@
 # Linux, macOS (arm64 and x64) and Windows: one job per platform and Lua,
 # since the bridge is compiled against one Lua. ooRexx comes from its
 # portable builds on SourceForge, pinned to one revision; a newer one is
-# taken deliberately, after checking it. Except on Linux: there ooRexx is
-# trunk r13275 built from SVN (the fixes of bugs #2111 and #2112, which the
-# tests of WITH need and the portable builds do not have yet;
-# scripts/setup-oorexx.sh, cached), and ORXLUA_OOREXX_FIXES=1 says so to the
-# tests. Run by hand
-# (workflow_dispatch) with oorexx_fixes, every platform builds it. Lua: on Linux, 5.3 and 5.4 are the
+# taken deliberately, after checking it (r13275: the first with the fixes of
+# bugs #2111 and #2112, which WITH and command environments registered while
+# other threads run need). Lua: on Linux, 5.3 and 5.4 are the
 # distribution's (shared liblua, through pkg-config); everything else is
 # built from lua.org's sources by scripts/setup-lua.sh, pinned to a release
 # (static on Linux and macOS, a DLL on Windows).
@@ -30,16 +27,10 @@ on:
     tags: ['v*']
   pull_request:
   workflow_dispatch:
-    inputs:
-      oorexx_fixes:
-        description: ooRexx trunk r13275 (built) on every platform, not only on Linux
-        type: boolean
-        default: false
 
 env:
-  OOREXX_REV: "13271"
+  OOREXX_REV: "13275"
   OOREXX_URL: https://downloads.sourceforge.net/project/oorexx/oorexx/5.3.0beta/portable
-  OOREXX_FIXES_REV: "13275"     # trunk with #2111 (r13274) and #2112 (r13275)
 
 jobs:
   unix:
@@ -63,24 +54,9 @@ jobs:
     runs-on: ${{ matrix.platform.os }}
     env:
       LUA_RELEASE: ${{ matrix.lua }}
-      OOREXX_FIXES: ${{ matrix.platform.name == 'linux-x64' || inputs.oorexx_fixes == true }}
     steps:
       - uses: actions/checkout@v4
-      - name: ooRexx r${{ env.OOREXX_FIXES_REV }} built, cached
-        if: env.OOREXX_FIXES == 'true'
-        uses: actions/cache@v4
-        with:
-          path: ${{ runner.temp }}/oorexx-inst
-          key: oorexx-${{ runner.os }}-${{ runner.arch }}-r${{ env.OOREXX_FIXES_REV }}-${{ hashFiles('scripts/setup-oorexx.sh') }}
-      - name: ooRexx r${{ env.OOREXX_FIXES_REV }} (built)
-        if: env.OOREXX_FIXES == 'true'
-        run: |
-          export OOREXX_REV=$OOREXX_FIXES_REV OOREXX_INST=$RUNNER_TEMP/oorexx-inst
-          export OOREXX_SRC=$RUNNER_TEMP/oorexx-src OOREXX_BUILD=$RUNNER_TEMP/oorexx-build
-          scripts/setup-oorexx.sh >> "$GITHUB_PATH"
-          echo "ORXLUA_OOREXX_FIXES=1" >> "$GITHUB_ENV"
       - name: ooRexx r${{ env.OOREXX_REV }} (portable)
-        if: env.OOREXX_FIXES != 'true'
         run: |
           curl -sSfL --retry 3 --retry-all-errors -o "$RUNNER_TEMP/oorexx.zip" \
             "$OOREXX_URL/oorexx-5.3.0-$OOREXX_REV.${{ matrix.platform.oorexx }}-portable-release.zip"
@@ -152,25 +128,10 @@ jobs:
         shell: bash
     env:
       LUA_RELEASE: ${{ matrix.lua }}
-      OOREXX_FIXES: ${{ inputs.oorexx_fixes == true }}
     steps:
       - uses: actions/checkout@v4
       - uses: ilammy/msvc-dev-cmd@v1
-      - name: ooRexx r${{ env.OOREXX_FIXES_REV }} built, cached
-        if: env.OOREXX_FIXES == 'true'
-        uses: actions/cache@v4
-        with:
-          path: ${{ runner.temp }}/oorexx-inst
-          key: oorexx-${{ runner.os }}-${{ runner.arch }}-r${{ env.OOREXX_FIXES_REV }}-${{ hashFiles('scripts/setup-oorexx.sh') }}
-      - name: ooRexx r${{ env.OOREXX_FIXES_REV }} (built)
-        if: env.OOREXX_FIXES == 'true'
-        run: |
-          export OOREXX_REV=$OOREXX_FIXES_REV OOREXX_INST=$RUNNER_TEMP/oorexx-inst
-          export OOREXX_SRC=$RUNNER_TEMP/oorexx-src OOREXX_BUILD=$RUNNER_TEMP/oorexx-build
-          cygpath -w "$(scripts/setup-oorexx.sh)" >> "$GITHUB_PATH"
-          echo "ORXLUA_OOREXX_FIXES=1" >> "$GITHUB_ENV"
       - name: ooRexx r${{ env.OOREXX_REV }} (portable)
-        if: env.OOREXX_FIXES != 'true'
         run: |
           curl -sSfL --retry 3 --retry-all-errors -o "$RUNNER_TEMP/oorexx.zip" \
             "$OOREXX_URL/oorexx-5.3.0-$OOREXX_REV.windows.x86_64-portable-release.zip"

@@ -38,10 +38,9 @@ return testResult
 halt:
   return .true
 
--- ADDRESS LUA ... WITH (needs ORXLUA_OOREXX_FIXES=1, tests/run.sh): after a
--- Ctrl-C, print and io.write are Lua's again, and the output so far stays
+-- ADDRESS LUA ... WITH: after a Ctrl-C, print and io.write are Lua's again,
+-- and the output so far stays
 ::method test_with_restores_after_a_ctrl_c
-  if value("ORXLUA_OOREXX_FIXES", , "ENVIRONMENT") \= 1 then return
   .lua~eval('withOrigPrint, withOrigWrite = print, io.write')
   halted = .false
   signal on halt

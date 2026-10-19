@@ -824,13 +824,12 @@ Windows short of a pipe and a thread.) Every
 stand-in runs inside the command, under the state's lock (*Threads*), in
 the command's thread.
 
-**Needs ooRexx trunk r13275 or later**: the redirector's queries
+**Needs ooRexx r13275 or later**: the redirector's queries
 (`IsInputRedirected` ...) ran with a flag uninitialized (ooRexx bug #2113,
 fixed in r13271), and the registration fixes of #2111 and #2112 (above),
-in trunk since r13274 and r13275 (until then the bridge carried them as
-patches). The tests of `WITH`
-(`AddressWith.testGroup`) run only with `ORXLUA_OOREXX_FIXES=1`: on Linux in
-the CI, everywhere when it is run with `oorexx_fixes`.
+in r13274 and r13275 (until then the bridge carried them as patches, and
+then the CI built trunk for its tests; since 19/10/2026 the portable builds
+have them).
 
 ## Command environments
 
@@ -935,9 +934,9 @@ interpreter's lock), and a thread that addresses a name before another
 registers it needs that of #2112 (r13275: the handler it cached could be
 freed). The bridge does not refuse: on older builds, register names before
 the threads start. `CommandHandlers.testGroup` has a test of exactly that,
-eight threads addressing names while another adds them, run only with
-`ORXLUA_OOREXX_FIXES=1`: on r13271 it crashes 19 runs of 20 (segmentation
-fault), on r13275 none of 50 (measured 19/10/2026; Python's
+eight threads addressing names while another adds them: on r13271 it
+crashes 19 runs of 20 (segmentation fault), on r13275 none of 50 (measured
+19/10/2026, before the portable builds had r13275; Python's
 `t35_address_threads.py`, `oorexxpython` `fab4b60`, measured the same).
 
 ## Lua → ooRexx

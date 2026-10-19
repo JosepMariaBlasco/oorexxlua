@@ -7,7 +7,7 @@
 /* whatever its sign; a Lua error is SYNTAX 98.900; output without WITH goes  */
 /* to .output and .error; a removed name answers FAILURE RC 30.  The test of  */
 /* threads registering names while others address them needs ooRexx r13275   */
-/* (#2111, #2112): it runs only with ORXLUA_OOREXX_FIXES=1.                   */
+/* (#2111, #2112).                                                            */
 /*                                                                            */
 /* Licensed under the Apache License, Version 2.0.                            */
 /*----------------------------------------------------------------------------*/
@@ -298,7 +298,6 @@ syntax:
 -- Names registered on one thread while others address names (#2111, #2112):
 -- crashes, hangs or wrong results on ooRexx r13271, none on r13275
 ::method test_registering_while_threads_address
-  if value("ORXLUA_OOREXX_FIXES", , "ENVIRONMENT") \== 1 then return   -- needs r13275
   h = self~handler("return tonumber(command) + 1")
   .lua~addCommandEnvironment("STRESS0", h)
   done = .queue~new

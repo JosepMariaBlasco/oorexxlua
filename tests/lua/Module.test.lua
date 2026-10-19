@@ -362,25 +362,22 @@ T.test("command environments written in Lua: command_environments, add, remove",
   r.close()
 end)
 
--- needs ooRexx r13275 or later (tests/run.sh)
-if os.getenv("ORXLUA_OOREXX_FIXES") == "1" then
-  T.test("ADDRESS LUA ... WITH, in the host's state and in another instance", function()
-    local before = print
-    T.eq(rexx.routine([[
-      in.0 = 2; in.1 = "3"; in.2 = "4"
-      address lua 'local s = 0 for l in io.lines() do s = s + tonumber(l) end print("sum", s)' -
-        with input stem in. output stem out.
-      return rc out.0 out.1
-    ]])(), "0 1 sum\t7")
-    T.eq(print, before, "print is Lua's again")
-    local other = rexx.interpreter{initial_address = "LUA"}
-    T.eq(other.routine([[
-      address lua 'io.write("a"); io.stderr:write("e\n"); io.write("b\n")' with output stem o. error stem e.
-      return o.1 e.1
-    ]])(), "ab e")
-    other.close()
-    T.eq(print, before)
-  end)
-end
+T.test("ADDRESS LUA ... WITH, in the host's state and in another instance", function()
+  local before = print
+  T.eq(rexx.routine([[
+    in.0 = 2; in.1 = "3"; in.2 = "4"
+    address lua 'local s = 0 for l in io.lines() do s = s + tonumber(l) end print("sum", s)' -
+      with input stem in. output stem out.
+    return rc out.0 out.1
+  ]])(), "0 1 sum\t7")
+  T.eq(print, before, "print is Lua's again")
+  local other = rexx.interpreter{initial_address = "LUA"}
+  T.eq(other.routine([[
+    address lua 'io.write("a"); io.stderr:write("e\n"); io.write("b\n")' with output stem o. error stem e.
+    return o.1 e.1
+  ]])(), "ab e")
+  other.close()
+  T.eq(print, before)
+end)
 
 T.done()
