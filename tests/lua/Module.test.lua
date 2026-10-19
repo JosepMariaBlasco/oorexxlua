@@ -296,7 +296,7 @@ T.test("ADDRESS LUA runs in the host's state, in every instance", function()
   addressCount = nil
 end)
 
--- needs an ooRexx with the fixes in patches/oorexx/ (tests/run.sh)
+-- needs ooRexx r13275 or later (tests/run.sh)
 if os.getenv("ORXLUA_OOREXX_FIXES") == "1" then
   T.test("ADDRESS LUA ... WITH, in the host's state and in another instance", function()
     local before = print

@@ -824,10 +824,11 @@ Windows short of a pipe and a thread.) Every
 stand-in runs inside the command, under the state's lock (*Threads*), in
 the command's thread.
 
-**Needs ooRexx trunk r13271 or later, with the fixes in
-`patches/oorexx/`**: the redirector's queries (`IsInputRedirected` ...) ran
-with a flag uninitialized (ooRexx bug #2113, fixed in r13271), and the
-registration fixes of #2111 and #2112 (above), not yet in trunk. The tests of `WITH`
+**Needs ooRexx trunk r13275 or later**: the redirector's queries
+(`IsInputRedirected` ...) ran with a flag uninitialized (ooRexx bug #2113,
+fixed in r13271), and the registration fixes of #2111 and #2112 (above),
+in trunk since r13274 and r13275 (until then the bridge carried them as
+patches). The tests of `WITH`
 (`AddressWith.testGroup`) run only with `ORXLUA_OOREXX_FIXES=1`: on Linux in
 the CI, everywhere when it is run with `oorexx_fixes`.
 

@@ -31,12 +31,12 @@ A Lua C function of the bridge that raises a Lua error (`lua_error`,
 a helper: MSVC's `longjmp` would destroy it again (`docs/design.md`,
 *Errors*). Keep such objects in `NOINLINE` functions.
 
-ooRexx: on Linux the CI builds the bridge with an ooRexx built by
-`scripts/setup-oorexx.sh`, with the fixes in `patches/oorexx/` (ooRexx bugs
-not yet in trunk), and sets `ORXLUA_OOREXX_FIXES=1`; tests that need those
-fixes run only then. The other platforms use the portable builds, unless
-the workflow is run by hand with `oorexx_fixes` (`gh workflow run build.yml
--f oorexx_fixes=true`).
+ooRexx: on Linux the CI builds the bridge with ooRexx trunk r13275 built by
+`scripts/setup-oorexx.sh` (the fixes of #2111 and #2112, not yet in a
+portable build), and sets `ORXLUA_OOREXX_FIXES=1`; tests that need those
+fixes run only then. The other platforms use the portable builds, unless the
+workflow is run by hand with `oorexx_fixes` (`gh workflow run build.yml -f
+oorexx_fixes=true`). When the portable builds reach r13275, all that goes.
 
 Tests that check a text compare it with `==` or `assertSame`, never `=` or
 `assertEquals`: between two numbers, Rexx's `=` compares values under

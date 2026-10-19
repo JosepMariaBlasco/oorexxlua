@@ -1,23 +1,21 @@
 #!/usr/bin/env bash
-# Build ooRexx from SVN with its API headers and libraries, and with the fixes
-# in patches/oorexx/ (ooRexx bugs that are reported but not yet in trunk; see
-# the README there), for building and testing the bridge: an alternative to
-# an installed ooRexx, such as the .deb, or the portable builds.  Linux, macOS
+# Build ooRexx trunk from SVN with its API headers and libraries, for
+# building and testing the bridge: an alternative to an installed ooRexx,
+# such as the .deb, or the portable builds, while those are older than what
+# the bridge needs (r13275: the fixes of bugs #2111 and #2112, which WITH in
+# ADDRESS LUA needs; until 19/10/2026 they were patches here).  Linux, macOS
 # and Windows (Git Bash, in MSVC's developer environment).  Idempotent: skips
 # what is already there.  Prints the installation's bin directory on stdout,
 # last; everything else goes to stderr.  build.sh finds it through the PATH
 # (or OOREXX_HOME=<the installation>).
-#   setup-oorexx.sh   (OOREXX_REV, OOREXX_SRC, OOREXX_BUILD, OOREXX_INST;
-#                      OOREXX_PATCHES=0 for trunk as it is)
+#   setup-oorexx.sh   (OOREXX_REV, OOREXX_SRC, OOREXX_BUILD, OOREXX_INST)
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 WORK=${ORXLUA_WORK:-$(cd "$HERE/../.." && pwd)}   # the directory that contains the clone
-REV=${OOREXX_REV:-13271}                          # the revision the patches are made against
+REV=${OOREXX_REV:-13275}                          # #2111 (r13274) and #2112 (r13275)
 SRC=${OOREXX_SRC:-$WORK/oorexx}
 BUILD=${OOREXX_BUILD:-$WORK/oorexx-build}
 INST=${OOREXX_INST:-$WORK/oorexx-inst}
-PATCHES=()
-[ "${OOREXX_PATCHES:-1}" = 0 ] || PATCHES=("$HERE"/../patches/oorexx/*.diff)
 log() { echo "setup-oorexx.sh: $*" >&2; }
 
 case $(uname -s) in
@@ -40,30 +38,20 @@ install_pkg() {   # install_pkg <command> <Debian package> <Homebrew formula> <C
 }
 NATIVE() { if [ $OS = Windows ]; then cygpath -m "$1"; else echo "$1"; fi; }
 
-# what the installation was built from: the revision and the patches
-stamp() {
-  echo "r$REV"
-  for p in ${PATCHES[@]+"${PATCHES[@]}"}; do echo "$(basename "$p") $(cksum < "$p" | awk '{print $1}')"; done
-}
+# what the installation was built from: the revision
+stamp() { echo "r$REV"; }
 STAMP=$INST/oorexxlua-build.txt
 if [ -f "$STAMP" ] && [ "$(cat "$STAMP")" = "$(stamp)" ]; then
-  log "$INST is up to date ($(head -1 "$STAMP"), ${#PATCHES[@]} patches)"
+  log "$INST is up to date ($(head -1 "$STAMP"))"
 else
   if [ ! -d "$SRC" ]; then
     install_pkg svn subversion subversion sliksvn
     log "svn checkout r$REV -> $SRC"
     # a working copy, not an export: ooRexx's build takes its revision from it
     svn checkout -q -r "$REV" https://svn.code.sf.net/p/oorexx/code-0/main/trunk "$SRC" >&2
-    for p in ${PATCHES[@]+"${PATCHES[@]}"}; do
-      # svn patch, not patch: it knows svn:eol-style (CRLF files on Windows),
-      # but reports a hunk it cannot apply only in its output (C, or rejected)
-      log "svn patch $(basename "$p")"
-      out=$(svn patch "$(NATIVE "$p")" "$(NATIVE "$SRC")" 2>&1); echo "$out" >&2
-      if echo "$out" | grep -qE '^C |rejected|^Skipped'; then log "$(basename "$p") does not apply to r$REV"; exit 2; fi
-    done
-    stamp > "$SRC/oorexxlua-patches.txt"
-  elif [ "$(cat "$SRC/oorexxlua-patches.txt" 2>/dev/null)" != "$(stamp)" ]; then
-    log "$SRC was checked out for another revision or other patches: remove it (and $BUILD, $INST)"
+    stamp > "$SRC/oorexxlua-revision.txt"
+  elif [ "$(cat "$SRC/oorexxlua-revision.txt" 2>/dev/null)" != "$(stamp)" ]; then
+    log "$SRC was checked out for another revision: remove it (and $BUILD, $INST)"
     exit 2
   fi
   install_pkg cmake cmake cmake cmake
