@@ -39,6 +39,7 @@ extern "C" {
 #endif
 #include <clocale>
 #include <atomic>
+#include <exception>
 #include <functional>
 #include <map>
 #include <mutex>
@@ -115,6 +116,11 @@ struct State {
     lua_Integer redirects = 0;              // the last one's number
     struct Command *command = NULL;         // commands of Lua handlers in progress, innermost first
     lua_Integer commands = 0;               // the last one's number
+    // A C++ exception that ooRexx threw while Lua code called Rexx (a SIGNAL
+    // unwinding to a Rexx caller above the bridge, docs/design.md, *Errors*),
+    // caught before it crossed Lua's frames: Lua unwinds by a Lua error, and
+    // the bridge's lua_pcall throws it again (rethrowUnwind)
+    std::exception_ptr unwind;
     // Ctrl-C (docs/design.md, *Ctrl-C*); read by the signal handler
     std::atomic<int> running{0};            // lua_pcalls of the bridge's in progress (nested too)
     std::atomic<bool> interrupted{false};   // a signal stopped its Lua code: until the outer
@@ -154,21 +160,71 @@ static bool foreignThread(State *st) { return st->adopted && std::this_thread::g
 // entries nest: Rexx -> Lua -> Rexx -> Lua on one thread).
 // mode: LOCK waits for the lock, TRY does not, SKIP does not enter at all.
 enum EnterMode { LOCK, TRY, SKIP };
+// Left by a C++ exception (an unwind that rethrowUnwind threw again), it also
+// puts back the Lua thread in use and its stack top, which the code it
+// skipped would have.
 struct Enter {
     State *st;
     std::unique_lock<std::recursive_mutex> lk;
     RexxThreadContext *savedTc;
     RexxObjectPtr savedSelf;
+    lua_State *savedL;
+    int savedTop = 0;
+    int exceptions;
     bool owns;
     Enter(State *s, RexxThreadContext *tc, RexxObjectPtr self, EnterMode mode = LOCK)
-        : st(s), lk(s->lock, std::defer_lock)
+        : st(s), lk(s->lock, std::defer_lock), exceptions(std::uncaught_exceptions())
     {
         owns = mode == TRY ? lk.try_lock() : mode == LOCK ? (lk.lock(), true) : false;
-        savedTc = st->tc; savedSelf = st->self;
-        if (owns) { st->tc = tc; if (self != NULLOBJECT) st->self = self; st->depth++; }
+        savedTc = st->tc; savedSelf = st->self; savedL = st->L;
+        if (owns) {
+            st->tc = tc; if (self != NULLOBJECT) st->self = self; st->depth++;
+            if (savedL != NULL && !st->closed) savedTop = lua_gettop(savedL);
+        }
     }
-    ~Enter() { if (owns) { st->depth--; st->tc = savedTc; st->self = savedSelf; } }
+    ~Enter()
+    {
+        if (!owns) return;
+        if (std::uncaught_exceptions() > exceptions && !st->closed && savedL != NULL) {
+            st->L = savedL;
+            if (lua_gettop(savedL) > savedTop) lua_settop(savedL, savedTop);
+        }
+        st->depth--; st->tc = savedTc; st->self = savedSelf;
+    }
 };
+
+/* Rexx code that Lua calls (a Rexx method, a supplier, a string method...),
+ * from a Lua C function: f makes the API calls.  ooRexx unwinds a SIGNAL by
+ * a C++ throw, and when the trap is in a Rexx caller above the bridge
+ * (Rexx -> .lua~eval -> Lua -> a Rexx method that does RAISE USER X ...
+ * RETURN, the caller with SIGNAL ON USER X) the throw would cross Lua's C
+ * frames and lua_pcall, which it cannot unwind (their counters stay: after
+ * ~200 such, "C stack overflow"; on Windows it is undefined).  So it stops
+ * here, in st->unwind, f is not run while one is pending, and the caller
+ * raises a Lua error (unwindError); the bridge's lua_pcall throws it again
+ * once Lua has unwound (rethrowUnwind).  False if f did not complete.      */
+template <class F> static NOINLINE bool guarded(State *st, F &&f)
+{
+    if (st->unwind) return false;
+    try { f(); return true; }
+    catch (...) { st->unwind = std::current_exception(); return false; }
+}
+
+static int unwindError(lua_State *L)
+{
+    lua_pushliteral(L, "a Rexx SIGNAL is unwinding through Lua");
+    return lua_error(L);
+}
+
+// After the bridge's lua_pcall (or what it did after it): an unwind that
+// stopped in Lua (guarded) goes on, as the C++ exception it was
+static void rethrowUnwind(State *st)
+{
+    if (!st->unwind) return;
+    std::exception_ptr e = st->unwind;
+    st->unwind = nullptr;
+    std::rethrow_exception(e);
+}
 
 static void raise(RexxThreadContext *c, const std::string &m)
 {
@@ -572,6 +628,10 @@ static int pcallAll(State *st, int nargs)
 {
     LuaFailure f;
     int n = pcallQuiet(st, nargs, f);
+    if (st->unwind) {                       // a SIGNAL past the bridge (guarded): it goes on
+        if (n < 0) lua_pop(st->L, 1); else lua_pop(st->L, n);
+        rethrowUnwind(st);
+    }
     bool ctrlC = takeInterrupt(st);
     RexxObjectPtr cond = n < 0 ? conditionOf(st->L, -1) : NULLOBJECT;
     if (cond != NULLOBJECT && isHalt(st->tc, cond)) {   // a HALT in a callback: Error 4.1, as ADDRESS LUA
@@ -1053,11 +1113,14 @@ static int rexxCallBack(lua_State *L, RexxObjectPtr target, const char *message,
         if (v != c->Nil()) c->ArrayPut(args, v, i - first + 1);
         release(c, v);                              // the Array holds it
     }
-    RexxObjectPtr r;
-    if (message == NULL && c->IsRoutine(target))
-        r = c->CallRoutine((RexxRoutineObject)target, args);
-    else
-        r = c->SendMessage(target, message ? message : "CALL", args);
+    RexxObjectPtr r = NULLOBJECT;
+    bool ran = guarded(st, [&] {
+        if (message == NULL && c->IsRoutine(target))
+            r = c->CallRoutine((RexxRoutineObject)target, args);
+        else
+            r = c->SendMessage(target, message ? message : "CALL", args);
+    });
+    if (!ran) { END_THREAD(); return unwindError(L); }   // (no more Rexx calls until it goes on)
     release(c, args);
     if (c->CheckCondition()) {
         pushRexxCondition(L, c);
@@ -1065,9 +1128,11 @@ static int rexxCallBack(lua_State *L, RexxObjectPtr target, const char *message,
         return lua_error(L);
     }
     if (r == NULLOBJECT) { END_THREAD(); return 0; }
-    bool ok = pushValue(st, r);
-    release(c, r);
+    bool ok = false;
+    ran = guarded(st, [&] { ok = pushValue(st, r); });     // (a string method may run)
+    if (ran) release(c, r);
     END_THREAD();
+    if (!ran) return unwindError(L);
     if (!ok) return lua_error(L);
     return 1;
 }
@@ -1153,18 +1218,23 @@ static int pairs_next(lua_State *L)
     USE_THREAD(L);
     RexxThreadContext *c = st->tc;
     RexxSupplierObject sp = (RexxSupplierObject)sup->obj;
-    if (!c->SupplierAvailable(sp)) {
+    bool available = false;
+    if (!guarded(st, [&] { available = c->SupplierAvailable(sp) != 0; })) { END_THREAD(); return unwindError(L); }
+    if (!available) {
         bool error = c->CheckCondition();
         if (error) pushRexxCondition(L, c);
         END_THREAD();
         if (error) return lua_error(L);
         return 0;
     }
-    RexxObjectPtr index = c->SupplierIndex(sp);
-    RexxObjectPtr item = c->SupplierItem(sp);
-    c->SupplierNext(sp);
+    RexxObjectPtr index = NULLOBJECT, item = NULLOBJECT;
+    if (!guarded(st, [&] { index = c->SupplierIndex(sp); item = c->SupplierItem(sp); c->SupplierNext(sp); })) {
+        END_THREAD();
+        return unwindError(L);
+    }
     if (c->CheckCondition()) { pushRexxCondition(L, c); END_THREAD(); return lua_error(L); }
-    bool ok = pushValue(st, index) && pushValue(st, item);
+    bool ok = false;
+    if (!guarded(st, [&] { ok = pushValue(st, index) && pushValue(st, item); })) { END_THREAD(); return unwindError(L); }
     release(c, index);
     release(c, item);
     END_THREAD();
@@ -1183,7 +1253,8 @@ static int box_pairs(lua_State *L)
     RexxBox *b = checkBox(L, 1);
     USE_THREAD(L);
     RexxThreadContext *c = st->tc;
-    RexxObjectPtr sup = c->SendMessage0(b->obj, "SUPPLIER");
+    RexxObjectPtr sup = NULLOBJECT;
+    if (!guarded(st, [&] { sup = c->SendMessage0(b->obj, "SUPPLIER"); })) { END_THREAD(); return unwindError(L); }
     if (c->CheckCondition()) { pushRexxCondition(L, c); END_THREAD(); return lua_error(L); }
     if (sup == NULLOBJECT || !c->IsOfType(sup, "SUPPLIER")) {
         END_THREAD();
@@ -1243,8 +1314,9 @@ static int box_tostring(lua_State *L)
     RexxBox *b = checkBox(L, 1);
     USE_THREAD(L);                      // its string method may call Lua
     RexxThreadContext *c = st->tc;
-    RexxStringObject s;
-    bool ok = stringValue(c, b->obj, s);
+    RexxStringObject s = NULLOBJECT;
+    bool ok = false;
+    if (!guarded(st, [&] { ok = stringValue(c, b->obj, s); })) { END_THREAD(); return unwindError(L); }
     if (!ok) {
         if (c->CheckCondition()) pushRexxCondition(L, c);
         else lua_pushstring(L, "the Rexx object has no string value");
@@ -2878,6 +2950,7 @@ static bool inputRedirected(Command *cmd) { return cmd->io != NULL && cmd->io->I
 // Rexx condition raised as a Lua error
 #define CTX_CHECK(L, st, outerL)                                              \
     do { (st)->L = (outerL);                                                  \
+         if ((st)->unwind) return unwindError(L);                             \
          if ((st)->tc->CheckCondition()) { pushRexxCondition((L), (st)->tc); return lua_error(L); } } while (0)
 
 static int ctx_line_in(lua_State *L)        // ctx:line_in(): the next input line, nil at the end
@@ -2889,7 +2962,7 @@ static int ctx_line_in(lua_State *L)        // ctx:line_in(): the next input lin
     size_t len = 0;
     lua_State *outerL = st->L;
     st->L = L;                              // a USING source may call back into Lua
-    cmd->io->ReadInput(&data, &len);
+    guarded(st, [&] { cmd->io->ReadInput(&data, &len); });
     CTX_CHECK(L, st, outerL);
     if (data == NULL) lua_pushnil(L); else lua_pushlstring(L, data, len);
     return 1;
@@ -2907,7 +2980,7 @@ static int ctx_lines(lua_State *L)          // ctx:lines(): the rest of the inpu
         size_t len = 0;
         lua_State *outerL = st->L;
         st->L = L;
-        cmd->io->ReadInput(&data, &len);
+        guarded(st, [&] { cmd->io->ReadInput(&data, &len); });
         CTX_CHECK(L, st, outerL);
         if (data == NULL) break;
         lua_pushlstring(L, data, len);
@@ -2931,9 +3004,9 @@ static int ctxWrite(lua_State *L, bool err)
     st->L = L;                              // a USING target may call back into Lua
     bool redirected = cmd->io != NULL && (err ? cmd->io->IsErrorRedirected() : cmd->io->IsOutputRedirected());
     if (redirected) {
-        if (err) cmd->io->WriteError(s, len); else cmd->io->WriteOutput(s, len);
+        guarded(st, [&] { if (err) cmd->io->WriteError(s, len); else cmd->io->WriteOutput(s, len); });
     }
-    else {                                  // (released: many lines in one command must not grow)
+    else guarded(st, [&] {                  // (released: many lines in one command must not grow)
         RexxDirectoryObject local = tc->GetLocalEnvironment();
         RexxObjectPtr stream = local != NULLOBJECT ? tc->DirectoryAt(local, err ? "ERROR" : "OUTPUT") : NULLOBJECT;
         if (stream != NULLOBJECT && stream != tc->Nil()) {
@@ -2943,7 +3016,7 @@ static int ctxWrite(lua_State *L, bool err)
         }
         release(tc, stream);
         release(tc, local);
-    }
+    });
     CTX_CHECK(L, st, outerL);
     return 0;
 }
@@ -2985,7 +3058,8 @@ static int ctx_get_var(lua_State *L)        // ctx:get_var(name): its value, nil
     RexxObjectPtr v = cmd->c->GetContextVariable(name);
     if (st->tc->CheckCondition()) CTX_CHECK(L, st, outerL);
     if (v == NULLOBJECT) { st->L = outerL; lua_pushnil(L); return 1; }
-    bool ok = pushValue(st, v);
+    bool ok = false;
+    if (!guarded(st, [&] { ok = pushValue(st, v); })) { st->L = outerL; return unwindError(L); }
     release(st->tc, v);                     // a userdata keeps it, if it is one
     st->L = outerL;
     if (!ok) return lua_error(L);           // its message
@@ -3113,6 +3187,8 @@ static NOINLINE RexxObjectPtr runHandler(RexxExitContext *c, Proxy *px, RexxObje
     cmd.id = ++st->commands;
     cmd.prev = st->command;
     st->command = &cmd;
+    // off the list however it ends (a SIGNAL past the bridge: pcallAll throws)
+    struct Pop { State *st; Command *cmd; ~Pop() { if (st->command == cmd) st->command = cmd->prev; } } pop{st, &cmd};
     lua_pushcfunction(L, cmd_call);
     pushSelf(px);
     lua_pushlstring(L, c->StringData(command), c->StringLength(command));
@@ -3120,6 +3196,7 @@ static NOINLINE RexxObjectPtr runHandler(RexxExitContext *c, Proxy *px, RexxObje
     lua_pushlstring(L, c->StringData(address), c->StringLength(address));
     int n = pcallAll(st, 4);
     st->command = cmd.prev;
+    (void)pop;
     if (n < 0) {                            // raised; or Ctrl-C: the HALT after the command
         lua_settop(L, top);
         return tc->CheckCondition() ? NULLOBJECT : c->WholeNumber(1);
@@ -3427,12 +3504,24 @@ static NOINLINE int intoRexx(lua_State *L, int first, const RexxOp &op)
         release(tc, v);                             // the Array holds it
     }
     lua_settop(L, top);
-    RexxObjectPtr r = tc->CheckCondition() ? NULLOBJECT : op(tc, args);
+    RexxObjectPtr r = NULLOBJECT;
+    // a SIGNAL past the bridge (guarded): its Lua error, no more Rexx calls
+    if (!guarded(st, [&] { if (!tc->CheckCondition()) r = op(tc, args); })) {
+        lua_pushliteral(L, "a Rexx SIGNAL is unwinding through Lua");
+        return -1;
+    }
     release(tc, args);
     int n;
     if (tc->CheckCondition()) { pushRexxCondition(L, tc); n = -1; }
     else if (r == NULLOBJECT) n = 0;
-    else n = pushValue(st, r) ? 1 : -1;             // its message, if it fails
+    else {
+        bool ok = false;
+        if (!guarded(st, [&] { ok = pushValue(st, r); })) {
+            lua_pushliteral(L, "a Rexx SIGNAL is unwinding through Lua");
+            return -1;
+        }
+        n = ok ? 1 : -1;                            // its message, if it fails
+    }
     release(tc, r);                                 // a userdata keeps it, if it is one
     return n;
 }
@@ -3890,8 +3979,9 @@ static int rdWrite(lua_State *L, State *st, Redirect *r, int first, bool err)
         else s = luaL_checklstring(L, i, &len);
         lua_State *outerL = st->L;
         st->L = L;                          // a USING target may call back into Lua
-        if (err) r->io->WriteErrorBuffer(s, len); else r->io->WriteOutputBuffer(s, len);
+        bool ran = guarded(st, [&] { if (err) r->io->WriteErrorBuffer(s, len); else r->io->WriteOutputBuffer(s, len); });
         st->L = outerL;
+        if (!ran) return unwindError(L);
         if (st->tc->CheckCondition()) { pushRexxCondition(L, st->tc); return lua_error(L); }
     }
     return 0;
@@ -4083,8 +4173,8 @@ static NOINLINE bool rdFill(State *st, Redirect *r)
     size_t len = 0;
     lua_State *outerL = st->L;
     st->L = r->L;                           // a USING source may call back into Lua
-    r->io->ReadInput(&data, &len);
-    bool error = st->tc->CheckCondition();
+    bool ran = guarded(st, [&] { r->io->ReadInput(&data, &len); });
+    bool error = !ran || st->tc->CheckCondition();      // (an unwind: rdRead raises it)
     st->L = outerL;
     if (data == NULL || error) { r->eof = true; return false; }
     if (r->pos > 0) { r->buf.erase(0, r->pos); r->pos = 0; }
@@ -4205,6 +4295,7 @@ static int rdRead(lua_State *L, State *st, Redirect *r, int first)
             ok = *f == 'n' ? rdNumber(L, st, r) : *f == 'a' ? rdAll(L, st, r) : rdLine(L, st, r, *f == 'L');
         }
         n++;
+        if (st->unwind) return unwindError(L);
         if (st->tc->CheckCondition()) { pushRexxCondition(L, st->tc); return lua_error(L); }
         if (!ok) break;
     }
@@ -4526,12 +4617,16 @@ static RexxObjectPtr RexxEntry addressLua(RexxExitContext *c, RexxStringObject a
     int n = pcallQuiet(st, 0, f);
     // a HALT in a callback (its error, back here): Error 4.1, as ~eval.  Any
     // other Rexx error is a Lua error of the command: ERROR, with its text
-    RexxObjectPtr cond = n < 0 ? conditionOf(L, -1) : NULLOBJECT;
+    RexxObjectPtr cond = n < 0 && !st->unwind ? conditionOf(L, -1) : NULLOBJECT;
     bool halt = cond != NULLOBJECT && isHalt(tc, cond);
     if (redirected) {
         rdRestore(L, top + 1);
         lua_remove(L, top + 1);
         st->redirect = rd.prev;
+    }
+    if (st->unwind) {                       // a SIGNAL past the bridge (guarded): it goes on
+        lua_settop(L, top);
+        rethrowUnwind(st);
     }
     if (takeInterrupt(st) && !halt) {           // Ctrl-C: the HALT comes after the command
         tc->HaltThread();

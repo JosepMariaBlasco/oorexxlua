@@ -164,3 +164,93 @@ syntax:
   c = self~conditionOf(s, "EVAL", "1")
   self~assertEquals(98.900, c~code)
   self~assertEquals(1, c~additional~items)
+
+-- A SIGNAL past Lua (docs/design.md, *Errors*): Rexx calls Lua directly, Lua
+-- calls a Rexx method that does RAISE USER X ... RETURN, and the caller has
+-- SIGNAL ON USER X.  ooRexx unwinds to the caller by a C++ throw, which the
+-- bridge stops before Lua's frames and throws again once Lua has unwound.
+-- Without that, each unwind left Lua's call count up: by ~200 of them, "C
+-- stack overflow" (oorexx-bridges inbox/lua.md, 19/10/2026).
+::method test_signal_past_lua_many_times
+  o = .Raiser~new
+  f = .lua~eval("return function(o) return o:boom() end")
+  do i = 1 to 500
+    if \signalPast(f, o) then do
+      self~fail("not trapped, at" i)
+      leave
+    end
+  end
+  self~assertEquals(50, .lua~eval("local function d(n) if n == 0 then return 0 end return 1 + d(n - 1) end return d(50)"), -
+    "Lua is still sound")
+  self~assertEquals(42, .lua~eval("return 6 * 7"))
+
+::method test_signal_past_lua_with_its_condition
+  f = .lua~eval("return function(o) return o:boom() end")
+  signal on user x
+  f~call(.Raiser~new)
+  self~fail("no USER X")
+x:
+  c = condition("O")
+  self~assertSame("USER X", c~condition)
+  self~assertSame("d", c~description)
+  self~assertSame("a", c~additional)
+
+-- a pcall in Lua does not stop it: Lua goes on after its pcall, with an error
+-- that says so, and the SIGNAL happens when Lua returns to the bridge
+::method test_signal_past_lua_through_a_pcall
+  f = .lua~eval("return function(o) local ok, e = pcall(function() return o:boom() end)" -
+                "  unwindSeen = tostring(ok) .. ' ' .. tostring(e) return 'after' end")
+  signal on user x
+  r = f~call(.Raiser~new)
+  self~fail("no USER X; the function returned" r)
+x:
+  self~assertSame("false a Rexx SIGNAL is unwinding through Lua", .lua~global("unwindSeen"))
+  .lua~eval("unwindSeen = nil")
+
+::method test_signal_past_lua_from_a_string_method
+  f = .lua~eval("return function(o) return tostring(o) end")
+  signal on user x
+  f~call(.StringRaiser~new)
+  self~fail("no USER X")
+x:
+  self~assertSame("from string", condition("O")~description)
+
+::method test_signal_past_address_lua
+  .lua~eval("unwindRaiser = ...", .Raiser~new)
+  signal on user x
+  address lua 'return unwindRaiser:boom()'
+  self~fail("no USER X")
+x:
+  self~assertSame("d", condition("O")~description)
+  address lua 'unwindRaiser = nil; return 1 + 1'
+  self~assertEquals(2, result, "ADDRESS LUA still works")
+
+-- CALL ON: the trap runs, then the code goes on: nothing unwinds
+::method test_call_on_past_lua
+  f = .lua~eval("return function(o) return o:boom() end")
+  call on user x name trapped
+  self~trapped = .false
+  r = f~call(.Raiser~new)
+  self~assertSame(7, r, "the method's value")
+  self~assertTrue(self~trapped)
+  return
+trapped:
+  self~trapped = .true
+  return
+::attribute trapped
+
+::routine signalPast        -- true if f~call(o)'s USER X reached this trap
+  use arg f, o
+  signal on user x
+  f~call(o)
+  return .false
+x:
+  return .true
+
+::class Raiser
+::method boom
+  raise user x description "d" additional ("a") return 7
+
+::class StringRaiser
+::method string
+  raise user x description "from string" return "s"

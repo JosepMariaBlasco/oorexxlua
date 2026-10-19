@@ -199,6 +199,23 @@ syntax:
   self~assertSame("done", q[3])
   .lua~removeCommandEnvironment("UP")
 
+-- rule 1 for any condition (oorexx-bridges, topics/command-handlers.md): a
+-- Rexx method that the handler calls raises USER X, and the code that issued
+-- the command traps it, itself.  (Not yet from a Rexx Routine: ooRexx drops
+-- the condition at CallRoutine, oorexx-bridges oorexx-bugs/
+-- 2026-10-19-api-calls-drop-non-syntax-conditions.md.)
+::method test_a_user_condition_comes_back_as_itself
+  .lua~addCommandEnvironment("RAISES", .lua~eval("local o = ...; return function() return o:boom() end", .Boom2~new))
+  signal on user x
+  address raises 'x'
+  self~fail("no USER X")
+x:
+  c = condition("O")
+  self~assertSame("USER X", c~condition)
+  self~assertSame("d", c~description)
+  self~assertSame("a", c~additional)
+  .lua~removeCommandEnvironment("RAISES")
+
 ::method test_ctx_after_the_command
   .lua~addCommandEnvironment("KEEP", self~handler("kept = ctx"))
   address keep 'x'
@@ -367,6 +384,10 @@ syntax:
   return rc = i + 1
 failure:
   return rc = 30
+
+::class Boom2
+::method boom
+  raise user x description "d" additional ("a") return 7
 
 ::class Boom
 ::method boom

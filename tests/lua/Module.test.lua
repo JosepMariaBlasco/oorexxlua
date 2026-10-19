@@ -362,6 +362,32 @@ T.test("command environments written in Lua: command_environments, add, remove",
   r.close()
 end)
 
+T.test("a SIGNAL past Lua: Rexx -> Lua -> a Rexx method that raises, many times", function()
+  -- the Rexx routine traps what its call of a Lua function raised further in
+  -- (docs/design.md, *Errors*); Lua stays sound
+  local f = rexx.routine([[
+    use arg go, o
+    if \arg(1, "E") then return .Raiser~new        -- (the class is this routine's)
+    signal on user x
+    go~call(o)
+    return "not trapped"
+    x: return condition('O')~description
+    ::class Raiser public
+    ::method boom
+      raise user x description "d" return 7
+  ]])
+  local o = f()
+  local function go(obj) return obj:boom() end
+  for i = 1, 300 do
+    local r = f(go, o)
+    if r ~= "d" then T.eq(r, "d", "at " .. i) break end
+  end
+  T.eq(f(go, o), "d")
+  T.eq(rexx.eval("6 * 7"), 42, "Rexx and Lua still work")
+  local function depth(n) if n == 0 then return 0 end return 1 + depth(n - 1) end
+  T.eq(depth(100), 100)
+end)
+
 T.test("ADDRESS LUA ... WITH, in the host's state and in another instance", function()
   local before = print
   T.eq(rexx.routine([[

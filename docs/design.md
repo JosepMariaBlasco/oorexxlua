@@ -554,6 +554,34 @@ crash.
 `tests/rexx/Robustness.testGroup` holds a test for each of these, and for the
 other faults that a review of the bridge found.
 
+**A SIGNAL past Lua.** ooRexx unwinds to a `SIGNAL ON` trap by a C++ throw.
+When Rexx calls Lua directly (`.lua~eval`, `o~call`, a command handler,
+`ADDRESS LUA`...), Lua calls a Rexx **method**, and that method does
+`RAISE USER X ... RETURN` (or raises any condition the caller traps), the
+condition reaches the caller's trap past the bridge's native frames, as it
+would with no Lua in between, and the throw would cross Lua's C frames and
+its `lua_pcall`, which a C++ exception cannot unwind: their counters stay,
+and after about 200 of them every call into Lua fails with "C stack
+overflow" (on Windows, where Lua is C in a DLL, it is undefined). So every
+call of the bridge from Lua into Rexx code (`rexxCallBack`, the module's
+functions, `pairs`, `tostring`, the redirection of `WITH`, a handler's
+`ctx`) runs inside `guarded`, which catches the exception, keeps it
+(`std::current_exception`) and makes the Lua C function raise a Lua error,
+"a Rexx SIGNAL is unwinding through Lua"; while one is pending no more
+Rexx code runs from that state. When Lua returns to the bridge's
+`lua_pcall`, the exception is thrown again (`rethrowUnwind`), after what
+the bridge itself must undo (a handler's command, `WITH`'s stand-ins), and
+the unwinding goes on to the trap, with the condition itself. The state's
+entry (`Enter`) puts the Lua stack back when it is left that way. A
+`pcall` in Lua catches that Lua error, and the Lua code after it goes on
+until it returns to the bridge, where the SIGNAL happens all the same: Lua
+cannot stop a Rexx SIGNAL. `CALL ON` unwinds nothing (the trap runs and
+the code goes on). A Rexx **Routine** called from Lua does not get there:
+ooRexx drops the condition at `CallRoutine` (oorexx-bridges,
+`oorexx-bugs/2026-10-19-api-calls-drop-non-syntax-conditions.md`). Tests:
+`Errors.testGroup` (`test_signal_past_lua_*`, 500 in a row),
+`CommandHandlers.testGroup`, `Module.test.lua`.
+
 ## Operators
 
 Rexx operators on a `.LuaObject` are Lua's, metamethods included, as
