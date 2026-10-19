@@ -868,11 +868,13 @@ uppercase, as Rexx's (`address calc` and `address value 'calc'` find
 an empty name. Adding a name again replaces its handler. The handler is a
 Lua function, or a Lua value with `__call` (a `.LuaObject` from Rexx), of
 any `.LuaState`: that state runs it. Anything else, `.nil`/`nil` included,
-is an error (SYNTAX 98.900 from Rexx, a Lua error from Lua): **removing is
-`removeCommandEnvironment`**, never registering nothing. Removing a name
-that has no handler (never added, or removed already) is an error too:
-SYNTAX 93.900 from Rexx, a Lua error from Lua (the user, 19/10/2026: no
-silent no-op). Both return nothing.
+is an error: **removing is `removeCommandEnvironment`**, never registering
+nothing. Removing a name that has no handler (never added, or removed
+already) is an error too (the user, 19/10/2026: no silent no-op). Both
+return nothing. From Rexx these errors, and a name that is not a string,
+empty or `LUA`, are **SYNTAX 93.900**, an incorrect argument (the user,
+19/10/2026: 98.900 is for errors that come from Lua, as a handler whose
+state is closed); from Lua, Lua errors.
 
 **The handler** is called as `handler(command, ctx)`, on the Rexx thread
 that issued the command, holding its state's lock (*Threads*):

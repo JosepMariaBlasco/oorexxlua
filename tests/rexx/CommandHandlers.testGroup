@@ -254,6 +254,12 @@ syntax:
 
 ::method test_wrong_arguments
   f = self~handler("return 0")
+  -- incorrect arguments: SYNTAX 93.900 (98.900 is for errors from Lua)
+  self~assertSame("93.900", self~codeOf(.lua, "addCommandEnvironment", "X", .nil))
+  self~assertSame("93.900", self~codeOf(.lua, "addCommandEnvironment", "X", .lua~eval("return {}")))
+  self~assertSame("93.900", self~codeOf(.lua, "addCommandEnvironment", "Lua", f))
+  self~assertSame("93.900", self~codeOf(.lua, "addCommandEnvironment", "", f))
+  self~assertSame("93.900", self~codeOf(.lua, "removeCommandEnvironment", "LUA"))
   self~assertTrue(self~errorOf(.lua, "addCommandEnvironment", "X", .nil)~pos("removeCommandEnvironment") > 0, ".nil is not a way to remove")
   self~assertTrue(self~errorOf(.lua, "addCommandEnvironment", "X")~pos("handler must be") > 0)
   self~assertTrue(self~errorOf(.lua, "addCommandEnvironment", "X", "a string")~pos("handler must be") > 0)
@@ -311,6 +317,17 @@ syntax:
   end
   self~assertTrue(waitAll(done, threads), "every thread got the right RCs")
   do k = 0 to 40; .lua~removeCommandEnvironment("STRESS" || k); end
+
+-- codeOf(receiver, messageName [, args...]): the code of the SYNTAX condition
+-- the message raises
+::method codeOf
+  use strict arg receiver, name, ...
+  args = arg(3, "A")
+  signal on syntax
+  .message~new(receiver, name, "A", args)~send
+  return "no SYNTAX"
+syntax:
+  return condition("O")~code
 
 ::routine waitAll           -- the results of all the threads (a Queue's pull does not wait)
   use arg done, threads

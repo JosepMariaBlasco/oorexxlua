@@ -2731,19 +2731,26 @@ static bool hasIndex(RexxThreadContext *tc, RexxObjectPtr t, const std::string &
     return r != NULLOBJECT && tc->ObjectToLogical(r, &b) && b;
 }
 
+// An incorrect argument of a command environment method: SYNTAX 93.900
+// (98.900 is for errors that come from Lua; command-handlers.md, rule 4)
+static void argError(RexxThreadContext *tc, const std::string &m)
+{
+    tc->RaiseException1(Rexx_Error_Incorrect_method_user_defined, tc->NewString(m.data(), m.size()));
+}
+
 // The name of an environment, uppercase (what ADDRESS name gives); false
 // after raising an error
 static NOINLINE bool environmentName(RexxThreadContext *tc, RexxObjectPtr o, const char *what, std::string &name)
 {
     if (o == NULLOBJECT || !(tc->IsString(o) || tc->IsOfType(o, "STRING"))) {
-        raise(tc, std::string(what) + ": the name of the environment must be a string");
+        argError(tc, std::string(what) + ": the name of the environment must be a string");
         return false;
     }
     RexxStringObject s;
     if (!stringValue(tc, o, s)) return false;
     name = upperString(tc->StringData(s), tc->StringLength(s));
-    if (name.empty()) { raise(tc, std::string(what) + ": the name of the environment is empty"); return false; }
-    if (name == "LUA") { raise(tc, std::string(what) + ": LUA is the bridge's own environment (ADDRESS LUA)"); return false; }
+    if (name.empty()) { argError(tc, std::string(what) + ": the name of the environment is empty"); return false; }
+    if (name == "LUA") { argError(tc, std::string(what) + ": LUA is the bridge's own environment (ADDRESS LUA)"); return false; }
     return true;
 }
 
@@ -2770,8 +2777,8 @@ static NOINLINE bool addEnvironment(RexxThreadContext *tc, RexxObjectPtr nameObj
     if (!environmentName(tc, nameObj, what, name)) return false;
     Proxy *px = handler == NULLOBJECT || handler == tc->Nil() ? NULL : proxyOf(tc, handler);
     if (px == NULL) {
-        raise(tc, std::string(what) + ": the handler must be a Lua function, or a Lua value with __call"
-              + (handler == NULLOBJECT || handler == tc->Nil() ? " (to remove an environment: removeCommandEnvironment)" : ""));
+        argError(tc, std::string(what) + ": the handler must be a Lua function, or a Lua value with __call"
+                 + (handler == NULLOBJECT || handler == tc->Nil() ? " (to remove an environment: removeCommandEnvironment)" : ""));
         return false;
     }
     State *st = px->st;
@@ -2786,7 +2793,7 @@ static NOINLINE bool addEnvironment(RexxThreadContext *tc, RexxObjectPtr nameObj
         callable = isCallable(L, -1);
         lua_pop(L, 1);
     }
-    if (!callable) { raise(tc, std::string(what) + ": the handler must be a Lua function, or a Lua value with __call"); return false; }
+    if (!callable) { argError(tc, std::string(what) + ": the handler must be a Lua function, or a Lua value with __call"); return false; }
     std::lock_guard<std::mutex> guard(commandsLock);
     RexxObjectPtr t = commandsOf(tc, true);
     if (t == NULLOBJECT) return false;
@@ -2827,8 +2834,7 @@ RexxMethod1(RexxObjectPtr, LuaState_RemoveCommandEnvironment, OPTIONAL_RexxObjec
     drain(context->threadContext);
     bool missing;
     if (removeEnvironment(context->threadContext, name, "removeCommandEnvironment", &missing) && missing) {
-        std::string m = std::string("removeCommandEnvironment: ") + context->CString(name) + " has no handler";
-        context->RaiseException1(Rexx_Error_Incorrect_method_user_defined, context->String(m.c_str()));
+        argError(context->threadContext, std::string("removeCommandEnvironment: ") + context->CString(name) + " has no handler");
     }
     return NULLOBJECT;
 }
