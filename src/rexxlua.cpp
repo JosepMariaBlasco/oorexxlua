@@ -34,6 +34,10 @@ extern "C" {
 #ifdef _WIN32
 #include <windows.h>
 #endif
+#ifdef __APPLE__
+#include <xlocale.h>                        // strtod_l
+#endif
+#include <clocale>
 #include <atomic>
 #include <functional>
 #include <map>
@@ -268,6 +272,20 @@ static NumberKind numberKind(const char *s, size_t n)
 
 static std::string formatFloat(double d);
 
+// strtod in the "C" locale, whatever LC_NUMERIC the process has: a Lua
+// program may call os.setlocale, and then strtod would stop at the point of
+// "0.25" (oorexx-bridges, inbox/lua.md, 19/10/2026)
+static double cStrtod(const char *s)
+{
+#ifdef _WIN32
+    static _locale_t c = _create_locale(LC_NUMERIC, "C");
+    return _strtod_l(s, NULL, c);
+#else
+    static locale_t c = newlocale(LC_NUMERIC_MASK, "C", (locale_t)0);
+    return strtod_l(s, NULL, c);
+#endif
+}
+
 // Push a Rexx string by that rule, which loses nothing: an integer that does
 // not fit in 64 bits stays a string (a float would lose digits silently), and
 // so does a decimal number that the float would not write back the same
@@ -284,7 +302,7 @@ static NOINLINE void pushRexxString(lua_State *L, const char *d, size_t n)
         break;
     }
     case FLOAT_NUMBER: {
-        double v = strtod(s.c_str(), NULL);
+        double v = cStrtod(s.c_str());
         if (formatFloat(v) == s) { lua_pushnumber(L, (lua_Number)v); return; }
         break;
     }
@@ -310,17 +328,22 @@ static NOINLINE std::string formatFloat(double d)
     if (std::isinf(d)) return d > 0 ? "+infinity" : "-infinity";
     std::string sign = std::signbit(d) ? "-" : "";
     if (d == 0) return sign + "0.0";
-    // The shortest digits: %.*e with 1 to 17 significant digits
-    char buf[40];
+    // The shortest digits: %.*e with 1 to 17 significant digits.  It writes
+    // "D<point>DDDe+XX" with the locale's decimal point (a comma, or several
+    // bytes): only the ASCII digits are taken, and the text that is read back
+    // is rebuilt with a "." for cStrtod
+    char buf[64];
+    std::string digits;
+    int x = 0;                              // d = D.DDD x 10^x
     for (int prec = 1; prec <= 17; prec++) {
         snprintf(buf, sizeof buf, "%.*e", prec - 1, fabs(d));
-        if (strtod(buf, NULL) == fabs(d)) break;
+        char *e = strchr(buf, 'e');
+        x = atoi(e + 1);
+        digits.clear();
+        for (char *p = buf; p < e; p++) if (*p >= '0' && *p <= '9') digits += *p;
+        std::string c = digits.substr(0, 1) + "." + digits.substr(1) + "e" + std::to_string(x);
+        if (cStrtod(c.c_str()) == fabs(d)) break;
     }
-    // buf is "D.DDDDe+XX": the digits, without the point, and the exponent
-    char *e = strchr(buf, 'e');
-    int x = atoi(e + 1);                    // d = D.DDD x 10^x
-    std::string digits;
-    for (char *p = buf; p < e; p++) if (*p != '.') digits += *p;
     while (digits.size() > 1 && digits.back() == '0') digits.pop_back();
     int n = (int)digits.size();
     int places = n - 1 - x;                 // after the point, leading zeros included
@@ -2607,7 +2630,12 @@ RexxMethod1(RexxObjectPtr, LuaObj_HashCode, CSELF, self)
         }
         else i = lua_tointeger(L, -1);
         if (isInt) snprintf(buf, sizeof buf, "%lld", (long long)i);
-        else snprintf(buf, sizeof buf, "%a", (double)lua_tonumber(L, -1));
+        else {                      // the double's bits: no locale in them (%a has its point)
+            double d = (double)lua_tonumber(L, -1);
+            uint64_t bits;
+            memcpy(&bits, &d, sizeof bits);
+            snprintf(buf, sizeof buf, "f%016llx", (unsigned long long)bits);
+        }
         break;
     }
     case LUA_TSTRING: {

@@ -240,6 +240,12 @@ Floats are written by the rule the ooRexx bridges share (oorexx-bridges,
   keeps its sign), so that it comes back as a float. Integers never have
   one. In Rexx only `==` sees the difference (`1.0 = 1`), and Rexx's
   arithmetic keeps it (`1.0 + 1` is `2.0`).
+- **The locale does not matter**: the bridge reads and writes these numbers
+  in the `"C"` locale (`strtod_l`, `_strtod_l` on Windows; only the ASCII
+  digits of `%e`), so a Lua program that calls `os.setlocale` (or native
+  code that calls `setlocale`, as `BSF.CLS` does) does not turn `0.25` into
+  `0.2,5` (oorexx-bridges, 19/10/2026). Lua's own `tostring` then writes
+  `0,25`: that is Lua's.
 - **NaN and the infinities** are `nan`, `+infinity` and `-infinity`,
   ooRexx's own spelling: what it writes for a `double` an extension hands
   it, and the only spelling its `ObjectToDouble` reads. They are not Rexx

@@ -125,3 +125,27 @@ return testResult
   return .nil
 syntax:
   return condition("O")
+
+-- The process's LC_NUMERIC does not reach the conversions: a Lua program may
+-- call os.setlocale (oorexx-bridges, inbox/lua.md, 19/10/2026). Skipped where
+-- no locale with a decimal comma is installed.
+::method test_a_decimal_comma_locale
+  loc = .lua~eval("for _, l in ipairs{'es_ES.UTF-8', 'es_ES.utf8', 'de_DE.UTF-8', 'fr_FR.UTF-8', 'es-ES', 'Spanish', 'German'} do" -
+    " if os.setlocale(l, 'numeric') and string.format('%.1f', 0.5) == '0,5' then return l end end" -
+    " os.setlocale('C', 'numeric') return nil")
+  if loc == .nil then return                    -- none installed: nothing to test
+  b = .lua~box("float", 0.25)
+  signal on syntax name restore
+  kind = .lua~eval("function(x) return math.type(x) or type(x) end")
+  do v over "0.25", "3.14", "0.30000000000000004", "0.0000001", "1.5E-35", "-0.0"
+    self~assertSame(v, .lua~eval("return" v~changeStr("E", "e")), loc": Lua" v "to Rexx")
+    self~assertSame("float", kind~call(v), loc": Rexx" v "to Lua")
+  end
+  self~assertTrue(.lua~box("float", "2.5")~luaType == "number", loc": box")
+  h = b~hashCode
+  .lua~eval("os.setlocale('C', 'numeric')")
+  self~assertSame(h, b~hashCode, "a float's hashCode does not depend on the locale")
+  return
+restore:
+  .lua~eval("os.setlocale('C', 'numeric')")
+  raise propagate
