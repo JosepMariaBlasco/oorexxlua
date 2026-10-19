@@ -1,0 +1,359 @@
+#!/usr/bin/env rexx
+/*----------------------------------------------------------------------------*/
+/* CommandHandlers.testGroup: ADDRESS environments written in Lua             */
+/* (docs/design.md, *Command environments*; oorexx-bridges,                   */
+/* topics/command-handlers.md): .lua~addCommandEnvironment(name, handler),    */
+/* ~removeCommandEnvironment(name); handler(command, ctx); RC its value,      */
+/* whatever its sign; a Lua error is SYNTAX 98.900; output without WITH goes  */
+/* to .output and .error; a removed name answers FAILURE RC 30.  The test of  */
+/* threads registering names while others address them needs ooRexx r13275   */
+/* (#2111, #2112): it runs only with ORXLUA_OOREXX_FIXES=1.                   */
+/*                                                                            */
+/* Licensed under the Apache License, Version 2.0.                            */
+/*----------------------------------------------------------------------------*/
+  parse source . . fileSpec
+
+  group = .TestGroup~new(fileSpec)
+  group~add(.CommandHandlers.testGroup)
+
+  if group~isAutomatedTest then return group
+
+  testResult = group~suite~execute~~print
+
+return testResult
+-- End of entry point.
+
+::requires 'LuaTestCase.cls'
+
+::class "CommandHandlers.testGroup" subclass LuaTestCase public
+
+-- handler(src): a Lua function from its source, in .lua
+::method handler
+  use strict arg src
+  return .lua~eval("return function(command, ctx)" src "end")
+
+::method test_rc_is_the_value_whatever_its_sign
+  .lua~addCommandEnvironment("RCT", self~handler("return load('return ' .. command)()"))
+  signal on error name wrong
+  signal on failure name wrong
+  address rct
+  '0';      self~assertEquals(0, rc)
+  '5';      self~assertEquals(5, rc, "positive: just RC")
+  '-3';     self~assertEquals(-3, rc, "negative: just RC")
+  'nil';    self~assertEquals(0, rc, "nil: 0")
+  '"abc"';  self~assertSame("abc", rc)
+  '2^10';   self~assertSame("1024.0", rc, "a float, by the conversion rules")
+  .lua~addCommandEnvironment("RCT", self~handler("local x = 1"))
+  address rct 'anything'
+  self~assertEquals(0, rc, "no value: 0")
+  .lua~removeCommandEnvironment("RCT")
+  return
+wrong:
+  self~fail("the RC's sign raised" condition("C"))
+
+::method test_command_is_a_lua_string
+  .lua~addCommandEnvironment("ECHO", self~handler("echoed = {type(command), command, ctx.environment}"))
+  address echo 1 + 1
+  self~assertSame("string", .lua~eval("return echoed[1]"), "a string, even when it looks like a number")
+  self~assertSame("2", .lua~eval("return echoed[2]"), "the command as Rexx evaluated it")
+  self~assertSame("ECHO", .lua~eval("return echoed[3]"))
+  address echo 'a' || '00'x || 'b'
+  self~assertEquals(3, .lua~eval("return #echoed[2]"), "a NUL is kept")
+  address value 'echo'
+  ''
+  self~assertSame("echo", .lua~eval("return echoed[3]"), "names are found in any case")
+  .lua~removeCommandEnvironment("ECHO")
+  .lua~eval("echoed = nil")
+
+::method test_names_any_case_and_replacing
+  .lua~addCommandEnvironment("calc", self~handler("return 1"))
+  address calc 'x'
+  self~assertEquals(1, rc)
+  .lua~addCommandEnvironment("CALC", self~handler("return 2"))
+  address calc 'x'
+  self~assertEquals(2, rc, "adding a name again replaces its handler")
+  .lua~removeCommandEnvironment("Calc")
+
+::method test_variables
+  .lua~addCommandEnvironment("VARS", self~handler( -
+    "got = {ctx:get_var('x'), ctx:get_var('a.i'), ctx:get_var('A.2'), ctx:get_var('nothing') == nil}" -
+    "ctx:set_var('y', 42); ctx:set_var('a.i', 'set'); ctx:set_var('s.', 'all')" -
+    "ctx:set_var('t', {1, 2}); ctx:set_var('b', true); ctx:drop_var('gone')"))
+  x = "3.10"; i = 2; a.2 = "two"; gone = 1
+  address vars 'x'
+  self~assertSame("3.10", .lua~eval("return got[1]"), "by the conversion rules")
+  self~assertSame("two", .lua~eval("return got[2]"), "a compound name: its tail resolved in the caller")
+  self~assertSame("two", .lua~eval("return got[3]"))
+  self~assertTrue(.lua~eval("return got[4]"), "an unset variable: nil")
+  self~assertEquals(42, y)
+  self~assertSame("set", a.2)
+  self~assertSame("all", s.17, "a stem's default value")
+  self~assertSame("LUAOBJECT", t~class~id)
+  self~assertEquals(2, t[2])
+  self~assertTrue(b~isA(.Boolean))
+  self~assertFalse(var("GONE"))
+  .lua~removeCommandEnvironment("VARS")
+  .lua~eval("got = nil")
+
+::method test_raise_error_and_failure
+  .lua~addCommandEnvironment("RAISE", self~handler( -
+    "local kind, rc = command:match('(%a+) (%S+)')" -
+    "rc = tonumber(rc)" -
+    "if kind == 'error' then ctx:raise_error(rc) elseif kind == 'failure' then ctx:raise_failure(rc)" -
+    "elseif kind == 'both' then ctx:raise_error(rc); return 7 end"))
+  address raise
+  signal on error
+  'error 3'
+  self~fail("no ERROR")
+error:
+  self~assertSame("ERROR", condition("C"))
+  self~assertEquals(3, rc, "rc of raise_error, the handler giving none")
+  self~assertSame("error 3", condition("D"))
+  signal on failure
+  'failure -4'
+  self~fail("no FAILURE")
+failure:
+  self~assertSame("FAILURE", condition("C"))
+  self~assertEquals(-4, rc)
+  signal on error name error2
+  'both 1'
+  self~fail("no ERROR")
+error2:
+  self~assertEquals(7, rc, "the handler's value wins")
+  signal off error
+  'error 9'                                 -- not trapped: just RC
+  self~assertEquals(9, rc)
+  .lua~removeCommandEnvironment("RAISE")
+
+::method test_lua_error_is_syntax_98_900
+  .lua~addCommandEnvironment("BAD", self~handler( -
+    "if command == 'table' then error({code = 42}) end error('boom: ' .. command)"))
+  signal on syntax
+  address bad 'x'
+  self~fail("no SYNTAX")
+syntax:
+  c = condition("O")
+  self~assertSame("98.900", c~code)
+  self~assertTrue(c~additional[1]~pos("Lua error:") = 1, c~additional[1])
+  self~assertTrue(c~additional[1]~pos("boom: x") > 0)
+  self~assertTrue(c~additional[2]~pos("boom: x") > 0, "[2] the error value")
+  self~assertTrue(c~additional[3]~pos("stack traceback:") = 1, "[3] Lua's traceback")
+  signal on syntax name syntax2
+  address bad 'table'
+  self~fail("no SYNTAX")
+syntax2:
+  c = condition("O")
+  self~assertSame("98.900", c~code)
+  self~assertEquals(42, c~additional[2]~code, "a value that is not a string: a .LuaObject")
+  .lua~removeCommandEnvironment("BAD")
+
+::method test_rexx_error_through_lua_is_itself
+  boom = .Boom~new
+  .lua~addCommandEnvironment("THROUGH", .lua~eval("local o = ...; return function() return o:boom() end", boom))
+  signal on syntax
+  address through 'x'
+  self~fail("no SYNTAX")
+syntax:
+  self~assertSame("41.1", condition("O")~code, "the Rexx error, itself")
+  .lua~removeCommandEnvironment("THROUGH")
+
+::method test_output_without_with_goes_to_dot_output
+  .lua~addCommandEnvironment("SAY", self~handler("ctx:output('out: ' .. command); ctx:error('err: ' .. command)" -
+    "; ctx:output(42); return ctx:is_redirected('output')"))
+  lines = .array~new
+  .output~destination(.Collect~new(lines, "o"))
+  .error~destination(.Collect~new(lines, "e"))
+  address say 'hello'
+  .output~destination
+  .error~destination
+  self~assertEquals(.false, rc, "not redirected")
+  self~assertEquals(3, lines~items)
+  self~assertSame("o out: hello", lines[1])
+  self~assertSame("e err: hello", lines[2])
+  self~assertSame("o 42", lines[3])
+  .lua~removeCommandEnvironment("SAY")
+
+::method test_with
+  .lua~addCommandEnvironment("UP", self~handler( -
+    "local first = ctx:line_in()" -
+    "ctx:output('first ' .. tostring(first))" -
+    "for _, l in ipairs(ctx:lines()) do ctx:output(l:upper()) end" -
+    "ctx:output(tostring(ctx:line_in()))" -
+    "ctx:error('done')" -
+    "return (ctx:is_redirected('input') and 'i' or '-') .. (ctx:is_redirected('output') and 'o' or '-')" -
+    "  .. (ctx:is_redirected('error') and 'e' or '-') .. (ctx:is_redirected('same') and 's' or '-')"))
+  in.0 = 3; in.1 = "a"; in.2 = "b"; in.3 = "c"
+  address up 'x' with input stem in. output stem out. error stem err.
+  self~assertSame("ioe-", rc)
+  self~assertEquals(4, out.0)
+  self~assertSame("first a", out.1)
+  self~assertSame("B", out.2)
+  self~assertSame("C", out.3)
+  self~assertSame("nil", out.4, "at the end: nil")
+  self~assertEquals(1, err.0)
+  self~assertSame("done", err.1)
+  q = .array~new
+  address up 'x' with output using (q) error using (q)
+  self~assertSame("-oes", rc)
+  self~assertSame("first nil", q[1], "no input: nil")
+  self~assertSame("done", q[3])
+  .lua~removeCommandEnvironment("UP")
+
+::method test_ctx_after_the_command
+  .lua~addCommandEnvironment("KEEP", self~handler("kept = ctx"))
+  address keep 'x'
+  self~assertSame("this command context belongs to a command that has ended", -
+    .lua~eval("local ok, e = pcall(kept.get_var, kept, 'X'); return e"))
+  self~assertSame("KEEP", .lua~eval("return kept.environment"))
+  self~assertTrue(.lua~eval("return pcall(kept.get_var, {}, 'X') == false"), "not a ctx")
+  .lua~removeCommandEnvironment("KEEP")
+  .lua~eval("kept = nil")
+
+::method test_nested_commands
+  .lua~addCommandEnvironment("INNER", self~handler("ctx:set_var('INNERRAN', command); return 3"))
+  .lua~addCommandEnvironment("OUTER", self~handler( -
+    "local rexx = require 'oorexx'" -
+    "local rc = rexx.routine(""address inner 'from outer'; return rc"")()" -
+    "ctx:set_var('OUTERRAN', rc); return rc + 1"))
+  address outer 'x'
+  self~assertEquals(4, rc)
+  self~assertEquals(3, outerRan, "the outer ctx is still good after the inner command")
+  .lua~removeCommandEnvironment("INNER")
+  .lua~removeCommandEnvironment("OUTER")
+
+::method test_remove_answers_failure_rc_30
+  .lua~addCommandEnvironment("GONE", self~handler("return 1"))
+  address gone 'x'
+  self~assertEquals(1, rc)
+  .lua~removeCommandEnvironment("gone")
+  signal on failure
+  address gone 'y'
+  self~fail("no FAILURE")
+failure:
+  self~assertEquals(30, rc, "as an unknown environment")
+  self~assertSame("y", condition("D"))
+  signal off failure
+  .lua~addCommandEnvironment("GONE", self~handler("return 2"))
+  address gone 'z'
+  self~assertEquals(2, rc, "added again")
+  .lua~removeCommandEnvironment("GONE")
+  .lua~removeCommandEnvironment("NEVERTHERE")         -- nothing to remove: nothing
+
+::method test_wrong_arguments
+  f = self~handler("return 0")
+  self~assertTrue(self~errorOf(.lua, "addCommandEnvironment", "X", .nil)~pos("removeCommandEnvironment") > 0, ".nil is not a way to remove")
+  self~assertTrue(self~errorOf(.lua, "addCommandEnvironment", "X")~pos("handler must be") > 0)
+  self~assertTrue(self~errorOf(.lua, "addCommandEnvironment", "X", "a string")~pos("handler must be") > 0)
+  self~assertTrue(self~errorOf(.lua, "addCommandEnvironment", "X", .lua~eval("return {}"))~pos("handler must be") > 0, "a table without __call")
+  self~assertTrue(self~errorOf(.lua, "addCommandEnvironment", "lua", f)~pos("own environment") > 0)
+  self~assertTrue(self~errorOf(.lua, "addCommandEnvironment", "", f)~pos("empty") > 0)
+  self~assertTrue(self~errorOf(.lua, "addCommandEnvironment", .array~new, f)~pos("must be a string") > 0)
+  self~assertTrue(self~errorOf(.lua, "removeCommandEnvironment", "LUA")~pos("own environment") > 0)
+  address lua 'return 6 * 7'
+  self~assertEquals(42, result, "ADDRESS LUA untouched")
+
+::method test_callable_table
+  .lua~addCommandEnvironment("CALLT", .lua~eval("return setmetatable({}, {__call = function(self, command) return #command end})"))
+  address callt 'abcd'
+  self~assertEquals(4, rc)
+  .lua~removeCommandEnvironment("CALLT")
+
+::method test_handler_runs_in_its_own_state
+  s = .LuaState~new
+  .lua~addCommandEnvironment("OTHER", s~eval("return function(command) where = command; return 0 end"))
+  address other 'here'
+  self~assertSame("here", s~global("where"))
+  self~assertSame(.nil, .lua~global("where"))
+  s~close
+  signal on syntax
+  address other 'again'
+  self~fail("no SYNTAX")
+syntax:
+  self~assertSame("98.900", condition("O")~code)
+  self~assertTrue(condition("O")~message~pos("closed") > 0, condition("O")~message)
+  .lua~removeCommandEnvironment("OTHER")
+
+::method test_another_rexx_thread
+  .lua~addCommandEnvironment("TWICE", self~handler("return tonumber(command) * 2"))
+  done = .queue~new
+  do t = 1 to 4
+    .Addresser~new~run("TWICE", 500, done)
+  end
+  self~assertTrue(waitAll(done, 4), "every thread got the right RCs")
+  .lua~removeCommandEnvironment("TWICE")
+
+-- Names registered on one thread while others address names (#2111, #2112):
+-- crashes, hangs or wrong results on ooRexx r13271, none on r13275
+::method test_registering_while_threads_address
+  if value("ORXLUA_OOREXX_FIXES", , "ENVIRONMENT") \== 1 then return   -- needs r13275
+  h = self~handler("return tonumber(command) + 1")
+  .lua~addCommandEnvironment("STRESS0", h)
+  done = .queue~new
+  threads = 8
+  do t = 1 to threads
+    .Addresser~new~stress(threads, done)
+  end
+  do k = 1 to 40
+    .lua~addCommandEnvironment("STRESS" || k, h)
+    call SysSleep 0.002
+  end
+  self~assertTrue(waitAll(done, threads), "every thread got the right RCs")
+  do k = 0 to 40; .lua~removeCommandEnvironment("STRESS" || k); end
+
+::routine waitAll           -- the results of all the threads (a Queue's pull does not wait)
+  use arg done, threads
+  do while done~items < threads; call SysSleep 0.01; end
+  ok = 1
+  do t = 1 to threads; ok = ok & done~pull; end
+  return ok
+
+::class Addresser
+::method run
+  use arg name, n, done
+  reply
+  ok = 1
+  address value name
+  do i = 1 to n
+    '' i
+    if rc <> 2 * i then ok = 0
+  end
+  done~queue(ok)
+-- address names STRESS0..STRESS40 as they appear: a name not there yet is
+-- FAILURE RC 30, a name there gives the command plus one
+::method stress
+  use arg threads, done
+  reply
+  ok = 1
+  do i = 1 to 400
+    if \self~one("STRESS" || random(0, 40), i) then ok = 0
+  end
+  done~queue(ok)
+-- (the trap in a method of its own: a label inside a DO is Error 47.2)
+::method one
+  use arg name, i
+  trace off                                 -- (no trace of each FAILURE)
+  signal on failure
+  address value name
+  '' i
+  return rc = i + 1
+failure:
+  return rc = 30
+
+::class Boom
+::method boom
+  return "a" + 1
+
+-- a destination for .output / .error: each line, with a prefix, into lines
+::class Collect
+::method init
+  expose lines prefix
+  use arg lines, prefix
+::method lineout
+  expose lines prefix
+  use arg line
+  lines~append(prefix line)
+  return 0
+::method say
+  forward message("LINEOUT")
+::method charout
+  return 0

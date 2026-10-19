@@ -23,6 +23,12 @@
  *   ADDRESS LUA                commands are Lua code, run in .lua: RC 0 and
  *                              the results in RESULT, or ERROR / FAILURE with
  *                              Lua's message as condition('A')
+ *     s~addCommandEnvironment(name, handler)
+ *                              ADDRESS name runs handler(command, ctx), a Lua
+ *                              function (a .LuaObject), in its state: RC its
+ *                              value; again: replaced
+ *     s~removeCommandEnvironment(name)
+ *                              ADDRESS name: FAILURE RC 30 from now on
  *
  *   .LuaObject                 a Lua value by reference, in one .LuaState
  *     o~name(args...)          field (any case), called if a function, as
@@ -79,6 +85,8 @@
 ::method table unguarded        external "LIBRARY rexxlua LuaState_Table"
 ::method predicate unguarded    external "LIBRARY rexxlua LuaState_Predicate"
 ::method box unguarded          external "LIBRARY rexxlua LuaState_Box"
+::method addCommandEnvironment unguarded    external "LIBRARY rexxlua LuaState_AddCommandEnvironment"
+::method removeCommandEnvironment unguarded external "LIBRARY rexxlua LuaState_RemoveCommandEnvironment"
 ::method true unguarded         ; return .Boolean~true     -- (aliases: Lua's true and false)
 ::method false unguarded        ; return .Boolean~false
 ::method "LUA.STATS" unguarded  external "LIBRARY rexxlua LuaState_Stats"   -- for the tests

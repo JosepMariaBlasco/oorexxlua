@@ -15,7 +15,9 @@
 # TIMEOUT= seconds per group (default 300); logs in OUT (default
 # /tmp/orxlua-tests).  The tests of ADDRESS LUA ... WITH run only with
 # ORXLUA_OOREXX_FIXES=1, ooRexx trunk r13275 or later (#2111, #2112)
-# (scripts/setup-oorexx.sh): AddressWith.testGroup, and one in Module.test.lua.
+# (scripts/setup-oorexx.sh): AddressWith.testGroup, and one in Module.test.lua;
+# so does, in CommandHandlers.testGroup, the test of names registered while
+# other threads address them.
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 WORK=${ORXLUA_WORK:-$(cd "$HERE/../.." && pwd)}

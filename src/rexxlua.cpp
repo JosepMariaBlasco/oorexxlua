@@ -113,6 +113,8 @@ struct State {
                                             // any Rexx code: let go at the next entry
     struct Redirect *redirect = NULL;       // ADDRESS LUA ... WITH in progress, innermost first
     lua_Integer redirects = 0;              // the last one's number
+    struct Command *command = NULL;         // commands of Lua handlers in progress, innermost first
+    lua_Integer commands = 0;               // the last one's number
     // Ctrl-C (docs/design.md, *Ctrl-C*); read by the signal handler
     std::atomic<int> running{0};            // lua_pcalls of the bridge's in progress (nested too)
     std::atomic<bool> interrupted{false};   // a signal stopped its Lua code: until the outer
@@ -2684,6 +2686,455 @@ RexxMethod1(RexxObjectPtr, LuaObj_Type, CSELF, self)
 
 extern RexxPackageEntry rexxlua_package_entry;
 
+/* ------------------------------------------------------------------------ */
+/* Command environments written in Lua (docs/design.md, *Command environments*) */
+/* ------------------------------------------------------------------------ */
+
+/*
+ * ADDRESS name runs a Lua callable, handler(command, ctx), in its own state.
+ * One native handler, luaCommand, serves every name.  The names of an
+ * instance are in its .local, LUA.COMMANDS: a StringTable, name (uppercase)
+ * -> the handler (a .LuaObject), or .nil once removed.  A name in it has
+ * been given to ooRexx (AddCommandEnvironment, or REDIRECTING_ENVIRONMENTS
+ * when the module made the instance) and is never given again: a name
+ * removed stays there, and its commands answer FAILURE RC 30, as an
+ * unknown environment does (ooRexx has no API that removes one).
+ * oorexx-bridges, topics/command-handlers.md (decided 19/10/2026).
+ */
+static std::mutex commandsLock;             // a name's test and its AddCommandEnvironment, together
+static const char *COMMANDS = "LUA.COMMANDS";
+
+static std::string upperString(const char *s, size_t n)
+{
+    std::string r(s, n);
+    for (char &ch : r) ch = (char)toupper((unsigned char)ch);
+    return r;
+}
+
+// The names of the instance of tc (made if make), or NULLOBJECT
+static RexxObjectPtr commandsOf(RexxThreadContext *tc, bool make)
+{
+    RexxDirectoryObject local = tc->GetLocalEnvironment();
+    if (local == NULLOBJECT) return NULLOBJECT;
+    RexxObjectPtr t = tc->DirectoryAt(local, COMMANDS);
+    if ((t == NULLOBJECT || t == tc->Nil()) && make) {
+        t = tc->SendMessage0(tc->FindClass("STRINGTABLE"), "NEW");
+        if (t != NULLOBJECT) tc->DirectoryPut(local, t, COMMANDS);
+    }
+    return t == tc->Nil() ? NULLOBJECT : t;
+}
+
+static bool hasIndex(RexxThreadContext *tc, RexxObjectPtr t, const std::string &name)
+{
+    RexxObjectPtr r = tc->SendMessage1(t, "HASINDEX", tc->String(name.c_str()));
+    logical_t b = 0;
+    return r != NULLOBJECT && tc->ObjectToLogical(r, &b) && b;
+}
+
+// The name of an environment, uppercase (what ADDRESS name gives); false
+// after raising an error
+static NOINLINE bool environmentName(RexxThreadContext *tc, RexxObjectPtr o, const char *what, std::string &name)
+{
+    if (o == NULLOBJECT || !(tc->IsString(o) || tc->IsOfType(o, "STRING"))) {
+        raise(tc, std::string(what) + ": the name of the environment must be a string");
+        return false;
+    }
+    RexxStringObject s;
+    if (!stringValue(tc, o, s)) return false;
+    name = upperString(tc->StringData(s), tc->StringLength(s));
+    if (name.empty()) { raise(tc, std::string(what) + ": the name of the environment is empty"); return false; }
+    if (name == "LUA") { raise(tc, std::string(what) + ": LUA is the bridge's own environment (ADDRESS LUA)"); return false; }
+    return true;
+}
+
+static RexxObjectPtr RexxEntry luaCommand(RexxExitContext *c, RexxStringObject address,
+                                           RexxStringObject command, RexxIORedirectorContext *io);
+
+// Is the value at idx something Lua can call: a function, or a value with __call?
+static bool isCallable(lua_State *L, int idx)
+{
+    if (lua_type(L, idx) == LUA_TFUNCTION) return true;
+    if (luaL_getmetafield(L, idx, "__call") == LUA_TNIL) return false;
+    lua_pop(L, 1);
+    return true;
+}
+
+/* addCommandEnvironment(name, handler): name is served by handler, a
+ * .LuaObject of a callable, from now on; a name already there gets the new
+ * handler.  False after raising an error (no handler, .nil included, is
+ * one: removing is removeEnvironment).                                     */
+static NOINLINE bool addEnvironment(RexxThreadContext *tc, RexxObjectPtr nameObj, RexxObjectPtr handler,
+                                    const char *what)
+{
+    std::string name;
+    if (!environmentName(tc, nameObj, what, name)) return false;
+    Proxy *px = handler == NULLOBJECT || handler == tc->Nil() ? NULL : proxyOf(tc, handler);
+    if (px == NULL) {
+        raise(tc, std::string(what) + ": the handler must be a Lua function, or a Lua value with __call"
+              + (handler == NULLOBJECT || handler == tc->Nil() ? " (to remove an environment: removeCommandEnvironment)" : ""));
+        return false;
+    }
+    State *st = px->st;
+    if (foreignThread(st)) { raise(tc, std::string(what) + ": " + noRexx(st)); return false; }
+    if (st->closed) { raise(tc, std::string(what) + ": the handler's LuaState is closed"); return false; }
+    bool callable;
+    {
+        Enter e(st, tc, NULLOBJECT);
+        lua_State *L = st->L;
+        if (!lua_checkstack(L, 3)) { raise(tc, "Lua error: Lua stack overflow"); return false; }
+        pushSelf(px);
+        callable = isCallable(L, -1);
+        lua_pop(L, 1);
+    }
+    if (!callable) { raise(tc, std::string(what) + ": the handler must be a Lua function, or a Lua value with __call"); return false; }
+    std::lock_guard<std::mutex> guard(commandsLock);
+    RexxObjectPtr t = commandsOf(tc, true);
+    if (t == NULLOBJECT) return false;
+    if (!hasIndex(tc, t, name))
+        tc->AddCommandEnvironment(name.c_str(), (REXXPFN)luaCommand, REDIRECTING_COMMAND_ENVIRONMENT);
+    tc->SendMessage2(t, "PUT", handler, tc->String(name.c_str()));
+    return !tc->CheckCondition();
+}
+
+/* removeCommandEnvironment(name): its commands answer FAILURE RC 30 from
+ * now on.  A name that is not there: nothing.  False after an error.      */
+static NOINLINE bool removeEnvironment(RexxThreadContext *tc, RexxObjectPtr nameObj, const char *what)
+{
+    std::string name;
+    if (!environmentName(tc, nameObj, what, name)) return false;
+    std::lock_guard<std::mutex> guard(commandsLock);
+    RexxObjectPtr t = commandsOf(tc, false);
+    if (t != NULLOBJECT && hasIndex(tc, t, name)) tc->SendMessage2(t, "PUT", tc->Nil(), tc->String(name.c_str()));
+    return !tc->CheckCondition();
+}
+
+// .LuaState~addCommandEnvironment(name, handler), ~removeCommandEnvironment(name):
+// for the instance this runs in (any .LuaState: the handler's own state runs it)
+RexxMethod2(RexxObjectPtr, LuaState_AddCommandEnvironment, OPTIONAL_RexxObjectPtr, name, OPTIONAL_RexxObjectPtr, handler)
+{
+    drain(context->threadContext);
+    addEnvironment(context->threadContext, name, handler, "addCommandEnvironment");
+    return NULLOBJECT;
+}
+
+RexxMethod1(RexxObjectPtr, LuaState_RemoveCommandEnvironment, OPTIONAL_RexxObjectPtr, name)
+{
+    drain(context->threadContext);
+    removeEnvironment(context->threadContext, name, "removeCommandEnvironment");
+    return NULLOBJECT;
+}
+
+/* A command of a Lua handler, while it runs.  Its ctx (a table) carries its
+ * number: once it has ended, the ctx finds no Command, and its methods raise
+ * an error.                                                                */
+struct Command {
+    RexxExitContext *c = NULL;
+    RexxIORedirectorContext *io = NULL;
+    lua_Integer id = 0;
+    Command *prev = NULL;
+    const char *condition = NULL;           // "ERROR", "FAILURE": asked for by raise_error, raise_failure
+    RexxObjectPtr rc = NULLOBJECT;          // their rc, if they had one
+};
+
+static char CTXID;                          // key, in a ctx, of its command's number
+static char CTXMETA;                        // registry: the metatable of the ctx tables
+
+// The Command of the ctx at 1, and its state; raises a Lua error if there is none
+static Command *commandOf(lua_State *L, State **pst)
+{
+    lua_Integer id = 0;
+    if (lua_type(L, 1) == LUA_TTABLE) {
+        lua_rawgetp(L, 1, &CTXID);
+        id = lua_isinteger(L, -1) ? lua_tointeger(L, -1) : 0;
+        lua_pop(L, 1);
+    }
+    if (id == 0) luaL_argerror(L, 1, "a command's context expected (ctx:name(...))");
+    State *st = stateOf(L);
+    Command *cmd = NULL;
+    if (st != NULL) for (cmd = st->command; cmd != NULL && cmd->id != id; cmd = cmd->prev) {}
+    if (cmd == NULL) luaL_error(L, "this command context belongs to a command that has ended");
+    *pst = st;
+    return cmd;
+}
+
+static bool inputRedirected(Command *cmd) { return cmd->io != NULL && cmd->io->IsInputRedirected(); }
+
+// After a Rexx call in a ctx method (st->L was set to L): st->L back, and a
+// Rexx condition raised as a Lua error
+#define CTX_CHECK(L, st, outerL)                                              \
+    do { (st)->L = (outerL);                                                  \
+         if ((st)->tc->CheckCondition()) { pushRexxCondition((L), (st)->tc); return lua_error(L); } } while (0)
+
+static int ctx_line_in(lua_State *L)        // ctx:line_in(): the next input line, nil at the end
+{
+    State *st;
+    Command *cmd = commandOf(L, &st);
+    if (!inputRedirected(cmd)) { lua_pushnil(L); return 1; }
+    CSTRING data = NULL;
+    size_t len = 0;
+    lua_State *outerL = st->L;
+    st->L = L;                              // a USING source may call back into Lua
+    cmd->io->ReadInput(&data, &len);
+    CTX_CHECK(L, st, outerL);
+    if (data == NULL) lua_pushnil(L); else lua_pushlstring(L, data, len);
+    return 1;
+}
+
+static int ctx_lines(lua_State *L)          // ctx:lines(): the rest of the input, a sequence
+{
+    State *st;
+    Command *cmd = commandOf(L, &st);
+    lua_newtable(L);
+    if (!inputRedirected(cmd)) return 1;
+    int t = lua_gettop(L);
+    for (lua_Integer i = 1; ; i++) {
+        CSTRING data = NULL;
+        size_t len = 0;
+        lua_State *outerL = st->L;
+        st->L = L;
+        cmd->io->ReadInput(&data, &len);
+        CTX_CHECK(L, st, outerL);
+        if (data == NULL) break;
+        lua_pushlstring(L, data, len);
+        lua_rawseti(L, t, i);
+    }
+    return 1;
+}
+
+// ctx:output(text), ctx:error(text): a line, to the command's output (error)
+// if it is redirected, else to .output (.error), as a real command's console
+// output (rule 2 of command-handlers.md: never dropped)
+static int ctxWrite(lua_State *L, bool err)
+{
+    State *st;
+    Command *cmd = commandOf(L, &st);
+    luaL_checkany(L, 2);
+    size_t len;
+    const char *s = luaL_tolstring(L, 2, &len);
+    RexxThreadContext *tc = st->tc;
+    lua_State *outerL = st->L;
+    st->L = L;                              // a USING target may call back into Lua
+    bool redirected = cmd->io != NULL && (err ? cmd->io->IsErrorRedirected() : cmd->io->IsOutputRedirected());
+    if (redirected) {
+        if (err) cmd->io->WriteError(s, len); else cmd->io->WriteOutput(s, len);
+    }
+    else {                                  // (released: many lines in one command must not grow)
+        RexxDirectoryObject local = tc->GetLocalEnvironment();
+        RexxObjectPtr stream = local != NULLOBJECT ? tc->DirectoryAt(local, err ? "ERROR" : "OUTPUT") : NULLOBJECT;
+        if (stream != NULLOBJECT && stream != tc->Nil()) {
+            RexxStringObject line = tc->NewString(s, len);
+            release(tc, tc->SendMessage1(stream, "LINEOUT", line));
+            release(tc, line);
+        }
+        release(tc, stream);
+        release(tc, local);
+    }
+    CTX_CHECK(L, st, outerL);
+    return 0;
+}
+
+static int ctx_output(lua_State *L) { return ctxWrite(L, false); }
+static int ctx_error(lua_State *L)  { return ctxWrite(L, true); }
+
+static int ctx_is_redirected(lua_State *L)  // ctx:is_redirected("input"|"output"|"error"|"same")
+{
+    State *st;
+    Command *cmd = commandOf(L, &st);
+    const char *k = luaL_checkstring(L, 2);
+    static const char *const kinds[] = {"input", "output", "error", "same", NULL};
+    int which = -1;
+    for (int i = 0; kinds[i]; i++) if (strcmpNoCase(k, kinds[i]) == 0) which = i;
+    if (which < 0) return luaL_argerror(L, 2, "\"input\", \"output\", \"error\" or \"same\" expected");
+    RexxIORedirectorContext *io = cmd->io;
+    bool r = io != NULL && (which == 0 ? io->IsInputRedirected() : which == 1 ? io->IsOutputRedirected()
+                            : which == 2 ? io->IsErrorRedirected() : io->AreOutputAndErrorSameTarget());
+    lua_pushboolean(L, r);
+    return 1;
+}
+
+// The variable names: Rexx's, so uppercase (pushes it)
+static const char *ctxName(lua_State *L)
+{
+    luaL_checkstring(L, 2);
+    pushUpper(L, 2, "");
+    return lua_tostring(L, -1);
+}
+
+static int ctx_get_var(lua_State *L)        // ctx:get_var(name): its value, nil if it has none
+{
+    State *st;
+    Command *cmd = commandOf(L, &st);
+    const char *name = ctxName(L);
+    lua_State *outerL = st->L;
+    st->L = L;
+    RexxObjectPtr v = cmd->c->GetContextVariable(name);
+    if (st->tc->CheckCondition()) CTX_CHECK(L, st, outerL);
+    if (v == NULLOBJECT) { st->L = outerL; lua_pushnil(L); return 1; }
+    bool ok = pushValue(st, v);
+    release(st->tc, v);                     // a userdata keeps it, if it is one
+    st->L = outerL;
+    if (!ok) return lua_error(L);           // its message
+    return 1;
+}
+
+static int ctx_set_var(lua_State *L)        // ctx:set_var(name, value)
+{
+    State *st;
+    Command *cmd = commandOf(L, &st);
+    luaL_checkany(L, 3);
+    const char *name = ctxName(L);
+    lua_State *outerL = st->L;
+    st->L = L;
+    RexxObjectPtr v = toRexx(st, 3);
+    if (!st->tc->CheckCondition()) cmd->c->SetContextVariable(name, v);
+    release(st->tc, v);
+    CTX_CHECK(L, st, outerL);
+    return 0;
+}
+
+static int ctx_drop_var(lua_State *L)       // ctx:drop_var(name)
+{
+    State *st;
+    Command *cmd = commandOf(L, &st);
+    const char *name = ctxName(L);
+    lua_State *outerL = st->L;
+    st->L = L;
+    cmd->c->DropContextVariable(name);
+    CTX_CHECK(L, st, outerL);
+    return 0;
+}
+
+// ctx:raise_error([rc]), ctx:raise_failure([rc]): ERROR (FAILURE) after the
+// command, with RC the handler's value or, if it gives none, rc.  Returns rc.
+static int ctxRaise(lua_State *L, const char *condition)
+{
+    State *st;
+    Command *cmd = commandOf(L, &st);
+    lua_settop(L, 2);
+    cmd->condition = condition;
+    cmd->rc = NULLOBJECT;
+    if (!lua_isnil(L, 2)) {
+        lua_State *outerL = st->L;
+        st->L = L;
+        cmd->rc = toRexx(st, 2);
+        CTX_CHECK(L, st, outerL);
+    }
+    return 1;
+}
+
+static int ctx_raise_error(lua_State *L)   { return ctxRaise(L, "ERROR"); }
+static int ctx_raise_failure(lua_State *L) { return ctxRaise(L, "FAILURE"); }
+
+static int ctx_tostring(lua_State *L)
+{
+    lua_pushliteral(L, "ADDRESS ");
+    lua_pushliteral(L, "environment");
+    lua_rawget(L, 1);
+    lua_pushliteral(L, " context");
+    lua_concat(L, 3);
+    return 1;
+}
+
+/* cmd_call(handler, command, id, environment): handler(command, ctx), its
+ * first result.  The ctx is made here, protected: it allocates.            */
+static int cmd_call(lua_State *L)
+{
+    lua_settop(L, 4);
+    lua_createtable(L, 0, 1);                               // 5: ctx
+    lua_pushliteral(L, "environment");
+    lua_pushvalue(L, 4);
+    lua_rawset(L, 5);
+    lua_pushvalue(L, 3);
+    lua_rawsetp(L, 5, &CTXID);
+    if (lua_rawgetp(L, LUA_REGISTRYINDEX, &CTXMETA) != LUA_TTABLE) {
+        lua_pop(L, 1);
+        static const luaL_Reg methods[] = {
+            {"line_in", ctx_line_in}, {"lines", ctx_lines}, {"output", ctx_output}, {"error", ctx_error},
+            {"is_redirected", ctx_is_redirected}, {"get_var", ctx_get_var}, {"set_var", ctx_set_var},
+            {"drop_var", ctx_drop_var}, {"raise_error", ctx_raise_error}, {"raise_failure", ctx_raise_failure},
+            {NULL, NULL}};
+        lua_createtable(L, 0, 4);
+        luaL_newlib(L, methods);
+        lua_setfield(L, -2, "__index");
+        lua_pushcfunction(L, ctx_tostring);
+        lua_setfield(L, -2, "__tostring");
+        lua_pushliteral(L, "ADDRESS context");
+        lua_setfield(L, -2, "__name");
+        lua_pushliteral(L, "ADDRESS context");
+        lua_setfield(L, -2, "__metatable");                 // protected
+        lua_pushvalue(L, -1);
+        lua_rawsetp(L, LUA_REGISTRYINDEX, &CTXMETA);
+    }
+    lua_setmetatable(L, 5);
+    lua_pushvalue(L, 1);
+    lua_pushvalue(L, 2);
+    lua_pushvalue(L, 5);
+    lua_call(L, 2, 1);
+    return 1;
+}
+
+/* The command, in the handler's state: RC its value (nil or none: 0), or
+ * SYNTAX for a Lua error in it (98.900, as any Lua error reaching Rexx;
+ * a Rexx condition that went through Lua, itself; a HALT, 4.1), and ERROR
+ * or FAILURE after it if it asked for them (ctx:raise_error...).          */
+static NOINLINE RexxObjectPtr runHandler(RexxExitContext *c, Proxy *px, RexxObjectPtr handler,
+                                         RexxStringObject address, RexxStringObject command,
+                                         RexxIORedirectorContext *io)
+{
+    RexxThreadContext *tc = c->threadContext;
+    State *st = px->st;
+    if (foreignThread(st)) { raise(tc, std::string("Lua error: ") + noRexx(st)); return NULLOBJECT; }
+    RexxObjectPtr stateObj = tc->SendMessage0(handler, "LUA.STATE");
+    if (stateObj == NULLOBJECT) return NULLOBJECT;
+    Enter e(st, tc, stateObj);
+    if (st->closed) { raise(tc, "Lua error: the LuaState is closed"); return NULLOBJECT; }
+    releasePending(st);
+    lua_State *L = st->L;
+    int top = lua_gettop(L);
+    if (!lua_checkstack(L, 8)) { raise(tc, "Lua error: Lua stack overflow"); return NULLOBJECT; }
+    Command cmd;
+    cmd.c = c;
+    cmd.io = io;
+    cmd.id = ++st->commands;
+    cmd.prev = st->command;
+    st->command = &cmd;
+    lua_pushcfunction(L, cmd_call);
+    pushSelf(px);
+    lua_pushlstring(L, c->StringData(command), c->StringLength(command));
+    lua_pushinteger(L, cmd.id);
+    lua_pushlstring(L, c->StringData(address), c->StringLength(address));
+    int n = pcallAll(st, 4);
+    st->command = cmd.prev;
+    if (n < 0) {                            // raised; or Ctrl-C: the HALT after the command
+        lua_settop(L, top);
+        return tc->CheckCondition() ? NULLOBJECT : c->WholeNumber(1);
+    }
+    RexxObjectPtr rc = lua_isnil(L, -1) ? (cmd.rc != NULLOBJECT ? cmd.rc : c->WholeNumber(0)) : toRexx(st, -1);
+    lua_settop(L, top);
+    if (tc->CheckCondition()) return NULLOBJECT;            // making a .LuaObject failed
+    if (cmd.condition != NULL) c->RaiseCondition(cmd.condition, command, NULLOBJECT, rc);
+    return rc;
+}
+
+// The native handler of every environment written in Lua
+static RexxObjectPtr RexxEntry luaCommand(RexxExitContext *c, RexxStringObject address,
+                                           RexxStringObject command, RexxIORedirectorContext *io)
+{
+    RexxThreadContext *tc = c->threadContext;
+    drain(tc);
+    std::string name = upperString(c->StringData(address), c->StringLength(address));
+    RexxObjectPtr t = commandsOf(tc, false);
+    RexxObjectPtr handler = t == NULLOBJECT ? NULLOBJECT : tc->SendMessage1(t, "AT", tc->String(name.c_str()));
+    Proxy *px = handler == NULLOBJECT || handler == tc->Nil() ? NULL : proxyOf(tc, handler);
+    if (px == NULL) {                       // removed: as an unknown environment
+        tc->ClearCondition();
+        RexxObjectPtr rc = c->WholeNumber(RXSUBCOM_NOTREG);
+        c->RaiseCondition("FAILURE", command, NULLOBJECT, rc);
+        return rc;
+    }
+    return runHandler(c, px, handler, address, command, io);
+}
+
 // An interpreter instance the module made.  Never freed: Lua functions and
 // states may still point to it after it is closed (they then see `closed`).
 struct Inst {
@@ -2692,6 +3143,10 @@ struct Inst {
     RexxObjectPtr stateObj = NULLOBJECT;    // its .lua (a global reference)
     int depth = 0;                          // calls into it in progress
     bool closed = false;
+    // its REDIRECTING_ENVIRONMENTS (LUA and command_environments' names),
+    // kept: the option points to them
+    std::vector<std::string> envNames;
+    std::vector<RexxRedirectingEnvironment> envs;
 };
 static std::mutex instLock;
 static std::map<RexxInstance *, Inst *> instances;     // the live ones
@@ -2828,6 +3283,7 @@ static std::string conditionText(RexxThreadContext *tc)
 
 struct Options {
     std::vector<std::string> path, extensions, libraries;
+    std::vector<std::string> environments;  // command_environments' names, uppercase
     std::string address;
 };
 
@@ -2851,18 +3307,23 @@ static Inst *newInst(State *st, const Options &o, std::string &error)
     if (!o.address.empty()) { opt.optionName = INITIAL_ADDRESS_ENVIRONMENT; opt.option = o.address.c_str(); options.push_back(opt); }
     for (const std::string &l : o.libraries) { opt.optionName = LOAD_REQUIRED_LIBRARY; opt.option = l.c_str(); options.push_back(opt); }
     opt.optionName = REGISTER_LIBRARY; opt.option = (POINTER)library; options.push_back(opt);
-    // ADDRESS LUA, from the start (not AddCommandEnvironment: docs/design.md, *ADDRESS LUA*)
-    static RexxRedirectingEnvironment environments[] = {{addressLua, "LUA"}, {NULL, NULL}};
-    opt.optionName = REDIRECTING_ENVIRONMENTS; opt.option = (POINTER)environments; options.push_back(opt);
+    // ADDRESS LUA, and the names of command_environments, from the start (not
+    // AddCommandEnvironment: docs/design.md, *ADDRESS LUA*, *Command environments*)
+    Inst *in = new Inst();
+    in->envNames = o.environments;
+    in->envs.push_back({addressLua, "LUA"});
+    for (const std::string &n : in->envNames) in->envs.push_back({luaCommand, n.c_str()});
+    in->envs.push_back({NULL, NULL});
+    opt.optionName = REDIRECTING_ENVIRONMENTS; opt.option = (POINTER)in->envs.data(); options.push_back(opt);
     opt.optionName = NULL; options.push_back(opt);
 
     RexxInstance *rexx;
     RexxThreadContext *tc;
     if (!RexxCreateInterpreter(&rexx, &tc, options.data())) {
         error = "cannot create a Rexx interpreter instance";
+        delete in;
         return NULL;
     }
-    Inst *in = new Inst();
     in->rexx = rexx;
     in->host = st;
     {
@@ -2895,6 +3356,18 @@ static Inst *newInst(State *st, const Options &o, std::string &error)
         return NULL;
     }
     in->stateObj = tc->RequestGlobalReference(lua);
+    // the names ooRexx has already: in the instance's names, with no handler
+    // yet (mod_interpreter adds them), so never given to ooRexx again
+    if (!in->envNames.empty()) {
+        RexxObjectPtr t = commandsOf(tc, true);
+        for (const std::string &n : in->envNames)
+            if (t != NULLOBJECT) tc->SendMessage2(t, "PUT", tc->Nil(), tc->String(n.c_str()));
+        if (t == NULLOBJECT || tc->CheckCondition()) {
+            error = tc->CheckCondition() ? conditionText(tc) : "cannot make the instance's command environments";
+            closeInst(in);
+            return NULL;
+        }
+    }
     if (st->inst == NULL) st->inst = in;
     return in;
 }
@@ -3049,6 +3522,57 @@ static int mod_routine(lua_State *L)
     return n;
 }
 
+// r.add_command_environment(name, handler), r.remove_command_environment(name):
+// ADDRESS name in that instance (docs/design.md, *Command environments*).
+// Checked here first, so that a wrong argument is a plain Lua error.
+static int checkEnvironmentName(lua_State *L, int idx)
+{
+    size_t n;
+    const char *s = luaL_checklstring(L, idx, &n);
+    if (n == 0) return luaL_argerror(L, idx, "the name of the environment is empty");
+    if (strcmpNoCase(s, "LUA") == 0) return luaL_argerror(L, idx, "LUA is the bridge's own environment (ADDRESS LUA)");
+    return 0;
+}
+
+static NOINLINE int addenv_body(lua_State *L)
+{
+    return intoRexx(L, 1, [&](RexxThreadContext *tc, RexxArrayObject args) -> RexxObjectPtr {
+        addEnvironment(tc, tc->ArrayAt(args, 1), tc->ArrayAt(args, 2), "add_command_environment");
+        return NULLOBJECT;
+    });
+}
+
+static int mod_add_command_environment(lua_State *L)
+{
+    MODULE_ENTRY(L, mod_add_command_environment);
+    lua_settop(L, 2);
+    checkEnvironmentName(L, 1);
+    if (!isCallable(L, 2))
+        return luaL_argerror(L, 2, "a function, or a value with __call, expected (to remove an environment: "
+                                   "remove_command_environment)");
+    int n = addenv_body(L);
+    if (n < 0) return lua_error(L);
+    return 0;
+}
+
+static NOINLINE int removeenv_body(lua_State *L)
+{
+    return intoRexx(L, 1, [&](RexxThreadContext *tc, RexxArrayObject args) -> RexxObjectPtr {
+        removeEnvironment(tc, tc->ArrayAt(args, 1), "remove_command_environment");
+        return NULLOBJECT;
+    });
+}
+
+static int mod_remove_command_environment(lua_State *L)
+{
+    MODULE_ENTRY(L, mod_remove_command_environment);
+    lua_settop(L, 1);
+    checkEnvironmentName(L, 1);
+    int n = removeenv_body(L);
+    if (n < 0) return lua_error(L);
+    return 0;
+}
+
 // r.close(): Terminate the instance
 static int mod_close(lua_State *L)
 {
@@ -3062,7 +3586,9 @@ static int mod_close(lua_State *L)
 
 static void pushModuleFunctions(lua_State *L)        // upvalue on top: popped
 {
-    static const luaL_Reg fns[] = {{"eval", mod_eval}, {"run", mod_run}, {"routine", mod_routine}, {NULL, NULL}};
+    static const luaL_Reg fns[] = {{"eval", mod_eval}, {"run", mod_run}, {"routine", mod_routine},
+                                   {"add_command_environment", mod_add_command_environment},
+                                   {"remove_command_environment", mod_remove_command_environment}, {NULL, NULL}};
     luaL_setfuncs(L, fns, 1);
 }
 
@@ -3109,20 +3635,64 @@ static NOINLINE Inst *interpreter_body(lua_State *L, State *st)
     lua_pushstring(L, "initial_address");
     if (lua_rawget(L, 1) == LUA_TSTRING) o.address = lua_tostring(L, -1);
     lua_pop(L, 1);
+    lua_pushstring(L, "command_environments");
+    if (lua_rawget(L, 1) == LUA_TTABLE) {
+        lua_pushnil(L);
+        while (lua_next(L, -2)) {
+            lua_pop(L, 1);
+            size_t n;
+            const char *k = lua_tolstring(L, -1, &n);       // (a string: checked)
+            o.environments.push_back(upperString(k, n));
+        }
+    }
+    lua_pop(L, 1);
     std::string error;
     Inst *in = newInst(st, o, error);
     if (in == NULL) lua_pushlstring(L, error.data(), error.size());
     return in;
 }
 
-// rexx.interpreter{rexx_path=, extensions=, initial_address=, load_libraries=}
+// command_environments: a table, name -> callable; names not empty, not LUA,
+// not twice (in any case)
+static void checkEnvironments(lua_State *L, int opts)
+{
+    lua_pushstring(L, "command_environments");
+    int t = lua_rawget(L, opts);
+    if (t == LUA_TNIL) { lua_pop(L, 1); return; }
+    if (t != LUA_TTABLE) luaL_error(L, "interpreter: command_environments must be a table, name -> handler");
+    int envs = lua_gettop(L);
+    lua_newtable(L);                                        // the names seen, uppercase
+    int seen = lua_gettop(L);
+    lua_pushnil(L);
+    while (lua_next(L, envs)) {
+        if (lua_type(L, -2) != LUA_TSTRING) luaL_error(L, "interpreter: command_environments: a name must be a string");
+        const char *name = lua_tostring(L, -2);
+        if (*name == '\0') luaL_error(L, "interpreter: command_environments: a name is empty");
+        if (strcmpNoCase(name, "LUA") == 0)
+            luaL_error(L, "interpreter: command_environments: LUA is the bridge's own environment (ADDRESS LUA)");
+        if (!isCallable(L, -1))
+            luaL_error(L, "interpreter: command_environments: the handler of %s must be a function, or a value with __call", name);
+        lua_pop(L, 1);
+        pushUpper(L, -1, "");
+        lua_pushvalue(L, -1);
+        if (lua_rawget(L, seen) != LUA_TNIL)
+            luaL_error(L, "interpreter: command_environments: %s is there twice (names are uppercase in Rexx)", lua_tostring(L, -2));
+        lua_pop(L, 1);
+        lua_pushboolean(L, 1);
+        lua_rawset(L, seen);
+    }
+    lua_settop(L, envs - 1);
+}
+
+// rexx.interpreter{rexx_path=, extensions=, initial_address=, load_libraries=, command_environments=}
 static int mod_interpreter(lua_State *L)
 {
     if (lua_isnoneornil(L, 1)) { lua_settop(L, 0); lua_newtable(L); }
     luaL_checktype(L, 1, LUA_TTABLE);
     lua_settop(L, 1);
     // checked first, so that no Lua error happens once there are C++ objects
-    static const char *known[] = {"rexx_path", "extensions", "initial_address", "load_libraries", NULL};
+    static const char *known[] = {"rexx_path", "extensions", "initial_address", "load_libraries",
+                                  "command_environments", NULL};
     lua_pushnil(L);
     while (lua_next(L, 1)) {
         lua_pop(L, 1);
@@ -3130,7 +3700,7 @@ static int mod_interpreter(lua_State *L)
         if (lua_type(L, -1) == LUA_TSTRING)
             for (int i = 0; known[i]; i++) if (strcmp(lua_tostring(L, -1), known[i]) == 0) ok = true;
         if (!ok) return luaL_error(L, "interpreter: unknown option %s (rexx_path, extensions, "
-                                      "initial_address, load_libraries)", luaL_tolstring(L, -1, NULL));
+                                      "initial_address, load_libraries, command_environments)", luaL_tolstring(L, -1, NULL));
     }
     checkStrings(L, 1, "rexx_path");
     checkStrings(L, 1, "extensions");
@@ -3139,6 +3709,7 @@ static int mod_interpreter(lua_State *L)
     int t = lua_rawget(L, 1);
     if (t != LUA_TNIL && t != LUA_TSTRING) return luaL_error(L, "interpreter: initial_address must be a string");
     lua_pop(L, 1);
+    checkEnvironments(L, 1);
     State *st = stateOf(L);
     if (st->closed) return luaL_error(L, "the Lua state is closed");
     if (foreignThread(st)) return luaL_error(L, "%s", noRexx(st));
@@ -3150,6 +3721,20 @@ static int mod_interpreter(lua_State *L)
     lua_pushlightuserdata(L, in);
     lua_pushcclosure(L, mod_close, 1);
     lua_setfield(L, -2, "close");
+    // the handlers of command_environments (their names ooRexx has already)
+    lua_pushstring(L, "command_environments");
+    if (lua_rawget(L, 1) == LUA_TTABLE) {
+        int envs = lua_gettop(L);
+        lua_pushnil(L);
+        while (lua_next(L, envs)) {
+            lua_getfield(L, envs - 1, "add_command_environment");
+            lua_pushvalue(L, -3);
+            lua_pushvalue(L, -3);
+            lua_call(L, 2, 0);
+            lua_pop(L, 1);
+        }
+    }
+    lua_pop(L, 1);
     return 1;
 }
 
@@ -3984,6 +4569,8 @@ RexxMethodEntry rexxlua_methods[] = {
     REXX_METHOD(LuaState_Global,    LuaState_Global),
     REXX_METHOD(LuaState_Require,   LuaState_Require),
     REXX_METHOD(LuaState_Box,       LuaState_Box),
+    REXX_METHOD(LuaState_AddCommandEnvironment,    LuaState_AddCommandEnvironment),
+    REXX_METHOD(LuaState_RemoveCommandEnvironment, LuaState_RemoveCommandEnvironment),
     REXX_METHOD(LuaState_Table,     LuaState_Table),
     REXX_METHOD(LuaState_Predicate, LuaState_Predicate),
     REXX_METHOD(LuaState_Stats,     LuaState_Stats),

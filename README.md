@@ -54,6 +54,16 @@ address lua 'for l in io.lines() do print(l * l) end' with input stem in. output
 say out.1 out.2                                    -- 9 16
 ```
 
+Lua functions can be `ADDRESS` environments of their own: RC is the
+function's value, and its context reads and writes the caller's variables
+and the `WITH` redirection.
+
+```rexx
+calc = .lua~eval("return function(command, ctx) ctx:set_var('RESULT', load('return ' .. command)()) end")
+.lua~addCommandEnvironment("CALC", calc)
+address calc '2^10'; say rc result                 -- 0 1024.0
+```
+
 **ooRexx inside Lua**: a Lua C module, `require "oorexx"`, runs Rexx in a
 Lua program (any Lua 5.3, 5.4 or 5.5, and LuaTeX, TeX Live's included). In
 Rexx, `.lua` is then that same Lua, so the two sides share everything.
@@ -177,7 +187,8 @@ LUA_VERSION=5.3 BUILD=build53 TESTS="Module.test.lua" oorexxlua/tests/run.sh`.
   identity), `03-values.rex` (how values cross, `box`), `04-calls.rex`
   (the colon rule, several results, coroutines), `05-rexx-in-lua.rex`
   (Rexx objects used from Lua), `06-operators.rex`, `07-from-lua.lua` (the
-  Lua module); `run-one.sh`. `latex/`: a LuaLaTeX document with Rexx in it
+  Lua module), `08-command-environments.rex` (Lua functions as `ADDRESS`
+  environments); `run-one.sh`. `latex/`: a LuaLaTeX document with Rexx in it
   (`\rexx{...}`, and a Rexx program that writes into the page through
   `ADDRESS LUA`), not run by the tests.
 - `tests/` — `run.sh`; `rexx/`, the ooRexxUnit test groups (examples,
