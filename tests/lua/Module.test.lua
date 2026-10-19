@@ -340,6 +340,10 @@ T.test("command environments written in Lua: command_environments, add, remove",
   T.fails("own environment", rexx.add_command_environment, "lua", calc)
   T.fails("empty", rexx.add_command_environment, "", calc)
   T.fails("own environment", rexx.remove_command_environment, "LUA")
+  T.fails("remove_command_environment: Double has no handler", rexx.remove_command_environment, "Double")  -- removed already
+  T.fails("NEVER has no handler", r.remove_command_environment, "NEVER")
+  local ok, e = pcall(rexx.remove_command_environment, "NEVER")
+  T.eq(type(e), "string", "a plain Lua error")
   T.fails("must be a function", rexx.interpreter, {command_environments = {X = 1}})
   T.fails("twice", rexx.interpreter, {command_environments = {x = calc, X = calc}})
   T.fails("own environment", rexx.interpreter, {command_environments = {Lua = calc}})

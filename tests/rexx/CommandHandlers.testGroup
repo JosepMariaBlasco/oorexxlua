@@ -237,7 +237,20 @@ failure:
   address gone 'z'
   self~assertEquals(2, rc, "added again")
   .lua~removeCommandEnvironment("GONE")
-  .lua~removeCommandEnvironment("NEVERTHERE")         -- nothing to remove: nothing
+
+-- removing a name with no handler is an error, SYNTAX 93.900 (rule 4, the
+-- user, 19/10/2026): never added, or removed already
+::method test_removing_a_name_with_no_handler
+  self~assertSame("removeCommandEnvironment: NeverThere has no handler.", -
+    self~errorOf(.lua, "removeCommandEnvironment", "NeverThere"))
+  .lua~addCommandEnvironment("TWICE2", self~handler("return 0"))
+  .lua~removeCommandEnvironment("TWICE2")
+  signal on syntax
+  .lua~removeCommandEnvironment("twice2")
+  self~fail("no SYNTAX")
+syntax:
+  self~assertSame("93.900", condition("O")~code)
+  self~assertSame("removeCommandEnvironment: twice2 has no handler.", condition("O")~message)
 
 ::method test_wrong_arguments
   f = self~handler("return 0")

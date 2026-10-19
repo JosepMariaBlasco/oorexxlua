@@ -2797,14 +2797,19 @@ static NOINLINE bool addEnvironment(RexxThreadContext *tc, RexxObjectPtr nameObj
 }
 
 /* removeCommandEnvironment(name): its commands answer FAILURE RC 30 from
- * now on.  A name that is not there: nothing.  False after an error.      */
-static NOINLINE bool removeEnvironment(RexxThreadContext *tc, RexxObjectPtr nameObj, const char *what)
+ * now on.  A name with no handler (never added, or removed already) is an
+ * error (rule 4 of command-handlers.md, the user, 19/10/2026): *missing,
+ * for the caller to raise in its host's way.  False after an error.       */
+static NOINLINE bool removeEnvironment(RexxThreadContext *tc, RexxObjectPtr nameObj, const char *what, bool *missing)
 {
+    *missing = false;
     std::string name;
     if (!environmentName(tc, nameObj, what, name)) return false;
     std::lock_guard<std::mutex> guard(commandsLock);
     RexxObjectPtr t = commandsOf(tc, false);
-    if (t != NULLOBJECT && hasIndex(tc, t, name)) tc->SendMessage2(t, "PUT", tc->Nil(), tc->String(name.c_str()));
+    RexxObjectPtr h = t == NULLOBJECT ? NULLOBJECT : tc->SendMessage1(t, "AT", tc->String(name.c_str()));
+    if (h == NULLOBJECT || h == tc->Nil()) { *missing = !tc->CheckCondition(); return !tc->CheckCondition(); }
+    tc->SendMessage2(t, "PUT", tc->Nil(), tc->String(name.c_str()));
     return !tc->CheckCondition();
 }
 
@@ -2820,7 +2825,11 @@ RexxMethod2(RexxObjectPtr, LuaState_AddCommandEnvironment, OPTIONAL_RexxObjectPt
 RexxMethod1(RexxObjectPtr, LuaState_RemoveCommandEnvironment, OPTIONAL_RexxObjectPtr, name)
 {
     drain(context->threadContext);
-    removeEnvironment(context->threadContext, name, "removeCommandEnvironment");
+    bool missing;
+    if (removeEnvironment(context->threadContext, name, "removeCommandEnvironment", &missing) && missing) {
+        std::string m = std::string("removeCommandEnvironment: ") + context->CString(name) + " has no handler";
+        context->RaiseException1(Rexx_Error_Incorrect_method_user_defined, context->String(m.c_str()));
+    }
     return NULLOBJECT;
 }
 
@@ -3555,10 +3564,10 @@ static int mod_add_command_environment(lua_State *L)
     return 0;
 }
 
-static NOINLINE int removeenv_body(lua_State *L)
+static NOINLINE int removeenv_body(lua_State *L, bool *missing)
 {
     return intoRexx(L, 1, [&](RexxThreadContext *tc, RexxArrayObject args) -> RexxObjectPtr {
-        removeEnvironment(tc, tc->ArrayAt(args, 1), "remove_command_environment");
+        removeEnvironment(tc, tc->ArrayAt(args, 1), "remove_command_environment", missing);
         return NULLOBJECT;
     });
 }
@@ -3568,8 +3577,10 @@ static int mod_remove_command_environment(lua_State *L)
     MODULE_ENTRY(L, mod_remove_command_environment);
     lua_settop(L, 1);
     checkEnvironmentName(L, 1);
-    int n = removeenv_body(L);
+    bool missing = false;
+    int n = removeenv_body(L, &missing);
     if (n < 0) return lua_error(L);
+    if (missing) return luaL_error(L, "remove_command_environment: %s has no handler", lua_tostring(L, 1));
     return 0;
 }
 

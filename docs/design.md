@@ -871,7 +871,9 @@ Lua function, or a Lua value with `__call` (a `.LuaObject` from Rexx), of
 any `.LuaState`: that state runs it. Anything else, `.nil`/`nil` included,
 is an error (SYNTAX 98.900 from Rexx, a Lua error from Lua): **removing is
 `removeCommandEnvironment`**, never registering nothing. Removing a name
-that is not there does nothing.
+that has no handler (never added, or removed already) is an error too:
+SYNTAX 93.900 from Rexx, a Lua error from Lua (the user, 19/10/2026: no
+silent no-op). Both return nothing.
 
 **The handler** is called as `handler(command, ctx)`, on the Rexx thread
 that issued the command, holding its state's lock (*Threads*):
