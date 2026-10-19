@@ -197,11 +197,15 @@ x:
 
 -- a pcall in Lua does not stop it: Lua goes on after its pcall, with an error
 -- that says so, and the SIGNAL happens when Lua returns to the bridge
+-- (and its garbage collection there runs the finalizers of Rexx objects,
+-- which must not call Rexx while it unwinds: that crashed on macOS)
 ::method test_signal_past_lua_through_a_pcall
-  f = .lua~eval("return function(o) local ok, e = pcall(function() return o:boom() end)" -
+  f = .lua~eval("return function(o, mk) local junk = {} for i = 1, 200 do junk[i] = mk() end junk = nil" -
+                "  local ok, e = pcall(function() return o:boom() end)" -
+                "  collectgarbage(); collectgarbage()" -
                 "  unwindSeen = tostring(ok) .. ' ' .. tostring(e) return 'after' end")
   signal on user x
-  r = f~call(.Raiser~new)
+  r = f~call(.Raiser~new, .routine~new("mk", "return .object~new"))
   self~fail("no USER X; the function returned" r)
 x:
   self~assertSame("false a Rexx SIGNAL is unwinding through Lua", .lua~global("unwindSeen"))

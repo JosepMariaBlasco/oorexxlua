@@ -1335,8 +1335,11 @@ static int box_gc(lua_State *L)
     RexxBox *b = (RexxBox *)luaL_checkudata(L, 1, REXXOBJ);
     if (b->obj) {
         State *st = stateOf(L);
-        if (st->tc != NULL) keepRemove(st, b->obj);
-        else if (!st->closed) st->pending.push_back(b->obj);   // no Rexx code running: later
+        // later (releasePending) when no Rexx code is running, or while a SIGNAL
+        // unwinds (guarded): then no Rexx call may run, and Lua's error, as it
+        // unwinds, can run finalizers (it crashed on macOS)
+        if (st->tc != NULL && !st->unwind) keepRemove(st, b->obj);
+        else if (!st->closed) st->pending.push_back(b->obj);
     }
     b->obj = NULL;
     return 0;

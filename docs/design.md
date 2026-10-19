@@ -567,8 +567,11 @@ call of the bridge from Lua into Rexx code (`rexxCallBack`, the module's
 functions, `pairs`, `tostring`, the redirection of `WITH`, a handler's
 `ctx`) runs inside `guarded`, which catches the exception, keeps it
 (`std::current_exception`) and makes the Lua C function raise a Lua error,
-"a Rexx SIGNAL is unwinding through Lua"; while one is pending no more
-Rexx code runs from that state. When Lua returns to the bridge's
+"a Rexx SIGNAL is unwinding through Lua"; while one is pending no Rexx
+call at all runs from that state, ooRexx's activity being half unwound
+(not even a finalizer's: the `__gc` of a Rexx object's userdata, which
+Lua's error can run as it unwinds, leaves its object for later, as outside
+Rexx code; calling Rexx there crashed on macOS). When Lua returns to the bridge's
 `lua_pcall`, the exception is thrown again (`rethrowUnwind`), after what
 the bridge itself must undo (a handler's command, `WITH`'s stand-ins), and
 the unwinding goes on to the trap, with the condition itself. The state's
