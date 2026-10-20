@@ -3361,6 +3361,75 @@ static std::string moduleDirectory()
     return slash == std::string::npos ? "." : path.substr(0, slash);
 }
 
+/* The folder of ooRexx's own .cls files (logicalwrapper.cls, json.cls...),
+ * found from the ooRexx library this process loaded: next to it on Windows
+ * (bin\rexx.dll), ../bin on Linux and macOS (lib/librexx.so: a portable
+ * build and the packages alike); "" if logicalwrapper.cls is in neither.
+ * A Lua host need not have ooRexx's bin on its PATH (on Linux and macOS
+ * the module finds librexx by its runpath, or LD_LIBRARY_PATH), and lua.cls
+ * requires logicalwrapper.cls: without this, 43.901 (oorexx-bridges
+ * inbox/lua.md, 20/10/2026, from oorexxnet's findings).                    */
+static bool fileExists(const std::string &f)
+{
+    FILE *h = fopen(f.c_str(), "rb");
+    if (h == NULL) return false;
+    fclose(h);
+    return true;
+}
+
+static std::string oorexxClsFolder()
+{
+    std::string lib;
+#ifdef _WIN32
+    HMODULE h = GetModuleHandleA("rexx.dll");
+    char buf[MAX_PATH];
+    if (h != NULL && GetModuleFileNameA(h, buf, sizeof buf) != 0) lib = buf;
+#else
+    Dl_info info;
+    if (dladdr((void *)&RexxCreateInterpreter, &info) != 0 && info.dli_fname != NULL) lib = info.dli_fname;
+#endif
+    size_t slash = lib.find_last_of("\\/");
+    if (slash == std::string::npos) return "";
+    std::string dir = lib.substr(0, slash);
+    for (const std::string &d : {dir, dir + "/../bin"})
+        if (fileExists(d + "/logicalwrapper.cls")) return d;
+    return "";
+}
+
+#ifdef _WIN32
+/* Windows: RexxCreateInterpreter ends the process (0x80000003, no message)
+ * when rexx.dll's folder is not on the PATH (an ooRexx bug: oorexx-bridges
+ * oorexx-bugs/2026-10-20-windows-host-needs-oorexx-on-path.md).  The module
+ * finds rexx.dll by the DLL search, so its folder is usually on the PATH;
+ * when it is not (rexx.dll beside the module, say), it is appended to the
+ * process's PATH first, as oorexxnet does.                                  */
+static void rexxFolderOnPath()
+{
+    HMODULE h = GetModuleHandleA("rexx.dll");
+    char buf[MAX_PATH];
+    if (h == NULL || GetModuleFileNameA(h, buf, sizeof buf) == 0) return;
+    std::string dll = buf;
+    size_t slash = dll.find_last_of("\\/");
+    if (slash == std::string::npos) return;
+    std::string dir = dll.substr(0, slash);
+    DWORD n = GetEnvironmentVariableA("PATH", NULL, 0);
+    std::string path(n, '\0');
+    if (n > 0) path.resize(GetEnvironmentVariableA("PATH", &path[0], n));
+    size_t start = 0;
+    while (start <= path.size()) {
+        size_t end = path.find(';', start);
+        if (end == std::string::npos) end = path.size();
+        std::string e = path.substr(start, end - start);
+        while (!e.empty() && (e.back() == '\\' || e.back() == '/')) e.pop_back();
+        if (strcmpNoCase(e.c_str(), dir.c_str()) == 0) return;          // there already
+        start = end + 1;
+    }
+    std::string now = path.empty() ? dir : path + ";" + dir;
+    SetEnvironmentVariableA("PATH", now.c_str());
+    _putenv_s("PATH", now.c_str());                                    // (the C runtime's copy too)
+}
+#endif
+
 static std::string join(const std::vector<std::string> &v, const char *sep)
 {
     std::string r;
@@ -3391,6 +3460,11 @@ static Inst *newInst(State *st, const Options &o, std::string &error)
     std::string dir = moduleDirectory();
     std::vector<std::string> path = o.path;
     path.push_back(dir);
+    std::string clsFolder = oorexxClsFolder();          // logicalwrapper.cls, for lua.cls
+    if (!clsFolder.empty()) path.push_back(clsFolder);
+#ifdef _WIN32
+    rexxFolderOnPath();
+#endif
 #ifdef _WIN32
     std::string pathText = join(path, ";");
 #else

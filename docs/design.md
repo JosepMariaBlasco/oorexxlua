@@ -998,6 +998,19 @@ and `close` (dots, not colons: like the module).
 Each instance has `lua.cls` loaded, found next to the module (the call path
 also gets the module's directory), and the code of `eval` and `routine` sees
 its public classes (`.LuaState`, `.LuaObject`), as if it required it.
+The call path also gets the folder of ooRexx's own `.cls` files, found from
+the ooRexx library the process loaded (`../bin` of `lib/librexx` on Linux
+and macOS, `rexx.dll`'s folder on Windows), because `lua.cls` requires
+`logicalwrapper.cls` and a Lua host need not have ooRexx's `bin` on its
+`PATH` (on Linux and macOS the module finds `librexx` by its runpath, or
+`LD_LIBRARY_PATH`): without it, 43.901 (`Module.test.lua` runs a host that
+way, from a folder of its own). On Windows, `RexxCreateInterpreter` ends the
+process (0x80000003, no message) when `rexx.dll`'s folder is not on the
+`PATH` (an ooRexx bug, `oorexx-bridges`
+`oorexx-bugs/2026-10-20-windows-host-needs-oorexx-on-path.md`); the module
+finds `rexx.dll` by the DLL search, so its folder is normally there, and
+when it is not the module appends it to the process's `PATH` first, as
+ooRexx/.NET does.
 
 Values cross by the rules of *Values* and *Rexx objects in Lua*, which were
 made for both directions: results and arguments that Rexx gets from Lua are

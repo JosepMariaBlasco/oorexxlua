@@ -387,6 +387,66 @@ T.test(".LogicalWrapper: one class for every instance; isA holds across them", f
   a.close(); b.close()
 end)
 
+-- A Lua host need not have ooRexx's bin on its PATH (the module finds librexx
+-- by its runpath, or LD_LIBRARY_PATH): lua.cls's ::requires "logicalwrapper.cls"
+-- is found from where librexx is (docs/design.md, *Lua → ooRexx*).  Linux and
+-- macOS: on Windows the module needs rexx.dll's folder on the PATH to load.
+if package.config:sub(1, 1) == "/" then
+  T.test("a host without ooRexx's bin on its PATH, in a folder of its own", function()
+    local dir = os.tmpname()
+    os.remove(dir)
+    T.ok(os.execute("mkdir -p '" .. dir .. "'"))
+    local f = assert(io.open(dir .. "/child.lua", "w"))
+    f:write([[
+      local rexx = require "oorexx"
+      local r = rexx.interpreter{}
+      print(rexx.eval(".LogicalWrapper~true") == true, r.eval("6 * 7"))
+      r.close()
+    ]])
+    f:close()
+    local keep = {}                                    -- PATH without ooRexx's bin
+    for e in (os.getenv("PATH") or ""):gmatch("[^:]+") do
+      local x = io.open(e .. "/rexx", "rb")
+      if x then x:close() else keep[#keep + 1] = e end
+    end
+    local lua = os.getenv("ORXLUA_LUA") or arg[-1]
+    local cmd = string.format("cd '%s' && env -u REXX_PATH PATH='%s' '%s' child.lua > out.txt 2>&1",
+                              dir, table.concat(keep, ":"), lua)
+    os.execute(cmd)
+    local o = assert(io.open(dir .. "/out.txt", "rb"))
+    local out = o:read("a")
+    o:close()
+    os.execute("rm -rf '" .. dir .. "'")
+    T.eq(out, "true\t42\n")
+  end)
+end
+if package.config:sub(1, 1) == "\\" then
+  -- Windows: without rexx.dll's folder on the PATH the module cannot load
+  -- (rexx.dll is found by the DLL search): a Lua error, not a crash
+  T.test("Windows: a host without ooRexx's bin on its PATH gets a Lua error", function()
+    local dir = os.getenv("TEMP") .. "\\orxlua-nopath"
+    os.execute('mkdir "' .. dir .. '" 2>nul')
+    local f = assert(io.open(dir .. "\\child.lua", "w"))
+    f:write([[
+      local ok, e = pcall(require, "oorexx")
+      print(ok, ok and "" or (tostring(e):find("oorexx", 1, true) and "about oorexx" or tostring(e)))
+    ]])
+    f:close()
+    local keep = {}
+    for e in (os.getenv("PATH") or ""):gmatch("[^;]+") do
+      local x = io.open(e .. "\\rexx.dll", "rb")
+      if x then x:close() else keep[#keep + 1] = e end
+    end
+    local lua = os.getenv("ORXLUA_LUA") or arg[-1]
+    os.execute(string.format('cd /d "%s" && set "PATH=%s" && "%s" child.lua > out.txt 2>&1',
+                             dir, table.concat(keep, ";"), lua))
+    local o = assert(io.open(dir .. "\\out.txt", "rb"))
+    local out = o:read("a")
+    o:close()
+    T.eq((out:gsub("\r", "")), "false\tabout oorexx\n")
+  end)
+end
+
 T.test("a SIGNAL past Lua: Rexx -> Lua -> a Rexx method that raises, many times", function()
   -- the Rexx routine traps what its call of a Lua function raised further in
   -- (docs/design.md, *Errors*); Lua stays sound
