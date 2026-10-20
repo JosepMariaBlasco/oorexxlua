@@ -27,14 +27,14 @@ T.test("eval: arguments are arg(1), arg(2) ...", function()
   T.eq(rexx.eval("arg()", 1, nil, 3), 3)
   T.eq(rexx.eval("arg(2, 'O')", 1, nil, 3), 1)       -- nil: an omitted argument
   T.eq(rexx.eval("arg(1) arg(2)", true, false), "1 0")
-  -- booleans are .Boolean in Rexx, and booleans again back in Lua
-  T.eq(rexx.eval("arg(1)~class~id arg(2)~isA(.Boolean)", true, false), "Boolean 1")
+  -- booleans are .LogicalWrapper in Rexx, and booleans again back in Lua
+  T.eq(rexx.eval("arg(1)~class~id arg(2)~isA(.LogicalWrapper)", true, false), "LogicalWrapper 1")
   T.eq(rexx.eval("arg(1)", false), false)
-  T.eq(rexx.eval(".Boolean~true"), true)
+  T.eq(rexx.eval(".LogicalWrapper~true"), true)
   T.eq(rexx.eval(".true"), 1)                          -- .true is the string "1"
-  local r = rexx.interpreter{}                         -- each instance its own .Boolean
-  T.eq(r.eval("arg(1)~isA(.Boolean)", true), 1)        -- (isA gives .true, the string "1")
-  T.eq(r.eval(".Boolean~false"), false)
+  local r = rexx.interpreter{}                         -- one class for every instance (measured)
+  T.eq(r.eval("arg(1)~isA(.LogicalWrapper)", true), 1)        -- (isA gives .true, the string "1")
+  T.eq(r.eval(".LogicalWrapper~false"), false)
   r.close()
   T.eq(rexx.eval("arg(1)", 2^10), 1024.0)            -- a float makes the round trip
   T.eq(rexx.eval("arg(1)", 0.1 + 0.2), 0.1 + 0.2)
@@ -360,6 +360,31 @@ T.test("command environments written in Lua: command_environments, add, remove",
       address new 'x'
   ]])(), "98.900 Lua error: the Lua state that runs ooRexx can only be used from its own thread.")
   r.close()
+end)
+
+T.test(".LogicalWrapper: one class for every instance; isA holds across them", function()
+  -- (oorexx-bridges topics/booleans.md: measured before the copy of
+  -- boolean.cls went, 20/10/2026.)  The values cross by reference, in a
+  -- Directory (a userdata in Lua).
+  local src = [[
+    use arg op, d
+    if op = "class" then return .LogicalWrapper~identityHash
+    if op = "made" then return .directory~new~~put(.LogicalWrapper~true, "T")~~put(.LogicalWrapper~false, "F")~~put(.json~true, "J")
+    return d~t~isA(.LogicalWrapper) d~f~isA(.LogicalWrapper) d~j~isA(.LogicalWrapper) (d~t == .LogicalWrapper~true)
+    ::requires "json.cls"
+  ]]
+  local a, b = rexx.interpreter{}, rexx.interpreter{}
+  local ra, rb = a.routine(src), b.routine(src)
+  T.eq(ra("class"), rb("class"), "the same class")
+  local da, db = ra("made"), rb("made")
+  T.eq(type(da), "userdata")
+  T.eq(ra("isa", da), "1 1 1 1", "made in A, asked in A")
+  T.eq(rb("isa", da), "1 1 1 1", "made in A, asked in B")
+  T.eq(ra("isa", db), "1 1 1 1", "made in B, asked in A")
+  T.eq(rb("isa", db), "1 1 1 1", "made in B, asked in B")
+  T.eq(da:t(), true, "back in Lua, a boolean")
+  T.eq(db:j(), true, "JSON's true too")
+  a.close(); b.close()
 end)
 
 T.test("a SIGNAL past Lua: Rexx -> Lua -> a Rexx method that raises, many times", function()

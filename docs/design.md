@@ -202,7 +202,7 @@ the same rule, so `t[1]` from Rexx is `t[1]` in Lua.
 | Rexx | Lua |
 |---|---|
 | `.nil` | `nil` |
-| `.Boolean~true`, `.Boolean~false` (`isA(.Boolean)`: subclasses too) | `true`, `false` |
+| `.LogicalWrapper~true`, `~false` (`isA(.LogicalWrapper)`: subclasses too, as `JsonBoolean`) | `true`, `false` |
 | `.LuaObject` | its value (of the same state) |
 | Array | a new sequence table (a copy), each item by this rule; `n` = its size if it has empty slots; more dimensions: nested tables (below) |
 | a string (literal numbers included) | integer, float or string, by the rule above |
@@ -214,7 +214,7 @@ Lua → Rexx:
 | Lua | Rexx |
 |---|---|
 | `nil` | `.nil` |
-| boolean | `.Boolean~true` / `.Boolean~false` |
+| boolean | `.LogicalWrapper~true` / `~false` |
 | integer | its decimal string |
 | float | the shortest digits that give back the same number, written as ooRexx writes `x + 0` under `numeric digits 17`, with `.0` if it is an integer written without an exponent; `nan`, `+infinity`, `-infinity` |
 | string | a string, bytes unchanged |
@@ -256,28 +256,28 @@ Floats are written by the rule the ooRexx bridges share (oorexx-bridges,
   `Infinity`).
 
 **Booleans.** In Rexx, `.true` and `.false` are the strings `"1"` and `"0"`,
-which nothing can tell from the numbers. `.Boolean` is the class the ooRexx
-bridges share for this (the user's decision of 2026-10-17, proposed for the
-ooRexx core in RFE #880): two instances, `.Boolean~true` and
-`.Boolean~false`, that behave as `"1"` and `"0"` in every Rexx context
-(`IF`, operators, `DATATYPE`, string methods, collection indexes) and answer
-`isA(.Boolean)`. Any object that is `isA(.Boolean)` goes to Lua as a
-boolean, and Lua's booleans come to Rexx as those two instances, so a Lua
-boolean that goes through Rexx and back is still a boolean. `.true`, a
-string, still goes as the integer `1`. `src/boolean.cls` is a verbatim copy
-of `oorexx-bridges`' `shared/boolean/boolean.cls`, **version 2** (SHA-256
-`080fd7e21beb...`), never changed here; `lua.cls` requires it, so a program
-that requires `lua.cls` sees `.Boolean`, and it ships next to `lua.cls`.
-Its prolog also puts the class in `.environment` as `BOOLEAN` (unless an
-entry is there already: a core class, or the copy another package loaded
-first), so code that requires nothing sees it too, as it would see a core
-class. When the class reaches the ooRexx core, the copy goes. `lua.cls` puts
-the class in `.local` (`LUA.BOOLEAN`), where the bridge finds it from any
-interpreter instance: calls from Lua run in no package that could name it.
-It is one class for the whole process (ooRexx shares a package loaded from
-one file among the instances; measured with two instances of the Lua
-module, `oorexx-bridges` `topics/booleans.md`). `tests/rexx/boolean-test.rex` is the class's own tests,
-verbatim too, run by `Booleans.testGroup`.
+which nothing can tell from the numbers. `.LogicalWrapper` is ooRexx's
+class for this (`logicalwrapper.cls`, r13278: RFE #880, the class the
+bridges shared as `.Boolean` until then; `oorexx-bridges`
+`topics/booleans.md`): two instances, `.LogicalWrapper~true` and `~false`
+(`~of(a > b)` picks one), that behave as `"1"` and `"0"` in every Rexx
+context (`IF`, operators, `DATATYPE`, string methods, collection indexes)
+and answer `isA(.LogicalWrapper)`. Any object that is
+`isA(.LogicalWrapper)` goes to Lua as a boolean, its subclasses included:
+`json.cls`'s `JsonBoolean` and `yaml.cls`'s `YamlBoolean`, so JSON's and
+YAML's booleans reach Lua as booleans with no code for them. Lua's booleans
+come to Rexx as the two instances, so a Lua boolean that goes through Rexx
+and back is still a boolean. `.true`, a string, still goes as the integer
+`1`. `lua.cls` requires `logicalwrapper.cls` (ooRexx's own, in its `bin/`),
+so a program that requires `lua.cls` sees the class, and gives it to the
+bridge when it loads (`LUA.LOGICALWRAPPER`, kept by a global reference):
+calls from Lua run in no package that could name it. It is one class for
+the whole process (ooRexx shares a package loaded from one file among the
+instances; measured with two instances of the Lua module on r13278, values
+made in each `isA` in the other: `oorexx-bridges` `topics/booleans.md`,
+`Module.test.lua`). There is no `.Boolean` (no alias), no copy of the
+class, and no entry for it in `.environment` or `.local`. Needs ooRexx
+r13278.
 
 ## Rexx objects in Lua
 
@@ -351,7 +351,7 @@ multi-dimensional one was flattened):
   `__pairs`. So `DO WITH INDEX k ITEM v OVER t` gives every pair, and
   `DO v OVER t` the sequence (`~makeArray`), as a Rexx Directory's two loops
   already differ. A supplier is a sequence of pairs, so Lua's `1`, `"1"` and
-  `true` are three keys there (`true` as `.Boolean~true`). Anything but a
+  `true` are three keys there (`true` as `.LogicalWrapper~true`). Anything but a
   table, or a value with `__pairs`, is Error 98.900.
 - **`~makeStringTable`** is the string keys only, as stored (case kept), in
   a Rexx StringTable, with values by the usual rules (a nested table by
@@ -391,12 +391,13 @@ strings are checked: ooRexx's `ObjectToDouble`, which reads them, says
 nothing when a string is out of range, so the bridge checks after it.
 
 Rexx's `1` and `0` are both true in Lua, and `.true` is just the string
-`"1"`, so they cannot be converted automatically: a boolean is a `.Boolean`
-(`.Boolean~true`, `.Boolean~of(a > b)`; *Values*). `s~true` and `s~false`
-are aliases of `.Boolean~true` and `.Boolean~false` (until 0.3.0, they were
+`"1"`, so they cannot be converted automatically: a boolean is a `.LogicalWrapper`
+(`.LogicalWrapper~true`, `.LogicalWrapper~of(a > b)`; *Values*). `s~true` and `s~false`
+are aliases of `.LogicalWrapper~true` and `~false` (until 0.4.0 of the copy
+of `.Boolean` the bridges shared; until 0.3.0, they were
 `.LuaObject`s of Lua's booleans, `s~box("boolean", ...)`, which still makes
 one). For the results of Rexx callbacks that Lua uses as conditions
-(`table.sort`'s comparator), a routine can return a `.Boolean`, or
+(`table.sort`'s comparator), a routine can return a `.LogicalWrapper`, or
 `s~predicate(routine)` makes a Lua function that turns the routine's `1` or
 `0` into a boolean. The results of other callbacks are not converted: a
 routine that returns `0` as a number must not become `false`.

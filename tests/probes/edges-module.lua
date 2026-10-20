@@ -2,7 +2,7 @@
 -- (oorexx-bridges, topics/conversion-rules/lua.md; the master is oorexxlua's
 -- tests/probes, run by Probes.testGroup against edges-module.out)
 local rexx = require "oorexx"
-for _, x in ipairs{"'3.10'", "3.10", "'007'", "42", "1.5", ".true", ".Boolean~false", ".nil", "1E3", "2**100"} do
+for _, x in ipairs{"'3.10'", "3.10", "'007'", "42", "1.5", ".true", ".LogicalWrapper~false", ".nil", "1E3", "2**100"} do
   local v = rexx.eval(x)
   print(x, math.type(v) or type(v), v)
 end

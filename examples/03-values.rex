@@ -47,13 +47,13 @@ signal on syntax name e2
 say .lua~box("boolean", "yes")
 e2: say "Error:" condition("O")~message
 
--- 5. Booleans: .Boolean~true and .Boolean~false are Lua's true and false, both
+-- 5. Booleans: .LogicalWrapper~true and ~false are Lua's true and false, both
 --    ways (.true is the string "1", which Lua takes for the number 1)
-say types~call(.Boolean~true, .Boolean~of(1 > 2), .true)   -- boolean boolean integer
+say types~call(.LogicalWrapper~true, .LogicalWrapper~of(1 > 2), .true)   -- boolean boolean integer
 b = .lua~eval("1 < 2")
-say b~class~id b                                   -- Boolean 1: a Rexx logical value too
+say b~class~id b                                   -- LogicalWrapper 1: a Rexx logical value too
 if b then say "IF takes it"                        -- IF takes it
-say .lua~eval("(...) and 'true' or 'false'", .lua~false)   -- false (.lua~false is .Boolean~false)
+say .lua~eval("(...) and 'true' or 'false'", .lua~false)   -- false (.lua~false is .LogicalWrapper~false)
 exit
 
 ::requires "lua.cls"

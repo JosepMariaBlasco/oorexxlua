@@ -5,10 +5,10 @@
  * docs/design.md (the comments name its sections, e.g. *States*).
  *
  * Values (docs/design.md, *Values*), Lua -> Rexx: nil -> .nil; boolean ->
- *   .Boolean~true/.Boolean~false; integer -> its decimal string; float -> the shortest string that
+ *   .LogicalWrapper~true/~false; integer -> its decimal string; float -> the shortest string that
  *   gives it back; string -> string; a Rexx object passed in earlier -> that
  *   object; anything else -> a .LuaObject proxy.
- * Rexx -> Lua: .nil -> nil; a .Boolean -> boolean; .LuaObject -> its value;
+ * Rexx -> Lua: .nil -> nil; a .LogicalWrapper (JsonBoolean...) -> boolean; .LuaObject -> its value;
  *   Array -> a new sequence table (copy); a string -> integer, float or string, by a rule that
  *   loses nothing (numberKind, pushRexxString); Routine -> a Lua function;
  *   any other object -> userdata "RexxObject" that Lua can call or send
@@ -1727,28 +1727,32 @@ static RexxObjectPtr newProxy(State *st, int idx)
     return o;
 }
 
-/* .Boolean (boolean.cls, shared by the ooRexx bridges: docs/design.md,
- * *Values*), which lua.cls puts in .local as LUA.BOOLEAN when it loads (the
- * bridge's own name: .environment's BOOLEAN could be anything).  One class
- * per process, also with several instances of the Lua module.  A
- * local reference, or NULLOBJECT where lua.cls is not loaded.             */
-static RexxObjectPtr booleanClass(RexxThreadContext *c)
+/* .LogicalWrapper (ooRexx's logicalwrapper.cls, r13278: RFE #880; the
+ * family's boolean class, oorexx-bridges topics/booleans.md; docs/design.md,
+ * *Values*): lua.cls gives it to the bridge when it loads (Lua_LogicalWrapper),
+ * kept by a global reference.  One class per process, also with several
+ * instances of the Lua module (measured: ooRexx shares a package loaded from
+ * one file across a process's instances); the latest one given wins.
+ * NULLOBJECT before lua.cls is loaded.  Its subclasses (JsonBoolean,
+ * YamlBoolean) are booleans too.                                           */
+static std::atomic<RexxObjectPtr> logicalClass(NULLOBJECT);
+
+static RexxObjectPtr booleanClass(RexxThreadContext *) { return logicalClass.load(); }
+
+// .LuaState~"LUA.LOGICALWRAPPER"(.LogicalWrapper) (lua.cls, when it loads)
+RexxMethod1(RexxObjectPtr, Lua_LogicalWrapper, RexxClassObject, cls)
 {
-    RexxDirectoryObject local = c->GetLocalEnvironment();
-    if (local == NULLOBJECT) return NULLOBJECT;
-    RexxObjectPtr cls = c->DirectoryAt(local, "LUA.BOOLEAN");
-    release(c, local);
-    if (cls == NULLOBJECT || cls == c->Nil()) return NULLOBJECT;
-    return cls;
+    if (logicalClass.load() != (RexxObjectPtr)cls)
+        logicalClass.store(context->RequestGlobalReference((RexxObjectPtr)cls));   // (never released: #2100)
+    return NULLOBJECT;
 }
 
-// Is v a .Boolean (or of a subclass)?  Its logical value in *value.
+// Is v a .LogicalWrapper (or of a subclass)?  Its logical value in *value.
 static bool isBoolean(RexxThreadContext *c, RexxObjectPtr v, bool *value)
 {
     RexxObjectPtr cls = booleanClass(c);
     if (cls == NULLOBJECT) return false;
     bool is = c->IsInstanceOf(v, (RexxClassObject)cls) != 0;
-    release(c, cls);
     if (!is) return false;
     logical_t b = 0;
     if (!c->ObjectToLogical(v, &b)) { c->ClearCondition(); return false; }
@@ -1763,11 +1767,10 @@ static NOINLINE RexxObjectPtr toRexx(State *st, int idx)
     idx = lua_absindex(L, idx);
     switch (lua_type(L, idx)) {
     case LUA_TNIL:     return c->Nil();
-    case LUA_TBOOLEAN: {                    // .Boolean~true, .Boolean~false (*Values*)
+    case LUA_TBOOLEAN: {                    // .LogicalWrapper~true, ~false (*Values*)
         RexxObjectPtr cls = booleanClass(c);
         if (cls == NULLOBJECT) return lua_toboolean(L, idx) ? c->True() : c->False();
         RexxObjectPtr b = c->SendMessage0(cls, lua_toboolean(L, idx) ? "TRUE" : "FALSE");
-        release(c, cls);
         return b != NULLOBJECT ? b : (lua_toboolean(L, idx) ? c->True() : c->False());
     }
     case LUA_TNUMBER: {
@@ -1944,7 +1947,7 @@ static NOINLINE bool pushValue(State *st, RexxObjectPtr v, int memo, int depth)
         if ((RexxObjectPtr)s != v) release(c, s);   // a new String (from a number): see release
         return true;
     }
-    // A .Boolean: Lua's boolean.  A Routine: a real Lua function.  Any other
+    // A .LogicalWrapper (or JsonBoolean, YamlBoolean): Lua's boolean.  A Routine: a real Lua function.  Any other
     // object: a userdata Lua can send messages to (obj:name(...)).
     bool b;
     if (isBoolean(c, v, &b)) { lua_pushboolean(L, b ? 1 : 0); return true; }
@@ -4676,6 +4679,7 @@ RexxMethod0(RexxObjectPtr, Lua_Address)
 RexxMethodEntry rexxlua_methods[] = {
     REXX_METHOD(LuaState_New,       LuaState_New),
     REXX_METHOD(Lua_Graveyard,      Lua_Graveyard),
+    REXX_METHOD(Lua_LogicalWrapper, Lua_LogicalWrapper),
     REXX_METHOD(Lua_AdoptNext,      Lua_AdoptNext),
     REXX_METHOD(Lua_Address,        Lua_Address),
     REXX_METHOD(LuaState_Close,     LuaState_Close),

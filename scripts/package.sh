@@ -50,10 +50,10 @@ TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 STAGE=$TMP/oorexxlua
 mkdir -p "$STAGE/examples" "$TMP/elsewhere"
 [ -f "$BUILD/$MOD" ] || { echo "package.sh: no $BUILD/$MOD (run build.sh)" >&2; exit 2; }
-cp "$BUILD/$PKG" "$BUILD/$MOD" "$BUILD/lua.cls" "$BUILD/boolean.cls" "$STAGE/"
+cp "$BUILD/$PKG" "$BUILD/$MOD" "$BUILD/lua.cls" "$STAGE/"
 [ "$OS" = Windows ] && cp "$BUILD/lua$XY.dll" "$STAGE/"
 if [ -d "$BUILD/texlive" ]; then
-  mkdir -p "$STAGE/texlive" && cp "$BUILD/texlive/$MOD" "$BUILD/texlive/lua.cls" "$BUILD/texlive/boolean.cls" "$STAGE/texlive/"
+  mkdir -p "$STAGE/texlive" && cp "$BUILD/texlive/$MOD" "$BUILD/texlive/lua.cls" "$STAGE/texlive/"
 fi
 # build.sh keeps debug information (-g); users get the binaries without it
 # (and without local symbols), but with the lua_* that C modules need.  On

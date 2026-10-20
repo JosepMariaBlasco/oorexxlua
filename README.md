@@ -10,8 +10,8 @@ Both directions work. **Lua embedded in ooRexx**: an ooRexx native package,
 `.LuaState~new` makes more, independent ones, and `.LuaObject` proxies let
 Rexx use Lua tables, functions and objects as Rexx objects. Rexx routines and
 objects are passed to Lua as functions and userdata that Lua can call back.
-Lua's booleans are `.Boolean~true` and `.Boolean~false` in Rexx, and back
-(`boolean.cls`, the class the ooRexx bridges share). Errors cross in both
+Lua's booleans are `.LogicalWrapper~true` and `~false` in Rexx, and back
+(ooRexx's `logicalwrapper.cls`; JSON's booleans too). Errors cross in both
 directions (a Rexx error is a table with its fields in
 Lua; a Lua error keeps its value in Rexx) and come back as themselves after a
 round trip, and a Ctrl-C stops Lua code with a
@@ -116,10 +116,11 @@ also makes them, as artifacts of the CI run, without a release.
 ## Getting started
 
 You need a C++ compiler (on Windows, MSVC, used from Git Bash in a developer
-command prompt's environment), an ooRexx 5.3.0 r13275 or later with its API
+command prompt's environment), an ooRexx 5.3.0 r13278 or later with its API
 headers (the one installed in `/usr/local`, say, or a portable build) on the
-`PATH` (`WITH` and threads registering command environments need the fixes
-of ooRexx bugs #2111 and #2112, r13274 and r13275), and a
+`PATH` (`.LogicalWrapper` is in ooRexx since r13278; `WITH` and threads
+registering command environments need the fixes of ooRexx bugs #2111 and
+#2112, r13274 and r13275), and a
 Lua: 5.4 by default, or `LUA_VERSION=5.3` or `5.5`.
 
 - On Linux, the distribution's development files (Debian/Ubuntu:
@@ -217,6 +218,4 @@ Written by Josep Maria Blasco, with Claude (Anthropic) as coding assistant.
 
 ## License
 
-Apache License 2.0 (`LICENSE`). `src/boolean.cls`, a copy of the class
-proposed for the ooRexx core (RFE #880), is under the Common Public License
-1.0, as ooRexx (its header).
+Apache License 2.0 (`LICENSE`).

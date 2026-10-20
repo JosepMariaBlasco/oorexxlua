@@ -31,8 +31,9 @@ A Lua C function of the bridge that raises a Lua error (`lua_error`,
 a helper: MSVC's `longjmp` would destroy it again (`docs/design.md`,
 *Errors*). Keep such objects in `NOINLINE` functions.
 
-ooRexx: r13275 or later (the fixes of #2111 and #2112, which `WITH` and
-command environments registered while other threads run need). The CI uses
+ooRexx: r13278 or later (`.LogicalWrapper`, RFE #880; and the fixes of #2111
+and #2112, which `WITH` and command environments registered while other
+threads run need). The CI uses
 the portable builds, pinned to one revision (`OOREXX_REV` in the workflow).
 
 Tests that check a text compare it with `==` or `assertSame`, never `=` or

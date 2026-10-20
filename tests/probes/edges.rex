@@ -25,9 +25,9 @@ say left("2**100 (DIGITS 9)", 34) .lua~eval("return describe(...)", 2**100)
 say left(".true / .false", 34) .lua~eval("return describe(...)", .true) "/" .lua~eval("return describe(...)", .false)
 say left(".false in a Lua condition", 34) .lua~eval("return (...) and 'truthy' or 'falsy'", .false)
 say left(".lua~false in a Lua condition", 34) .lua~eval("return (...) and 'truthy' or 'falsy'", .lua~false)
-say left(".Boolean~true / .Boolean~false", 34) .lua~eval("return describe(...)", .Boolean~true) "/" .lua~eval("return describe(...)", .Boolean~false)
-say left(".Boolean~false in a Lua condition", 34) .lua~eval("return (...) and 'truthy' or 'falsy'", .Boolean~false)
-say left(".lua~true == .Boolean~true", 34) (.lua~true == .Boolean~true) (.lua~true~class~id)
+say left(".LogicalWrapper~true / ~false", 34) .lua~eval("return describe(...)", .LogicalWrapper~true) "/" .lua~eval("return describe(...)", .LogicalWrapper~false)
+say left(".LogicalWrapper~false in Lua's if", 34) .lua~eval("return (...) and 'truthy' or 'falsy'", .LogicalWrapper~false)
+say left(".lua~true == .LogicalWrapper~true", 34) (.lua~true == .LogicalWrapper~true) (.lua~true~class~id)
 say left(".nil", 34) .lua~eval("return describe(...)", .nil)
 a = .array~new(4); a[1] = 1; a[3] = "x"
 say left("sparse Array [1,,x,] (size 4)", 34) .lua~eval("return describe(...)", a)
@@ -67,7 +67,7 @@ do while e \= ""
   else if r~isA(.LuaObject) then say left(x, 34) "LuaObject:" noaddr(r~string)
   else say left(x, 34) "'"r~changestr("00"x, "\0")"'" "len" r~length "datatype" datatype(r)
 end
-say left("true, false: their class", 34) .lua~eval("return true")~class~id .lua~eval("return false")~class~id "(the instances:" (.lua~eval("return true") == .Boolean~true)")"
+say left("true, false: their class", 34) .lua~eval("return true")~class~id .lua~eval("return false")~class~id "(the instances:" (.lua~eval("return true") == .LogicalWrapper~true)")"
 say left("float round trip: 0.1+0.2 back", 34) .lua~eval("return (...) == 0.1 + 0.2", .lua~eval("return 0.1 + 0.2"))
 say left("1e16 + 1 in Rexx", 34) .lua~eval("return 1e16") + 1
 say "--- Names, positions, identity"

@@ -90,7 +90,7 @@ wrong:
   self~assertSame("all", s.17, "a stem's default value")
   self~assertSame("LUAOBJECT", t~class~id)
   self~assertEquals(2, t[2])
-  self~assertTrue(b~isA(.Boolean))
+  self~assertTrue(b~isA(.LogicalWrapper))
   self~assertFalse(var("GONE"))
   .lua~removeCommandEnvironment("VARS")
   .lua~eval("got = nil")

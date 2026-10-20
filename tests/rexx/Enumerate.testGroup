@@ -70,7 +70,7 @@ return testResult
   n = 0
   do with index k item v over t
     n += 1
-    if k~isA(.Boolean) then self~assertSame("yes", v, "true is .Boolean~true")
+    if k~isA(.LogicalWrapper) then self~assertSame("yes", v, "true is .LogicalWrapper~true")
   end
   self~assertSame(3, n, "three keys, no collision in a supplier")
   st = t~makeStringTable

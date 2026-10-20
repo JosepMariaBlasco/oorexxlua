@@ -13,9 +13,9 @@
  *     s~predicate(routine)     a Lua function whose Rexx 1/0 result is a boolean
  *     s~box(type, value)       value as a Lua boolean, integer, float or string,
  *                              or (type "reference") a Rexx object by reference
- *     s~true, s~false          .Boolean~true, .Boolean~false (aliases): Lua's
+ *     s~true, s~false          .LogicalWrapper~true, ~false (aliases): Lua's
  *                              booleans (Rexx 1/0 are both true in Lua)
- *   .Boolean                   boolean.cls (shared by the ooRexx bridges): its
+ *   .LogicalWrapper            ooRexx's logicalwrapper.cls (r13278): its
  *                              two instances are Lua's true and false, both ways
  *     s~close                  lua_close: frees everything; its objects are dead
  *     s~isClosed
@@ -52,12 +52,12 @@
  * while Lua runs, so another thread using the same object would wait for it.
  */
 
-.local["LUA.BOOLEAN"] = .Boolean         -- for the bridge (rexxlua.cpp)
+.LuaState~"LUA.LOGICALWRAPPER"(.LogicalWrapper)   -- for the bridge (rexxlua.cpp)
 .local~lua = .LuaState~"LUA.DEFAULT"
 .LuaState~"LUA.ADDRESS"                 -- ADDRESS LUA (in rexxlua.cpp)
 
 ::requires "rexxlua" LIBRARY
-::requires "boolean.cls"                -- .Boolean: a verbatim copy of oorexx-bridges' shared/boolean
+::requires "logicalwrapper.cls"         -- .LogicalWrapper: ooRexx's (r13278), the family's boolean class
 
 ::class LuaState public
 ::method init
@@ -71,6 +71,7 @@
   return self~new
 ::method "LUA.ADOPTNEXT" class unguarded external "LIBRARY rexxlua Lua_AdoptNext"
 ::method "LUA.ADDRESS" class unguarded  external "LIBRARY rexxlua Lua_Address"
+::method "LUA.LOGICALWRAPPER" class unguarded external "LIBRARY rexxlua Lua_LogicalWrapper"
 -- uninit is Rexx, not native: it only queues the pointer, and the bridge
 -- closes the state at its next call (rexxlua.cpp, drain: ooRexx bug #2101)
 ::method uninit unguarded
@@ -87,8 +88,8 @@
 ::method box unguarded          external "LIBRARY rexxlua LuaState_Box"
 ::method addCommandEnvironment unguarded    external "LIBRARY rexxlua LuaState_AddCommandEnvironment"
 ::method removeCommandEnvironment unguarded external "LIBRARY rexxlua LuaState_RemoveCommandEnvironment"
-::method true unguarded         ; return .Boolean~true     -- (aliases: Lua's true and false)
-::method false unguarded        ; return .Boolean~false
+::method true unguarded         ; return .LogicalWrapper~true     -- (aliases: Lua's true and false)
+::method false unguarded        ; return .LogicalWrapper~false
 ::method "LUA.STATS" unguarded  external "LIBRARY rexxlua LuaState_Stats"   -- for the tests
 
 ::class LuaObject public
