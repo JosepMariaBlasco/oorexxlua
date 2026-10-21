@@ -43,6 +43,17 @@ return testResult
   end
   self~assertTrue(waitAll(done, threads), "every thread got the right results")
 
+-- ~table of a fresh number on many threads: IsInstanceOf asked of a number
+-- with no string value made that string without the kernel lock, corrupting
+-- ooRexx's heap (ooRexx bug #2122): the old code crashed or hung 5 runs of 5
+::method test_table_of_fresh_numbers_on_threads
+  threads = 8
+  done = .queue~new
+  do t = 1 to threads
+    .Worker~new~tables(2000, done)
+  end
+  self~assertTrue(waitAll(done, threads), "every thread got its tables")
+
 ::routine waitAll           -- the results of all the threads (a Queue's pull does not wait)
   use arg done, threads
   do while done~items < threads; call SysSleep 0.01; end
@@ -72,3 +83,15 @@ return testResult
   end
   s~close
   done~queue(ok)
+::method tables
+  use arg n, done
+  reply
+  s = .LuaState~new
+  ok = 1
+  do i = 1 to n
+    if s~table(i * 7 / 3)~luaType \== "table" then ok = 0      -- a number with no string value yet
+    if s~table(i + 0.5)~luaType \== "table" then ok = 0
+  end
+  s~close
+  done~queue(ok)
+

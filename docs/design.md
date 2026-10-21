@@ -90,6 +90,17 @@ would hold the Rexx object while Lua runs.
 `tests/rexx/Threads.testGroup` runs several Rexx threads in one state, with
 callbacks, and several threads with states of their own.
 
+**ooRexx bug #2122.** `IsInstanceOf`, `IsRoutine` and `IsMethod` asked of a
+number that has no string value yet (any result of Rexx arithmetic) make
+that string without the kernel lock: with other threads running Rexx, ooRexx's
+heap is corrupted (found by ooRexx/Python). The bridge never asks them of the
+String family (`isStringFamily`: `IsString`, then `IsOfType(o, "STRING")`):
+`pushValue` turns strings and numbers into Lua values before it asks
+`IsInstanceOf` (`.LogicalWrapper`) or `IsRoutine`, `~table` checks its
+argument, and a call of a boxed value does too. `Threads.testGroup` has the
+test (8 threads making tables of fresh numbers: the old code crashed or hung
+5 runs of 5).
+
 ## Lifetime
 
 The solutions are ooRexx/Python's, for the same ooRexx bugs
