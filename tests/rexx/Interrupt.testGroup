@@ -187,6 +187,38 @@ halt:
 syntax:
   self~assertEquals(4.1, condition("O")~code)
 
+-- A HALT that Rexx code Lua called did not trap comes back to the Rexx caller
+-- as a HALT (oorexx-bridges topics/command-handlers.md, rule 1, the user,
+-- 21/10/2026): the bridge halts the thread, as a real Ctrl-C
+::method test_a_callbacks_halt_is_a_halt_for_signal_on
+  .lua~global("_G")["haltCallback"] = .routines~haltCallback
+  signal on halt
+  .lua~eval('haltCallback(); return "back"')
+  self~fail("no HALT")
+halt:
+  self~assertSame("HALT", condition("C"))
+
+::method test_a_callbacks_halt_is_a_halt_for_call_on
+  .lua~global("_G")["haltCallback"] = .routines~haltCallback
+  self~halted = 0
+  call on halt name h
+  r = .lua~eval('haltCallback(); return "back"')
+  self~assertSame(.nil, r, "the call gives .nil meanwhile")
+  self~assertEquals(1, self~halted, "CALL ON HALT ran, after the clause")
+  return
+h:
+  self~halted += 1
+  return
+::attribute halted
+
+::method test_a_callbacks_halt_untrapped_is_syntax_4_1
+  .lua~global("_G")["haltCallback"] = .routines~haltCallback
+  signal on syntax
+  .lua~eval('haltCallback(); return "back"')
+  self~fail("no SYNTAX")
+syntax:
+  self~assertEquals(4.1, condition("O")~code)
+
 ::routine interruptCallback
   .lua~eval('hello.interrupt()')            -- the HALT of this activation
   do forever; nop; end                      -- comes at its next clause

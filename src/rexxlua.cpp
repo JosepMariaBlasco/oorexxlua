@@ -634,9 +634,16 @@ static int pcallAll(State *st, int nargs)
     }
     bool ctrlC = takeInterrupt(st);
     RexxObjectPtr cond = n < 0 ? conditionOf(st->L, -1) : NULLOBJECT;
-    if (cond != NULLOBJECT && isHalt(st->tc, cond)) {   // a HALT in a callback: Error 4.1, as ADDRESS LUA
-        raiseCondition(st->tc, cond);
+    // A HALT that Rexx code Lua called did not trap (ooRexx made it SYNTAX
+    // 4.1): a HALT again for the Rexx caller, by halting the thread, not by
+    // RaiseCondition, which ooRexx ignores when nobody traps it (the halt
+    // would be lost).  As a real Ctrl-C: SIGNAL ON HALT and CALL ON HALT trap
+    // it at the end of the clause, untrapped it is SYNTAX 4.1.  No condition:
+    // the method gives .nil meanwhile (failed).  oorexx-bridges
+    // topics/command-handlers.md, rule 1 (the user, 21/10/2026).
+    if (cond != NULLOBJECT && isHalt(st->tc, cond)) {
         lua_pop(st->L, 1);
+        st->tc->HaltThread();
         return -1;
     }
     if (ctrlC) st->tc->HaltThread();            // (not twice if ooRexx's handler already did)
@@ -4711,8 +4718,9 @@ static RexxObjectPtr RexxEntry addressLua(RexxExitContext *c, RexxStringObject a
     }
     LuaFailure f;
     int n = pcallQuiet(st, 0, f);
-    // a HALT in a callback (its error, back here): Error 4.1, as ~eval.  Any
-    // other Rexx error is a Lua error of the command: ERROR, with its text
+    // a HALT in a callback (its error, back here): a HALT again, by halting
+    // the thread, as pcallAll does.  Any other Rexx error is a Lua error of
+    // the command: ERROR, with its text
     RexxObjectPtr cond = n < 0 && !st->unwind ? conditionOf(L, -1) : NULLOBJECT;
     bool halt = cond != NULLOBJECT && isHalt(tc, cond);
     if (redirected) {
@@ -4724,16 +4732,15 @@ static RexxObjectPtr RexxEntry addressLua(RexxExitContext *c, RexxStringObject a
         lua_settop(L, top);
         rethrowUnwind(st);
     }
-    if (takeInterrupt(st) && !halt) {           // Ctrl-C: the HALT comes after the command
+    // Ctrl-C, or a HALT in a callback: the HALT comes after the command, RC 1
+    // and no condition (a HALT condition raised here would be ignored when
+    // not trapped)
+    if (takeInterrupt(st) || halt) {
         tc->HaltThread();
         if (n < 0) { lua_settop(L, top); return c->WholeNumber(ADDRESS_RUNTIME); }
     }
     if (n < 0) {
         lua_settop(L, top);
-        if (halt) {                             // (a HALT raised here would be ignored
-            c->RaiseException1(Rexx_Error_Program_interrupted_condition, c->String("HALT"));
-            return NULLOBJECT;                  // when not trapped)
-        }
         return addressCondition(c, command, ADDRESS_RUNTIME, f.full());
     }
     if (n == 0) { c->DropContextVariable("RESULT"); return c->WholeNumber(0); }

@@ -517,12 +517,20 @@ cross whole both ways: a NUL in one does not cut it short.
   from where it came back. Not a 98.900 around it. The table keeps its
   condition object (a weak-keyed table in the registry: the table, the
   object's userdata), and the bridge recognizes the table by its metatable.
-  So a HALT that ends a callback (Error 4.1 there) gives Error 4.1 in the
-  call into Lua too, and the program stops as a HALT stops it (until
+  A HALT is the exception: one that ends a callback untrapped (ooRexx
+  makes it Error 4.1 there, its description, `additional` and result gone)
+  is a **HALT again** for the Rexx code that called into Lua, raised by
+  halting the thread (`HaltThread`), not by `RaiseCondition`, which ooRexx
+  ignores when nobody traps it (the halt would be lost): as a real Ctrl-C,
+  `SIGNAL ON HALT` and `CALL ON HALT` trap it at the end of the clause (the
+  call gives `.nil` meanwhile, so that `CALL ON HALT` can resume it), and
+  untrapped it is Error 4.1, as in plain Rexx (`oorexx-bridges`
+  `topics/command-handlers.md`, rule 1, the user, 21/10/2026; until then
+  it was Error 4.1 directly, which `SIGNAL ON HALT` could not trap; until
   0.2.0, `~eval` and the other calls gave the 98.900; until 0.3.0 the HALT
   was recognized by its text). `error(tostring(e))` is a new Lua error.
   The table is the condition wherever it goes: a HALT's table that Lua keeps
-  and raises in a later call into Lua gives Error 4.1 there too.
+  and raises in a later call into Lua halts there too.
 - A Lua error that goes through Rexx and back to Lua (the 98.900 above,
   which the Rexx code did not trap) is the error value again, not a Rexx
   error around it: the same table, the same string. A `.LuaObject` of
@@ -686,8 +694,8 @@ the clause goes on using can still raise an error before that boundary
 (`x = o~field + 1` gives Error 97.1, `.nil` does not understand `+`), and
 that error, not the HALT, then ends the program. ADDRESS LUA sets RC 1 with no ERROR
 condition, and the HALT comes after the command. If the signal lands while a
-callback's Rexx code runs, ooRexx's HALT is raised there, and the call gives
-Error 4.1 (*Errors*).
+callback's Rexx code runs, ooRexx's HALT is raised there, and the code that
+called into Lua gets a HALT again (*Errors*).
 
 The handler is installed when the first state is opened, once per process,
 and only where Rexx is the host: not in an interpreter instance that the Lua
@@ -760,9 +768,10 @@ is a success (RC 0, `result[2]` is the message). With an error,
 `condition('A')` is Lua's message with its traceback, and
 `condition('D')` the command, as for any command. A Rexx condition inside a
 callback that the command makes is a Lua error, and so an ERROR, except a
-HALT: that one is SYNTAX 4.1 after the command, which stops the program
-unless trapped, as under `~eval` (a HALT condition raised by a command
-handler is ignored when not trapped, so it would be lost). A Ctrl-C while
+HALT: that one is a HALT again after the command (RC 1), by halting the
+thread, as under `~eval` (a HALT condition raised by a command handler is
+ignored when not trapped, so it would be lost): `SIGNAL ON HALT` and `CALL
+ON HALT` trap it, untrapped it is SYNTAX 4.1. A Ctrl-C while
 the command runs: RC 1 and no condition, then the HALT (*Ctrl-C*). A NUL in Lua's
 message is kept. Commands
 do not set RESULT in the language; this environment does, and
@@ -953,8 +962,9 @@ a Lua error, as in any callback.
 **Errors.** A Lua error in the handler is **SYNTAX 98.900** in the code that
 issued the command, `additional` as for any Lua error reaching Rexx
 (*Errors*: `[1]` the message, `[2]` the error value, `[3]` Lua's traceback);
-a Rexx condition that went through Lua is itself; a HALT is Error 4.1, as
-from `~eval`. (`ADDRESS LUA` differs, on purpose: there the command *is* Lua
+a Rexx condition that went through Lua is itself; a HALT is a HALT again
+after the command (RC 1), as from `~eval` (*Errors*: `SIGNAL ON HALT`,
+`CALL ON HALT`, untrapped SYNTAX 4.1). (`ADDRESS LUA` differs, on purpose: there the command *is* Lua
 code, and its failing is the command's ERROR; here it is the handler's own
 bug.) A handler whose state is closed, or the host's state on another
 thread than its own (*Lua → ooRexx*), is SYNTAX 98.900 too. A Ctrl-C while

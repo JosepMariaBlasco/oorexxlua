@@ -227,6 +227,45 @@ x:
   self~assertSame("USER d", r~call)
   .lua~removeCommandEnvironment("RAISES2")
 
+-- a HALT in Rexx code the handler called: a HALT again for the issuer (rule
+-- 1, the user, 21/10/2026), as a real Ctrl-C: SIGNAL ON HALT, CALL ON HALT
+-- (after the command, RC 1), untrapped SYNTAX 4.1
+::method haltHandler
+  .lua~addCommandEnvironment("HALTS", .lua~eval("local f = ...; return function() f(); return 5 end", -
+    .routine~new("h", "raise halt")))
+
+::method test_a_halt_through_a_handler_signal_on
+  self~haltHandler
+  signal on halt
+  address halts 'x'
+  self~fail("no HALT")
+halt:
+  self~assertSame("HALT", condition("C"))
+  .lua~removeCommandEnvironment("HALTS")
+
+::method test_a_halt_through_a_handler_call_on
+  self~haltHandler
+  self~halted = 0
+  call on halt name h
+  address halts 'x'
+  self~assertEquals(1, rc, "RC 1, as ADDRESS LUA after a Ctrl-C")
+  self~assertEquals(1, self~halted, "CALL ON HALT ran")
+  .lua~removeCommandEnvironment("HALTS")
+  return
+h:
+  self~halted += 1
+  return
+::attribute halted
+
+::method test_a_halt_through_a_handler_untrapped
+  self~haltHandler
+  signal on syntax
+  address halts 'x'
+  self~fail("no SYNTAX")
+syntax:
+  self~assertEquals(4.1, condition("O")~code)
+  .lua~removeCommandEnvironment("HALTS")
+
 ::method test_ctx_after_the_command
   .lua~addCommandEnvironment("KEEP", self~handler("kept = ctx"))
   address keep 'x'
