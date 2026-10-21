@@ -216,6 +216,17 @@ x:
   self~assertSame("a", c~additional)
   .lua~removeCommandEnvironment("RAISES")
 
+-- the same under ::OPTIONS ERROR SYNTAX: still USER X (it comes back by the
+-- unwind, not by the handler's RaiseCondition, so ooRexx bug #2119, fixed in
+-- r13282, never touched it: measured on r13278 too)
+::method test_a_user_condition_under_options_error_syntax
+  .lua~addCommandEnvironment("RAISES2", .lua~eval("local o = ...; return function() return o:boom() end", .Boom2~new))
+  r = .routine~new("r", .array~of("signal on user x", "signal on syntax", "address raises2 'go'", -
+      "return 'nothing'", "x: return 'USER' condition('o')~description", -
+      "syntax: return 'SYNTAX' condition('o')~code", "::options error syntax"))
+  self~assertSame("USER d", r~call)
+  .lua~removeCommandEnvironment("RAISES2")
+
 ::method test_ctx_after_the_command
   .lua~addCommandEnvironment("KEEP", self~handler("kept = ctx"))
   address keep 'x'
