@@ -10,9 +10,9 @@ Source, documentation and design: https://github.com/JosepMariaBlasco/oorexxlua
 
 ## What you need
 
-- **ooRexx 5.3.0** (beta, from
+- **ooRexx 5.3.0, r13286 or later** (beta, from
   [SourceForge](https://sourceforge.net/projects/oorexx/files/oorexx/5.3.0beta/)),
-  installed so that `rexx` runs.
+  installed so that `rexx` runs (`rexx -v` gives the revision).
 - **No Lua**: this package carries its own (the version in the zip's name;
   `LICENSE-Lua.txt` says which release). Pick the Lua version your Lua code
   and your Lua C modules are made for; 5.4 if unsure.

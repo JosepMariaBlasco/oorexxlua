@@ -13,8 +13,8 @@
 # with the same Lua as the build's (scripts/build-cmodule.sh: LUA_VERSION,
 # default 5.4, LUA_STATIC, LUA_CFLAGS).  TESTS="Threads.testGroup" to choose;
 # TIMEOUT= seconds per group (default 300); logs in OUT (default
-# /tmp/orxlua-tests).  Needs ooRexx r13275 or later (#2111, #2112: WITH, and
-# command environments registered while other threads run).
+# /tmp/orxlua-tests).  Needs ooRexx r13286 or later (#2111, #2112: WITH, and
+# command environments registered while other threads run; #2122: threads).
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 WORK=${ORXLUA_WORK:-$(cd "$HERE/../.." && pwd)}

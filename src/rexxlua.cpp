@@ -1109,8 +1109,6 @@ static RexxBox *upvalueBox(lua_State *L)
     return b;
 }
 
-static bool isStringFamily(RexxThreadContext *c, RexxObjectPtr o);
-
 static int rexxCallBack(lua_State *L, RexxObjectPtr target, const char *message, int first)
 {
     USE_THREAD(L);
@@ -1124,7 +1122,7 @@ static int rexxCallBack(lua_State *L, RexxObjectPtr target, const char *message,
     }
     RexxObjectPtr r = NULLOBJECT;
     bool ran = guarded(st, [&] {
-        if (message == NULL && !isStringFamily(c, target) && c->IsRoutine(target))   // (#2122)
+        if (message == NULL && c->IsRoutine(target))
             r = c->CallRoutine((RexxRoutineObject)target, args);
         else
             r = c->SendMessage(target, message ? message : "CALL", args);
@@ -1756,20 +1754,7 @@ RexxMethod1(RexxObjectPtr, Lua_LogicalWrapper, RexxClassObject, cls)
     return NULLOBJECT;
 }
 
-/* Is o of the String family (a String, a number, a subclass)?  IsString only
- * compares the class; IsOfType takes the kernel lock.  IsInstanceOf,
- * IsRoutine and IsMethod must never be asked of one: of a number with no
- * string value yet (any result of Rexx arithmetic) they make that string
- * without the kernel lock, which corrupts ooRexx's heap while other threads
- * run Rexx (ooRexx bug #2122, found by oorexxpython; its workaround, as
- * here: oorexx-bridges oorexx-bugs/2026-10-20-isinstanceof-allocates-unlocked.md). */
-static bool isStringFamily(RexxThreadContext *c, RexxObjectPtr o)
-{
-    return c->IsString(o) || c->IsOfType(o, "STRING");
-}
-
 // Is v a .LogicalWrapper (or of a subclass)?  Its logical value in *value.
-// (pushValue asks only of what is not of the String family: #2122.)
 static bool isBoolean(RexxThreadContext *c, RexxObjectPtr v, bool *value)
 {
     RexxObjectPtr cls = booleanClass(c);
@@ -2325,10 +2310,9 @@ RexxMethod2(RexxObjectPtr, LuaState_Table, OPTIONAL_RexxObjectPtr, src, CSELF, s
     // SUPPLIER (what DO WITH ... OVER sees): an own SUPPLIER is honoured, and
     // what it only computes (UNKNOWN) is not copied (oorexx-bridges,
     // topics/directory-crossing.md, the amendment to point 2)
-    // (IsInstanceOf never of a string or a number: ooRexx bug #2122, isStringFamily)
     else if (c->IsDirectory(src) || c->IsStringTable(src) ||
-             (!isStringFamily(c, src) && (c->IsInstanceOf(src, c->FindClass("DIRECTORY")) ||
-                                          c->IsInstanceOf(src, c->FindClass("STRINGTABLE"))))) {
+             c->IsInstanceOf(src, c->FindClass("DIRECTORY")) ||
+             c->IsInstanceOf(src, c->FindClass("STRINGTABLE"))) {
         lua_newtable(L);
         RexxObjectPtr sup = c->SendMessage0(src, "SUPPLIER");
         if (c->CheckCondition()) { lua_settop(L, top); return NULLOBJECT; }
@@ -2341,7 +2325,7 @@ RexxMethod2(RexxObjectPtr, LuaState_Table, OPTIONAL_RexxObjectPtr, src, CSELF, s
             c->SupplierNext((RexxSupplierObject)sup);
         }
     }
-    else if (!isStringFamily(c, src) && c->IsInstanceOf(src, c->FindClass("ARRAY"))) {
+    else if (c->IsInstanceOf(src, c->FindClass("ARRAY"))) {
         int r = pushArraySubclass(st, src);
         if (r == 2) { lua_settop(L, top); return NULLOBJECT; }
         if (r == 1) { raiseTop(st); lua_settop(L, top); return NULLOBJECT; }

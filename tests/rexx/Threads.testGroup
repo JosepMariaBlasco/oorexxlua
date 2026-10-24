@@ -43,9 +43,10 @@ return testResult
   end
   self~assertTrue(waitAll(done, threads), "every thread got the right results")
 
--- ~table of a fresh number on many threads: IsInstanceOf asked of a number
--- with no string value made that string without the kernel lock, corrupting
--- ooRexx's heap (ooRexx bug #2122): the old code crashed or hung 5 runs of 5
+-- ~table of a fresh number on many threads: before ooRexx r13286 (bug #2122)
+-- IsInstanceOf asked of a number with no string value made that string
+-- without the kernel lock, corrupting ooRexx's heap: without the fix (or the
+-- bridge's old workaround) it crashed or hung 5 runs of 5
 ::method test_table_of_fresh_numbers_on_threads
   threads = 8
   done = .queue~new

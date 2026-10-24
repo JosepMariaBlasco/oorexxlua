@@ -90,16 +90,15 @@ would hold the Rexx object while Lua runs.
 `tests/rexx/Threads.testGroup` runs several Rexx threads in one state, with
 callbacks, and several threads with states of their own.
 
-**ooRexx bug #2122.** `IsInstanceOf`, `IsRoutine` and `IsMethod` asked of a
-number that has no string value yet (any result of Rexx arithmetic) make
-that string without the kernel lock: with other threads running Rexx, ooRexx's
-heap is corrupted (found by ooRexx/Python). The bridge never asks them of the
-String family (`isStringFamily`: `IsString`, then `IsOfType(o, "STRING")`):
-`pushValue` turns strings and numbers into Lua values before it asks
-`IsInstanceOf` (`.LogicalWrapper`) or `IsRoutine`, `~table` checks its
-argument, and a call of a boxed value does too. `Threads.testGroup` has the
-test (8 threads making tables of fresh numbers: the old code crashed or hung
-5 runs of 5).
+**Needs ooRexx r13286 (bug #2122).** Before it, `IsInstanceOf`, `IsRoutine`
+and `IsMethod` asked of a number that has no string value yet (any result of
+Rexx arithmetic) made that string without the kernel lock: with other threads
+running Rexx, ooRexx's heap was corrupted (found by ooRexx/Python). r13286
+makes the three calls take the lock. Until 0.4.0 the bridge never asked them
+of the String family (a check with `IsString` and `IsOfType` first); that
+workaround went with r13286 as the minimum (the user, 24/10/2026).
+`Threads.testGroup` keeps the test (8 threads making tables of fresh numbers:
+without the fix or the workaround it crashed or hung 5 runs of 5).
 
 ## Lifetime
 
