@@ -2,8 +2,9 @@
 # Linux, macOS (arm64 and x64) and Windows: one job per platform and Lua,
 # since the bridge is compiled against one Lua. ooRexx comes from its
 # portable builds on SourceForge, pinned to one revision; a newer one is
-# taken deliberately, after checking it (r13286, the family's revision since
-# 24/10/2026: #2122 fixed; r13284, 23/10/2026: #2120 fixed, to stay on the latest trunk; r13282, 21/10/2026: #2119 fixed; r13278 was the first with .LogicalWrapper, RFE #880; r13275 brought the fixes of bugs #2111 and
+# taken deliberately, after checking it (r13289, the family's revision since
+# 25/10/2026: RFE #882, command environments written in Rexx, and #2121;
+# r13286, 24/10/2026: #2122 fixed; r13284, 23/10/2026: #2120 fixed, to stay on the latest trunk; r13282, 21/10/2026: #2119 fixed; r13278 was the first with .LogicalWrapper, RFE #880; r13275 brought the fixes of bugs #2111 and
 # #2112, which WITH and command environments registered while other threads
 # run need). Lua: on Linux, 5.3 and 5.4 are the
 # distribution's (shared liblua, through pkg-config); everything else is
@@ -30,7 +31,7 @@ on:
   workflow_dispatch:
 
 env:
-  OOREXX_REV: "13286"
+  OOREXX_REV: "13289"
   OOREXX_URL: https://downloads.sourceforge.net/project/oorexx/oorexx/5.3.0beta/portable
 
 jobs:
