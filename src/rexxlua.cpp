@@ -1045,10 +1045,18 @@ static RexxObjectPtr conditionOf(lua_State *L, int idx)
 }
 
 // The string value of a Rexx object, or false with a condition pending (its
-// `string` method can raise one: ObjectToString then returns NULL)
+// `string` method can raise one).  A String is itself; anything else is sent
+// STRING, as o~string: ObjectToString goes through requestString, which
+// raises NOSTRING in the caller when the caller traps it (SIGNAL ON NOSTRING),
+// as Rexx does when it uses an object as a string, and clearing the API's
+// condition does not undo that (found by oorexxwasm, oorexx-bridges, 25/10/2026).
 static bool stringValue(RexxThreadContext *c, RexxObjectPtr o, RexxStringObject &s)
 {
-    s = c->ObjectToString(o);
+    if (c->IsString(o)) { s = (RexxStringObject)o; return true; }
+    RexxObjectPtr r = c->SendMessage0(o, "STRING");
+    if (r == NULLOBJECT || c->CheckCondition()) return false;
+    if (c->IsString(r)) { s = (RexxStringObject)r; return true; }
+    s = c->ObjectToString(r);                   // a STRING that gave no String (a subclass, say)
     return s != NULLOBJECT && !c->CheckCondition();
 }
 

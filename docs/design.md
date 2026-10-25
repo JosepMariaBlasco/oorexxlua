@@ -305,7 +305,7 @@ object that is not a string or an Array goes by reference, as a userdata
 | `#obj` | `obj~items` |
 | `pairs(obj)` | `obj~supplier`: index, item |
 | `obj(args)` | `obj~call(args)` |
-| `tostring(obj)` | `obj~string` |
+| `tostring(obj)` | `obj~string` (sent as a message: no NOSTRING in a caller that traps it) |
 
 In Lua, `obj.k` and `obj["k"]` are the same thing, so a key cannot be both a
 message and an index: string keys are messages, every other key is Rexx's

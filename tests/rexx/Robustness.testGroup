@@ -113,6 +113,25 @@ syntax:
   self~assertTrue(msg~pos("nested more than 1000 deep") > 0, msg)
   self~assertEquals(3, .lua~eval("return #(...)", .array~of(1, 2, 3)))
 
+-- an object that is not a string, made text by the bridge (tostring in Lua,
+-- string.format, .., s~box("string", o)): its ~string, and no NOSTRING in
+-- the caller that traps it (ObjectToString would raise it there; found by
+-- oorexxwasm, oorexx-bridges 25/10/2026)
+::method test_no_nostring_in_the_caller
+  signal on nostring
+  do o over .array~of(.object~new, .Plain~new)
+    name = o~string
+    self~assertSame(name, .lua~eval("return tostring(...)", o))
+    self~assertSame(name, .lua~eval("return string.format('%s', ...)", o))
+    self~assertSame("x" || name, .lua~eval("return 'x' .. tostring(...)", o))
+    self~assertSame("string", .lua~eval("return type(...)", .lua~box("string", o)))
+  end
+  return
+nostring:
+  self~fail("NOSTRING in the caller, line" sigl)
+
+::class Plain
+
 ::class Bad
 ::method string
   raise syntax 40.1 array ("Bad~string")
