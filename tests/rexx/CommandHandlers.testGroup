@@ -261,6 +261,21 @@ x:
   self~assertSame("USER d", r~call)
   self~unreg("RAISES2")
 
+-- a SIGNAL ON in the issuer for a condition that a Rexx method raises, sent
+-- from the Lua handler on the context Rexx handed it: the SIGNAL unwinds
+-- through Lua's frames, which the bridge catches and gives back (docs/
+-- design.md, *Errors*: SIGNAL past Lua). oorexx-bridges, lesson 4 of
+-- 25/10/2026 (on .NET the process ended); every condition, many times
+::method test_a_signal_through_lua_for_any_condition
+  self~reg("SIG", .lua~eval("local o = ...; return function(cmd) return o[cmd](o) end", .Raiser~new))
+  do kind over .array~of("HALT", "USER", "NOTREADY", "ERROR", "FAILURE")
+    n = 0
+    do i = 1 to 100; n += signalThrough(kind); end
+    self~assertEquals(100, n, kind "trapped by SIGNAL ON every time")
+  end
+  self~assertEquals(0, .lua~eval("return select('#', ...)"), "Lua's stack as it was")
+  self~unreg("SIG")
+
 -- a HALT in Rexx code the Lua handler called (host code): a HALT again for
 -- the issuer (rule 1, the user, 21/10/2026; kept by rule 6 for host code),
 -- as a real Ctrl-C: SIGNAL ON HALT, CALL ON HALT (after the command, RC 1),
@@ -401,6 +416,14 @@ syntax:
 syntax:
   return condition("O")~code
 
+::routine signalThrough     -- 1 if the SIGNAL ON for kind trapped what the handler's method raised
+  use arg kind
+  trap = kind; if kind == "USER" then trap = "USER X"
+  interpret "signal on" trap "name trapped"
+  address sig kind
+  return 0
+trapped: return 1
+
 ::routine waitAll           -- the results of all the threads (a Queue's pull does not wait)
   use arg done, threads
   do while done~items < threads; call SysSleep 0.01; end
@@ -444,6 +467,13 @@ failure:
 ::method command
   use arg command, caller
   return 1000 + command~length
+
+::class Raiser
+::method halt;     raise halt
+::method user;     raise user x description "d"
+::method notready; raise notready
+::method error;    raise error 5
+::method failure;  raise failure 6
 
 ::class Boom2
 ::method boom
