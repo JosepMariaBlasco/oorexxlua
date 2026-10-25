@@ -6,4 +6,6 @@ ok: 0
 no: bad
 ERROR 8 bad
 98.900 eval:1: oops
+3 2
+0 42
 FAILURE 30

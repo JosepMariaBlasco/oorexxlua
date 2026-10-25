@@ -23,12 +23,16 @@
  *   ADDRESS LUA                commands are Lua code, run in .lua: RC 0 and
  *                              the results in RESULT, or ERROR / FAILURE with
  *                              Lua's message as condition('A')
- *     s~addCommandEnvironment(name, handler)
- *                              ADDRESS name runs handler(command, ctx), a Lua
- *                              function (a .LuaObject), in its state: RC its
- *                              value; again: replaced
- *     s~removeCommandEnvironment(name)
- *                              ADDRESS name: FAILURE RC 30 from now on
+ *     s~commandHandler(f)      a .LuaCommandHandler of f (a .LuaObject of a Lua
+ *                              function, or of a value with __call)
+ *
+ *   .LuaCommandHandler         a command handler of ooRexx's (it inherits
+ *                              .CommandHandler) written in Lua:
+ *                                .CommandHandler~register(name, s~commandHandler(f))
+ *                              and ADDRESS name runs f(command, caller), caller
+ *                              the core's .CommandContext: RC its value; the
+ *                              rest (stacking, deregister...) is the core's
+ *     h~handler                its Lua callable
  *
  *   .LuaObject                 a Lua value by reference, in one .LuaState
  *     o~name(args...)          field (any case), called if a function, as
@@ -86,11 +90,27 @@
 ::method table unguarded        external "LIBRARY rexxlua LuaState_Table"
 ::method predicate unguarded    external "LIBRARY rexxlua LuaState_Predicate"
 ::method box unguarded          external "LIBRARY rexxlua LuaState_Box"
-::method addCommandEnvironment unguarded    external "LIBRARY rexxlua LuaState_AddCommandEnvironment"
-::method removeCommandEnvironment unguarded external "LIBRARY rexxlua LuaState_RemoveCommandEnvironment"
+::method commandHandler unguarded
+  use strict arg handler
+  return .LuaCommandHandler~new(handler)
 ::method true unguarded         ; return .LogicalWrapper~true     -- (aliases: Lua's true and false)
 ::method false unguarded        ; return .LogicalWrapper~false
 ::method "LUA.STATS" unguarded  external "LIBRARY rexxlua LuaState_Stats"   -- for the tests
+
+-- A command environment written in Lua: a core command handler (ooRexx
+-- r13288, RFE #882), registered with .CommandHandler~register (oorexx-bridges,
+-- topics/command-handlers.md, rule 6; docs/design.md, *Command environments*)
+::class LuaCommandHandler public inherit CommandHandler
+::method init
+  expose handler
+  use strict arg handler
+  if \handler~isA(.LuaObject) then
+    raise syntax 93.900 array("LuaCommandHandler: the handler must be a Lua function, or a Lua value with __call (a .LuaObject)")
+  if \handler~"LUA.CALLABLE" then
+    raise syntax 93.900 array("LuaCommandHandler: the handler must be a Lua function, or a Lua value with __call")
+::attribute handler get unguarded
+-- native: no Rexx activation between the issuer and the Lua code (rexxlua.cpp)
+::method command unguarded      external "LIBRARY rexxlua LuaCmd_Command"
 
 ::class LuaObject public
 ::method init
@@ -117,6 +137,7 @@
 ::method all unguarded          external "LIBRARY rexxlua LuaObj_All"
 ::method call unguarded         external "LIBRARY rexxlua LuaObj_Call"
 ::method callAll unguarded      external "LIBRARY rexxlua LuaObj_CallAll"
+::method "LUA.CALLABLE" unguarded external "LIBRARY rexxlua LuaObj_Callable"
 ::method get unguarded          external "LIBRARY rexxlua LuaObj_Get"
 ::method "[]" unguarded         external "LIBRARY rexxlua LuaObj_At"
 ::method "[]=" unguarded        external "LIBRARY rexxlua LuaObj_Put"

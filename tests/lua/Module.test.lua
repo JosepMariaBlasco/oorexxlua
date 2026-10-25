@@ -296,24 +296,31 @@ T.test("ADDRESS LUA runs in the host's state, in every instance", function()
   addressCount = nil
 end)
 
-T.test("command environments written in Lua: command_environments, add, remove", function()
+T.test("command environments written in Lua: command_environments, add, remove (the core's)", function()
   local seen
   local function calc(command, ctx)
     seen = ctx
     local f = load("return " .. command)
-    ctx:set_var("RESULT", f())
+    ctx:setVar("RESULT", f())
     return 0
   end
   local r = rexx.interpreter{command_environments = {calc = calc,
-    LOG = function(command, ctx) ctx:set_var("LOGGED", command) end}}
+    LOG = function(command, ctx) ctx:setVar("LOGGED", command) end}}
   T.eq(r.routine("address calc '2^10'; return rc result")(), "0 1024.0")
   T.eq(r.routine("address log 'hi'; return rc logged")(), "0 hi")
-  T.fails("has ended", seen.get_var, seen, "X")
-  r.add_command_environment("calc", function(command) return #command end)
-  T.eq(r.routine("address calc 'abcd'; return rc")(), 4, "replaced")
-  r.add_command_environment("NEW", function() return -1 end)
+  T.eq(seen:isValid(), 0, "the core's context, ended")
+  T.ok(not pcall(seen.getVar, seen, "X"))
+  -- add: the core's register, which stacks and gives back what it covers
+  local covered = r.add_command_environment("calc", function(command) return #command end)
+  T.eq(covered:handler(), calc, "the handler covered, a .LuaCommandHandler")
+  T.eq(r.routine("address calc 'abcd'; return rc .CommandHandler~handlers('CALC')~items")(), "4 2", "stacked")
+  T.eq(r.add_command_environment("NEW", function() return -1 end), nil, "nothing covered")
   T.eq(r.routine("address new 'x'; return rc")(), -1, "a new name, at run time; the sign raises nothing")
-  r.remove_command_environment("calc")
+  -- remove: the core's deregister, which gives back what it removed
+  local removed = r.remove_command_environment("calc")
+  T.eq(type(removed:handler()), "function")
+  T.eq(r.routine("address calc '2^3'; return rc result")(), "0 8.0", "the one below again")
+  r.remove_command_environment("CALC")
   T.eq(r.routine([[
     signal on failure
     address calc 'x'
@@ -331,22 +338,17 @@ T.test("command environments written in Lua: command_environments, add, remove",
     return "no SYNTAX"
     syntax: return condition('O')~code condition('O')~additional[2]~code
   ]])(), "98.900 42")
-  -- the module's default instance, and wrong arguments
+  -- the module's default instance, and the core's errors (a Lua error here)
   rexx.add_command_environment("DOUBLE", function(command) return 2 * tonumber(command) end)
   T.eq(rexx.routine("address double 21; return rc")(), 42)
   rexx.remove_command_environment("DOUBLE")
-  T.fails("remove_command_environment", rexx.add_command_environment, "X", nil)
-  T.fails("expected", rexx.add_command_environment, "X", {})
-  T.fails("own environment", rexx.add_command_environment, "lua", calc)
-  T.fails("empty", rexx.add_command_environment, "", calc)
-  T.fails("own environment", rexx.remove_command_environment, "LUA")
-  T.fails("remove_command_environment: Double has no handler", rexx.remove_command_environment, "Double")  -- removed already
-  T.fails("NEVER has no handler", r.remove_command_environment, "NEVER")
-  local ok, e = pcall(rexx.remove_command_environment, "NEVER")
-  T.eq(type(e), "string", "a plain Lua error")
+  T.fails("93.900", rexx.remove_command_environment, "Double")  -- removed already
+  T.fails("there is no command environment named NEVER", r.remove_command_environment, "NEVER")
+  T.fails("handler must be", rexx.add_command_environment, "X", nil)
+  T.fails("handler must be", rexx.add_command_environment, "X", {})
+  T.fails("non-empty", rexx.add_command_environment, "", calc)
   T.fails("must be a function", rexx.interpreter, {command_environments = {X = 1}})
   T.fails("twice", rexx.interpreter, {command_environments = {x = calc, X = calc}})
-  T.fails("own environment", rexx.interpreter, {command_environments = {Lua = calc}})
   T.fails("must be a table", rexx.interpreter, {command_environments = "x"})
   -- another Rexx thread cannot run Lua of the host's state: SYNTAX
   T.eq(r.routine([[
@@ -358,7 +360,7 @@ T.test("command environments written in Lua: command_environments, add, remove",
     ::class Addresser
     ::method run class
       address new 'x'
-  ]])(), "98.900 Lua error: the Lua state that runs ooRexx can only be used from its own thread.")
+  ]])(), "98.900 Lua error: the LuaState of the Lua that runs ooRexx can only be used from that Lua's thread.")
   r.close()
 end)
 

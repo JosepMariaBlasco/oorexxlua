@@ -885,47 +885,54 @@ have them).
 ## Command environments
 
 Lua functions can be `ADDRESS` environments: `address calc '2+2'` calls a
-Lua function with the command. The bridges of the family behave alike here
-(oorexx-bridges, `topics/command-handlers.md`, decided by the user,
-19/10/2026); the names are each host's.
+Lua function with the command. Since ooRexx r13288 the interpreter has
+command environments written in Rexx (RFE #882: `.CommandHandler`,
+`.CommandContext`), and a Lua handler is one of them: a
+**`.LuaCommandHandler`**, a class that inherits `.CommandHandler`,
+registered with the core's `.CommandHandler~register`. So what a Rexx
+program sees (names, stacking, `deregister`, `handlers`, `handler`,
+`environments`, their errors, the context) is the core's (oorexx-bridges,
+`topics/command-handlers.md`, rule 6, the user, 25/10/2026).
 
 ```rexx
 calc = .lua~eval("return function(command, ctx)" -
-                 "  ctx:set_var('RESULT', load('return ' .. command)())" -
+                 "  ctx:setVar('RESULT', load('return ' .. command)())" -
                  "  return 0" -                         -- RC
                  "end")
-.lua~addCommandEnvironment("CALC", calc)
+.CommandHandler~register("CALC", .lua~commandHandler(calc))
 address calc '2^10'                                      -- RC 0, RESULT 1024.0
-.lua~removeCommandEnvironment("CALC")                    -- now FAILURE RC 30
+.CommandHandler~deregister("CALC")                       -- now FAILURE RC 30
 ```
 
 ```lua
 local rexx = require "oorexx"
 local r = rexx.interpreter{command_environments = {CALC = calc}}
-r.add_command_environment("LOG", function(command, ctx) ctx:output("log: " .. command) end)
+r.add_command_environment("LOG", function(command, ctx) print("log: " .. command) end)
 r.remove_command_environment("LOG")
 rexx.add_command_environment("DOUBLE", function(c) return 2 * tonumber(c) end)   -- the default instance
 ```
 
-**Registering.** From Rexx, `addCommandEnvironment(name, handler)` and
-`removeCommandEnvironment(name)` of any `.LuaState` (`.lua` is the usual
-one); from Lua, `add_command_environment` and `remove_command_environment`
-of an instance, or of the module for its default instance (or, in Lua that
-Rexx runs, for the instance running), and the option
-`command_environments` (name → handler) of `interpreter{...}`. An
-environment belongs to the instance it was registered in. Names are
-uppercase, as Rexx's (`address calc` and `address value 'calc'` find
-`CALC`); `LUA` is the bridge's own (*ADDRESS LUA*) and cannot be taken, nor
-an empty name. Adding a name again replaces its handler. The handler is a
-Lua function, or a Lua value with `__call` (a `.LuaObject` from Rexx), of
-any `.LuaState`: that state runs it. Anything else, `.nil`/`nil` included,
-is an error: **removing is `removeCommandEnvironment`**, never registering
-nothing. Removing a name that has no handler (never added, or removed
-already) is an error too (the user, 19/10/2026: no silent no-op). Both
-return nothing. From Rexx these errors, and a name that is not a string,
-empty or `LUA`, are **SYNTAX 93.900**, an incorrect argument (the user,
-19/10/2026: 98.900 is for errors that come from Lua, as a handler whose
-state is closed); from Lua, Lua errors.
+**Registering.** From Rexx, `.CommandHandler~register(name,
+s~commandHandler(f))` (or `.LuaCommandHandler~new(f)`) and
+`.CommandHandler~deregister(name)`, the core's: a second `register` of a
+name **stacks** (and gives back the handler it covers, `.nil` if none),
+`deregister` gives back the one it removed and uncovers the one below; a
+name with no handler, `.nil` as handler, an empty name: the core's SYNTAX
+93.900. `f` is a Lua function, or a Lua value with `__call` (a
+`.LuaObject` from Rexx), of any `.LuaState`: that state runs it; anything
+else is SYNTAX 93.900 from `commandHandler` / `.LuaCommandHandler~new`.
+`h~handler` is its Lua callable. From Lua, `add_command_environment(name,
+f)` and `remove_command_environment(name)` of an instance, or of the module
+for its default instance (or, in Lua that Rexx runs, for the instance
+running), and the option `command_environments` (name → handler) of
+`interpreter{...}`: they are the same `register` (with a
+`.LuaCommandHandler` of `f`) and `deregister`, run in that instance, and
+answer what they answer (the handler covered, the one removed: Rexx objects
+in Lua; `nil` for `.nil`); their errors are Lua errors. Lua handlers and
+handlers written in Rexx stack on each other either way, and over `ADDRESS
+LUA` too (which `deregister` uncovers again). `.lua~addCommandEnvironment`
+and `~removeCommandEnvironment` (0.3.0) are retired (the user, 25/10/2026:
+no aliases).
 
 **The handler** is called as `handler(command, ctx)`, on the Rexx thread
 that issued the command, holding its state's lock (*Threads*):
@@ -933,65 +940,61 @@ that issued the command, holding its state's lock (*Threads*):
 - `command`: a Lua string, the command as Rexx evaluated it (bytes as they
   are; never a number, even when it looks like one).
 - **RC is the handler's value**, by the rules of *Values* (`nil` or none:
-  0), **whatever its sign**: a positive or negative RC raises nothing, as in
-  every bridge of the family and as ooRexx does for any handler (only the
-  system's commands raise ERROR and FAILURE, on their own).
-- `ctx`, valid only while the command runs; afterwards its methods raise "this
-  command context belongs to a command that has ended". Methods, with
-  Python's names:
+  0), **whatever its sign**: a positive or negative RC raises nothing.
+- `ctx`: **the core's `.CommandContext`**, a Rexx object in Lua (*Rexx
+  objects in Lua*), with the core's methods and names: `ctx:getVar(name)`,
+  `setVar`, `hasVar`, `dropVar`, `variables`; `ctx:input()` (a
+  `.CommandInput`: `linein`, `lines`, `charin`...), `ctx:output()` and
+  `ctx:error()` (`.CommandOutput`s: `lineout`, `charout`...), which **raise
+  an error without `WITH`** (ask `ctx:isRedirected("Output")` first; then
+  write to the console yourself, `print`); `ctx:raise(condition, rc
+  [, description, additional])`, `ctx:raiseError(rc)`, `ctx:raiseFailure(rc)`
+  (the condition after the command; they give back `rc`, so `return
+  ctx:raiseError(8)`); `ctx:environment()`, `ctx:isValid()`, `ctx:finish()`.
+  Valid only while the command runs: afterwards `isValid` is 0 and the
+  other methods raise an error. Two differences from a handler written in
+  Rexx, both from Lua: **no `[]` on the context** (`ctx["X"]` is the
+  bridge's member lookup, a string key being a message: use
+  `ctx:getVar("X")`; a rule mixing the two would silently give the method
+  for a variable named like one, `OUTPUT`, `RAISE`..., the user,
+  25/10/2026), and **the core's logical results are Rexx's 0 and 1**,
+  numbers in Lua, where 0 is true: `if ctx:isRedirected("Output") == 1`.
 
-| | |
-|---|---|
-| `ctx:line_in()` | the next line of `WITH INPUT`; `nil` at the end, or without it |
-| `ctx:lines()` | the rest of the input, a sequence (empty without it) |
-| `ctx:output(text)`, `ctx:error(text)` | a line to `WITH OUTPUT` (`ERROR`); not redirected, to `.output` (`.error`), as a real command's console output: never dropped |
-| `ctx:is_redirected(kind)` | `"input"`, `"output"`, `"error"`, or `"same"` (output and error to one target) |
-| `ctx:get_var(name)` | a variable of the code that issued the command (`nil` if it has no value) |
-| `ctx:set_var(name, value)`, `ctx:drop_var(name)` | set, drop one |
-| `ctx:raise_error([rc])`, `ctx:raise_failure([rc])` | ERROR (FAILURE) after the command, with RC the handler's value or, if it gives none, `rc`; return `rc` |
-| `ctx.environment` | the environment's name, as `ADDRESS` gave it |
-
-Variable names are Rexx's: uppercased, simple, stem or compound; a compound
-name's tail is resolved in the caller (`ctx:get_var("a.i")` with `I = 2` is
-`A.2`). Values cross by the usual rules both ways (`ctx:set_var("t", {})`
-gives the variable a `.LuaObject`). `ctx:output` writes any value as
-`tostring` does. A Rexx condition inside a method (a stream that fails) is
-a Lua error, as in any callback.
+The names of the context before 0.4.0 (Python's: `get_var`, `set_var`,
+`line_in`, `output(text)`, `is_redirected`, `raise_error`...) are gone.
 
 **Errors.** A Lua error in the handler is **SYNTAX 98.900** in the code that
 issued the command, `additional` as for any Lua error reaching Rexx
 (*Errors*: `[1]` the message, `[2]` the error value, `[3]` Lua's traceback);
-a Rexx condition that went through Lua is itself; a HALT is a HALT again
-after the command (RC 1), as from `~eval` (*Errors*: `SIGNAL ON HALT`,
-`CALL ON HALT`, untrapped SYNTAX 4.1). (`ADDRESS LUA` differs, on purpose: there the command *is* Lua
-code, and its failing is the command's ERROR; here it is the handler's own
-bug.) A handler whose state is closed, or the host's state on another
-thread than its own (*Lua → ooRexx*), is SYNTAX 98.900 too. A Ctrl-C while
-it runs: RC 1, no condition, then the HALT, as `ADDRESS LUA`.
+a Rexx condition that went through Lua is itself (USER too: a Rexx method
+the handler calls that raises `USER X` reaches the issuer's trap); a HALT of
+Rexx code the handler called is a HALT again after the command (RC 1), as
+from `~eval` (*Errors*: `SIGNAL ON HALT`, `CALL ON HALT`, untrapped SYNTAX
+4.1; rule 1 for host code, kept by rule 6). (`ADDRESS LUA` differs, on
+purpose: there the command *is* Lua code, and its failing is the command's
+ERROR; here it is the handler's own bug.) A handler whose state is closed,
+or the host's state on another thread than its own (*Lua → ooRexx*), is
+SYNTAX 98.900 too. A Ctrl-C while it runs: RC 1, no condition, then the
+HALT, as `ADDRESS LUA`.
 
-**How.** One native handler serves every name (`luaCommand` in
-`rexxlua.cpp`). An instance's names are in its `.local`, `LUA.COMMANDS` (a
-StringTable, name → the handler's `.LuaObject`); a name is given to ooRexx
-once, by `AddCommandEnvironment` the first time it is added, or by
-`REDIRECTING_ENVIRONMENTS` when `interpreter{command_environments = ...}`
-makes the instance, and never again. ooRexx has no API that removes an
-environment (`RexxDeregisterSubcom` is for the classic registration, and
-answers 30 for these), so removing leaves the native handler where it is and
-the name with no handler, and its commands answer **FAILURE RC 30**
-(`RXSUBCOM_NOTREG`), as an unknown environment does: a Rexx program cannot
-tell them apart. Adding it again only gives it a handler.
+**How.** `.LuaCommandHandler` (`lua.cls`) keeps the Lua callable in
+`HANDLER`; its `COMMAND` method is native (`LuaCmd_Command` in
+`rexxlua.cpp`), so that no Rexx activation stands between the issuer and
+the Lua code: written in Rexx, a USER condition of Rexx code the handler
+calls stopped at that activation (`RAISE` asks one level), and the HALT the
+bridge makes pending fell on it and came out as SYNTAX 4.1 (measured
+25/10/2026, four tests of `CommandHandlers.testGroup`). Everything else is
+the core's. Until 0.4.0 the bridge had its own registry (one native handler
+for every name, given to ooRexx once by `AddCommandEnvironment`, and a
+name → function table): mixed with the core's `register` it went wrong
+(measured on r13289: `removeCommandEnvironment` removed nothing from the
+core's stack, `addCommandEnvironment` replaced a core handler instead of
+stacking; oorexx-bridges `topics/command-handlers/lua-core-coexist.rex`).
 
-**Needs ooRexx r13274 and r13275 for threads.** Adding a new name while
-other threads run Rexx in the instance needs the fix of bug #2111 (r13274:
-`AddCommandEnvironment` changed the instance's handlers without the
-interpreter's lock), and a thread that addresses a name before another
-registers it needs that of #2112 (r13275: the handler it cached could be
-freed). The bridge does not refuse: on older builds, register names before
-the threads start. `CommandHandlers.testGroup` has a test of exactly that,
-eight threads addressing names while another adds them: on r13271 it
-crashes 19 runs of 20 (segmentation fault), on r13275 none of 50 (measured
-19/10/2026, before the portable builds had r13275; Python's
-`t35_address_threads.py`, `oorexxpython` `fab4b60`, measured the same).
+**Threads.** Names registered while other threads address names (#2111,
+#2112, fixed in r13274 and r13275, before the bridge's minimum):
+`CommandHandlers.testGroup` keeps the test, eight threads addressing names
+while another registers them.
 
 ## Lua → ooRexx
 

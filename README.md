@@ -53,13 +53,14 @@ address lua 'for l in io.lines() do print(l * l) end' with input stem in. output
 say out.1 out.2                                    -- 9 16
 ```
 
-Lua functions can be `ADDRESS` environments of their own: RC is the
-function's value, and its context reads and writes the caller's variables
-and the `WITH` redirection.
+Lua functions can be `ADDRESS` environments of their own, as command
+handlers of ooRexx's own (`.CommandHandler`, ooRexx r13288): RC is the
+function's value, and its context, the core's `.CommandContext`, reads and
+writes the caller's variables and the `WITH` redirection.
 
 ```rexx
-calc = .lua~eval("return function(command, ctx) ctx:set_var('RESULT', load('return ' .. command)()) end")
-.lua~addCommandEnvironment("CALC", calc)
+calc = .lua~eval("return function(command, ctx) ctx:setVar('RESULT', load('return ' .. command)()) end")
+.CommandHandler~register("CALC", .lua~commandHandler(calc))   -- a core command handler
 address calc '2^10'; say rc result                 -- 0 1024.0
 ```
 
