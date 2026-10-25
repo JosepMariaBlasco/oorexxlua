@@ -4303,8 +4303,10 @@ static RexxObjectPtr RexxEntry addressLua(RexxExitContext *c, RexxStringObject a
 
 // .LuaState~"LUA.ADDRESS" (lua.cls, when it is loaded): the LUA environment,
 // in an instance the Lua module did not make (those have it from the start,
-// newInst).  Once, before any command: AddCommandEnvironment does not take
-// the interpreter's lock (docs/design.md, *ADDRESS LUA*).
+// newInst).  Stacked (StackCommandEnvironment, ooRexx r13297) over whatever
+// handler LUA already had, as .CommandHandler~register stacks: deregister
+// uncovers it (AddCommandEnvironment replaced it).  Once, before any command
+// (docs/design.md, *ADDRESS LUA*).
 // Once per instance, even if called again (it is a public method): marked in
 // .local, which belongs to the instance and ends with it.  (The kernel lock
 // is held from the test to the mark.)
@@ -4315,7 +4317,7 @@ RexxMethod0(RexxObjectPtr, Lua_Address)
     RexxDirectoryObject local = tc->GetLocalEnvironment();
     if (tc->DirectoryAt(local, "LUA.ADDRESS") != NULLOBJECT) return NULLOBJECT;
     tc->DirectoryPut(local, tc->True(), "LUA.ADDRESS");
-    tc->AddCommandEnvironment("LUA", (REXXPFN)addressLua, REDIRECTING_COMMAND_ENVIRONMENT);
+    tc->StackCommandEnvironment("LUA", (REXXPFN)addressLua, REDIRECTING_COMMAND_ENVIRONMENT);
     return NULLOBJECT;
 }
 

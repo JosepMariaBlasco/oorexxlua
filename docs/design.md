@@ -90,7 +90,7 @@ would hold the Rexx object while Lua runs.
 `tests/rexx/Threads.testGroup` runs several Rexx threads in one state, with
 callbacks, and several threads with states of their own.
 
-**Needs ooRexx r13286 (bug #2122).** Before it, `IsInstanceOf`, `IsRoutine`
+**Needs ooRexx r13286 (bug #2122)** (the bridge's minimum is r13297: *ADDRESS LUA*). Before it, `IsInstanceOf`, `IsRoutine`
 and `IsMethod` asked of a number that has no string value yet (any result of
 Rexx arithmetic) made that string without the kernel lock: with other threads
 running Rexx, ooRexx's heap was corrupted (found by ooRexx/Python). r13286
@@ -777,10 +777,16 @@ do not set RESULT in the language; this environment does, and
 documents it.
 
 **Registration.** An instance the Lua module makes has `LUA` from the start
-(the `DIRECT_ENVIRONMENTS` option of `RexxCreateInterpreter`). Elsewhere
-`lua.cls` adds it when it is loaded (`AddCommandEnvironment`, `Lua_Address`
-in `rexxlua.cpp`), once per instance (marked in `.local`, even if
-`LUA.ADDRESS` is called again), and never removes or replaces it: the work on
+(the `REDIRECTING_ENVIRONMENTS` option of `RexxCreateInterpreter`). Elsewhere
+`lua.cls` adds it when it is loaded (`StackCommandEnvironment`, ooRexx r13297,
+`Lua_Address` in `rexxlua.cpp`), once per instance (marked in `.local`, even if
+`LUA.ADDRESS` is called again), and never removes it. It is stacked, as
+`.CommandHandler~register` stacks: a handler registered as `LUA` before
+`lua.cls` is loaded stays under it, and `.CommandHandler~deregister("LUA")`
+uncovers it (until 0.4.0, `AddCommandEnvironment` replaced it, and a
+`deregister` left `LUA` unknown; measured on r13297,
+`test_lua_cls_stacks_over_a_registered_lua`). This is the bridge's minimum
+ooRexx, r13297. The work on
 command handlers in ooRexx/WASM found that `AddCommandEnvironment` changes
 the instance's table of handlers without the interpreter's lock, and that a
 command sent to an environment before it is registered can cache a handler

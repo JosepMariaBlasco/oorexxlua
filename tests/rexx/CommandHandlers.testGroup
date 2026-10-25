@@ -123,6 +123,14 @@ wrong:
   address lua 'return 6 * 7'
   self~assertEquals(42, result, "ADDRESS LUA back")
 
+-- and the other way round: a LUA registered before lua.cls is loaded stays
+-- under the bridge's (StackCommandEnvironment, r13297; AddCommandEnvironment
+-- replaced it).  In an instance of its own: lua-over-registered.rex
+::method test_lua_cls_stacks_over_a_registered_lua
+  dir = .File~new(.context~package~name)~parent
+  out = self~outputOf(dir, .File~new("lua-over-registered.rex", dir)~absolutePath)
+  self~assertSame("before: 1000|loaded: 0 42|deregistered: 1000|unknown: 30", out~makeString("L", "|"))
+
 ::method test_variables
   self~reg("VARS", -
     "got = {ctx:getVar('x'), ctx:getVar('a.i'), ctx:getVar('A.2'), ctx:hasVar('nothing')}" -

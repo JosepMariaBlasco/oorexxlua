@@ -33,15 +33,6 @@ syntax:
  */
 ::method assertOutputs
   use strict arg dir, minimum, what
-  -- librexxlua is found by name through the library path; macOS drops
-  -- DYLD_* variables when it starts /bin/sh (ADDRESS SYSTEM), so the command
-  -- sets it itself
-  parse upper source platform .
-  windows = platform~abbrev("WIN")
-  libvar = ""
-  if platform~pos("DARWIN") > 0 | platform~pos("MAC") > 0 then
-    libvar = "DYLD_LIBRARY_PATH='"value("ORXLUA_BUILD", , "ENVIRONMENT")"' "
-
   names = .array~new
   do f over .File~new(dir)~listFiles
     if f~name~endsWith(".rex") | f~name~endsWith(".lua") then names~append(f~absolutePath)
@@ -68,16 +59,7 @@ syntax:
       end
       runner = '"'lua'"'
     end
-    if windows then                    -- cmd.exe
-      cmd = 'cd /d "'dir'" && 'runner '"'path'" 2>&1'
-    else
-      cmd = 'cd "'dir'" && 'libvar || runner '"'path'" 2>&1'
-    out = .array~new
-    address system cmd with output using (out)
-    do i = 1 to out~items              -- Windows: lines may end in CR
-      if out[i]~right(1) == "0d"x then out[i] = out[i]~left(out[i]~length - 1)
-    end
-    got = out~makeString("L", "0a"x)
+    got = self~outputOf(dir, path, runner)~makeString("L", "0a"x)
     if got == expected then self~assertTrue(.true)
     else failures~append(.File~new(path)~name || "0a"x ||,
                          "  expected: [" || expected~changeStr("0a"x, "|") || "]" || "0a"x ||,
@@ -85,6 +67,32 @@ syntax:
   end
   if failures~items > 0 then
     self~fail(failures~items what"(s) differ:" || "0a"x || failures~makeString("L", "0a"x))
+
+/** outputOf(dir, path [, runner])
+ * Runs the file path with runner (default rexx), in its own process with dir
+ * as the current directory, and returns the lines it prints (stdout and
+ * stderr) as an array.  Used by assertOutputs, and by tests that need an
+ * instance of their own (one where lua.cls has not been loaded yet).
+ */
+::method outputOf
+  use strict arg dir, path, runner = "rexx"
+  -- librexxlua is found by name through the library path; macOS drops
+  -- DYLD_* variables when it starts /bin/sh (ADDRESS SYSTEM), so the command
+  -- sets it itself
+  parse upper source platform .
+  libvar = ""
+  if platform~pos("DARWIN") > 0 | platform~pos("MAC") > 0 then
+    libvar = "DYLD_LIBRARY_PATH='"value("ORXLUA_BUILD", , "ENVIRONMENT")"' "
+  if platform~abbrev("WIN") then       -- cmd.exe
+    cmd = 'cd /d "'dir'" && 'runner '"'path'" 2>&1'
+  else
+    cmd = 'cd "'dir'" && 'libvar || runner '"'path'" 2>&1'
+  out = .array~new
+  address system cmd with output using (out)
+  do i = 1 to out~items                -- Windows: lines may end in CR
+    if out[i]~right(1) == "0d"x then out[i] = out[i]~left(out[i]~length - 1)
+  end
+  return out
 
 /** rss()
  * The resident memory of this process, in KB: /proc on Linux, ps on macOS,
