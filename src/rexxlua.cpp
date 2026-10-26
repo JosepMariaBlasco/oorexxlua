@@ -589,6 +589,20 @@ static void raiseCondition(RexxThreadContext *c, RexxObjectPtr cond)
     c->DecodeConditionInfo(d, &cd);
     if (cd.code != 0) {
         c->RaiseException(cd.code, cd.additional != NULLOBJECT ? cd.additional : c->NewArray(0));
+        // WORKAROUND (oorexx-bridges oorexx-bugs/2026-10-26-raise-syntax-description.md;
+        // drop it when ooRexx can raise a condition object as it is): no API
+        // raises SYNTAX with a DESCRIPTION, so put the original's DESCRIPTION and
+        // RESULT into the condition just raised.  GetConditionInfo() gives the
+        // native activation's own condition object (read at r13297), the one
+        // ooRexx then raises in the caller; were it a copy, the description
+        // would be lost again, nothing worse (Errors.testGroup would show it).
+        RexxDirectoryObject now = c->GetConditionInfo();
+        if (now != NULLOBJECT) {
+            RexxObjectPtr desc = c->DirectoryAt(d, "DESCRIPTION");
+            RexxObjectPtr result = c->DirectoryAt(d, "RESULT");
+            if (desc != NULLOBJECT) c->DirectoryPut(now, desc, "DESCRIPTION");
+            if (result != NULLOBJECT) c->DirectoryPut(now, result, "RESULT");
+        }
         return;
     }
     c->RaiseCondition(c->CString(cd.conditionName), cd.description,

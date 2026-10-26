@@ -212,6 +212,18 @@ syntax:
   self~assertSame("41.1", condition("O")~code, "the Rexx error, itself")
   self~unreg("THROUGH")
 
+-- with its DESCRIPTION (a workaround: see Errors.testGroup)
+::method test_rexx_error_through_lua_keeps_its_description
+  self~reg("THROUGH", .lua~eval("local o = ...; return function() return o:boom() end", .Boom3~new))
+  signal on syntax
+  address through 'x'
+  self~fail("no SYNTAX")
+syntax:
+  c = condition("O")
+  self~unreg("THROUGH")
+  self~assertSame("40.1", c~code)
+  self~assertSame("the description", c~description)
+
 -- without WITH, the core's context has no output (rule 6: the core is the
 -- reference); the handler asks isRedirected first, and writes to .output
 ::method test_output_without_with
@@ -490,6 +502,10 @@ failure:
 ::class Boom
 ::method boom
   return "a" + 1
+
+::class Boom3
+::method boom
+  raise syntax 40.1 array("BOOM") description "the description"
 
 -- a destination for .output / .error: each line, with a prefix, into lines
 ::class Collect

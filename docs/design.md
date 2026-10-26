@@ -527,9 +527,15 @@ cross whole both ways: a NUL in one does not cut it short.
 
 - A Rexx condition that goes through Lua and back to Rexx (the Lua code did
   not catch it, or raised the same table again with `error(e)`) is raised
-  again: the same code and substitutions (SYNTAX), or the same condition,
-  description, additional and result (any other), with a new traceback,
-  from where it came back. Not a 98.900 around it. The table keeps its
+  again: the same code, substitutions, description and result (SYNTAX), or
+  the same condition, description, additional and result (any other), with
+  a new traceback, from where it came back. Not a 98.900 around it. (No
+  API raises SYNTAX with a description: after `RaiseException` the bridge
+  puts the original's `DESCRIPTION` and `RESULT` into the condition object
+  that `GetConditionInfo()` gives, which is the one ooRexx raises in the
+  caller. A workaround, oorexxwasm's, until ooRexx can raise a condition
+  object as it is: oorexx-bridges `oorexx-bugs/2026-10-26-raise-syntax-description.md`;
+  `Errors.testGroup` would show it if ooRexx stopped working that way.) The table keeps its
   condition object (a weak-keyed table in the registry: the table, the
   object's userdata), and the bridge recognizes the table by its metatable.
   A HALT is the exception: one that ends a callback untrapped (ooRexx

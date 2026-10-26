@@ -136,6 +136,18 @@ syntax:
   self~assertEquals(98.900, c~code)
   self~assertTrue(c~additional[2]~pos("Rexx error 93.907") = 1, c~additional[2])
 
+-- its DESCRIPTION too (a workaround in raiseCondition: oorexx-bridges
+-- oorexx-bugs/2026-10-26-raise-syntax-description.md; if ooRexx stopped
+-- giving its own condition object to GetConditionInfo, this would fail)
+::method test_a_syntax_keeps_its_description
+  bad = .routine~new("bad", "raise syntax 40.1 array('BOOM') description 'the description'")
+  c = self~conditionOf(.lua, "EVAL", "local f = ...; return f()", bad)
+  self~assertEquals(40.1, c~code)
+  self~assertSame("BOOM", c~additional[1])
+  self~assertSame("the description", c~description, "through Lua")
+  c = self~conditionOf(.lua, "EVAL", "local f = ...; local ok, e = pcall(f); error(e)", bad)
+  self~assertSame("the description", c~description, "raised again by Lua")
+
 ::method test_a_Lua_error_through_Rexx_is_itself
   -- Lua -> Rexx -> Lua: the error value Lua raised, not a Rexx error around it
   inner = .routine~new("inner", "return .lua~eval('error({code = 42})')")
