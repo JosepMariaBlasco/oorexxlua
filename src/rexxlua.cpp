@@ -825,11 +825,31 @@ static int p_compare(lua_State *L)
     return 1;
 }
 
+/*
+ * The value at idx as the result of a native method.  A Rexx object that Lua
+ * held (a userdata's) is not a local reference of the method: only `keep`
+ * holds it, for as long as its userdata lives.  Once the method pops it and
+ * leaves the state, another Rexx thread can enter the state, Lua can finalize
+ * that userdata (keepRemove) and ooRexx can collect the object, before ooRexx
+ * has taken the result: native code runs without the kernel lock.  An Array
+ * of one, a local reference, holds it until the method has returned.
+ * Measured (25/10/2026): 4 threads on one state, Lua collecting at nearly
+ * every allocation, crashed 5 runs of 10 (oorexx-bridges, lesson 5).
+ */
+static RexxObjectPtr toResult(State *st, int idx)
+{
+    idx = lua_absindex(st->L, idx);
+    RexxObjectPtr r = toRexx(st, idx);
+    if (luaL_testudata(st->L, idx, REXXOBJ) != NULL && r != NULLOBJECT && r != st->tc->Nil())
+        st->tc->ArrayOfOne(r);              // (released when the method returns)
+    return r;
+}
+
 /* First result as a Rexx object (.nil if none); pops all results. */
 static RexxObjectPtr firstResult(State *st, int n)
 {
     if (n < 0) return failed(st);
-    RexxObjectPtr r = n == 0 ? st->tc->Nil() : toRexx(st, -n);
+    RexxObjectPtr r = n == 0 ? st->tc->Nil() : toResult(st, -n);
     lua_pop(st->L, n);
     return r;
 }
@@ -2106,7 +2126,7 @@ RexxMethod2(RexxObjectPtr, LuaState_Global, CSTRING, name, CSELF, self)
     if (!en.ok) return NULLOBJECT;
     lua_pushstring(en.st->L, name);
     if (!protect(en.st, p_getglobal, 1)) return failed(en.st);
-    RexxObjectPtr r = toRexx(en.st, -1);
+    RexxObjectPtr r = toResult(en.st, -1);
     lua_pop(en.st->L, 1);
     return r;
 }
@@ -2417,7 +2437,7 @@ static RexxObjectPtr callField(RexxMethodContext *context, Proxy *px, CSTRING me
             raise(c, std::string("Lua error: field '") + message + "' is not callable");
             return NULLOBJECT;
         }
-        RexxObjectPtr r = toRexx(st, fn);
+        RexxObjectPtr r = toResult(st, fn);
         lua_settop(L, top);
         return r;
     }
@@ -2548,7 +2568,7 @@ RexxMethod2(RexxObjectPtr, LuaObj_Get, CSTRING, name, CSELF, self)
     pushSelf(px);
     lua_pushstring(L, name);
     if (!protect(st, p_resolve, 2)) return failed(st);
-    RexxObjectPtr r = toRexx(st, -2);
+    RexxObjectPtr r = toResult(st, -2);
     lua_pop(L, 2);
     return r;
 }
@@ -2561,7 +2581,7 @@ RexxMethod2(RexxObjectPtr, LuaObj_At, RexxObjectPtr, key, CSELF, self)
     pushSelf(px);
     if (!pushValue(st, key)) { raiseTop(st); lua_settop(L, top); return NULLOBJECT; }
     if (!protect(st, p_gettable, 2)) { lua_settop(L, top); return failed(st); }
-    RexxObjectPtr r = toRexx(st, -1);
+    RexxObjectPtr r = toResult(st, -1);
     lua_settop(L, top);
     return r;
 }
@@ -2742,7 +2762,7 @@ RexxMethod3(RexxObjectPtr, LuaObj_Operator, NAME, message, ARGLIST, args, CSELF,
     }
     RexxObjectPtr r;
     if (e->kind == OP_COMPARE) r = (lua_toboolean(L, -1) != e->negate) ? c->True() : c->False();
-    else r = toRexx(st, -1);
+    else r = toResult(st, -1);
     lua_settop(L, top);
     return r;
 }

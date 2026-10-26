@@ -55,6 +55,33 @@ return testResult
   end
   self~assertTrue(waitAll(done, threads), "every thread got its tables")
 
+-- A Rexx object that only a Lua userdata holds, as a method's result, while
+-- other threads use the same state and Lua collects at nearly every
+-- allocation: Lua may finalize the userdata as soon as the method has left
+-- the state, before ooRexx has the result (oorexx-bridges, lesson 5).
+-- Without toResult it crashed 5 runs of 10 (4 threads, 2,000 rounds).
+::method test_rexx_objects_returned_while_threads_collect
+  threads = 4
+  s = .LuaState~new
+  s~eval("if _VERSION == 'Lua 5.3' then collectgarbage('setpause', 0); collectgarbage('setstepmul', 1000)" -
+         "else collectgarbage('incremental', 0, 1000) end")
+  s~eval("mk = ...", .routines~mk)
+  s~eval("function fresh(i) local o = mk(i); local j = {} for k = 1, 8 do j[k] = {k} end return o end")
+  done = .queue~new
+  do t = 1 to threads
+    .Worker~new~fresh(s, 3000, done)
+  end
+  self~assertTrue(waitAll(done, threads), "every thread got its objects")
+  s~close
+
+::routine mk                -- a fresh object: only Lua holds it once it is returned
+  use arg i
+  return .Fresh~new(i)
+
+::class Fresh
+::attribute id
+::method init; expose id; use arg id
+
 ::routine waitAll           -- the results of all the threads (a Queue's pull does not wait)
   use arg done, threads
   do while done~items < threads; call SysSleep 0.01; end
@@ -95,4 +122,16 @@ return testResult
   end
   s~close
   done~queue(ok)
-
+::method fresh
+  use arg s, n, done
+  reply
+  fresh = s~global("fresh")
+  ok = 1
+  do i = 1 to n
+    junk = .array~new(50)~fill(i)           -- Rexx allocates too
+    o = s~eval("return fresh(...)", i)
+    if \o~isA(.Fresh) then ok = 0; else if o~id \= i then ok = 0
+    o = fresh~call(-i)
+    if \o~isA(.Fresh) then ok = 0; else if o~id \= -i then ok = 0
+  end
+  done~queue(ok)

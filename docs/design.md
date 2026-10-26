@@ -126,6 +126,22 @@ is needed because Lua clears a weak entry before running the old userdata's
 `__gc`, so an object can get a new userdata while the old one is still
 waiting for its finalizer.
 
+**A Rexx object as a method's result.** When a native method returns a Rexx
+object that came out of a userdata (`s~eval("return obj")`, a `.LuaObject`'s
+call, `~global`, `[]`...), only `keep` holds it, and only while the userdata
+lives. Native code runs without ooRexx's kernel lock, so once the method has
+popped the userdata and left the state, another Rexx thread can enter the
+same state, Lua can finalize the userdata (and remove the object from
+`keep`), and ooRexx can collect the object before it has taken the result.
+So such a result is also put in an Array of one (`toResult`), a local
+reference of the method, which holds it until the method has returned.
+Found checking oorexxwasm's race (oorexx-bridges, lesson 5, 25/10/2026):
+four threads on one state, with Lua collecting at nearly every allocation,
+crashed 5 runs of 10 without it, none of 20 with it. Arguments of
+callbacks, Lua errors and Rexx conditions that go back through Lua do not
+need it: they are put in an Array or raised while their userdata is still
+on Lua's stack. `Threads.testGroup` has the test.
+
 **Local references.** Every Rexx object the native API returns is a local
 reference of the native method in progress, freed only when that method
 returns. One `eval` whose Lua code calls back into Rexx a million times
