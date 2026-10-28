@@ -281,6 +281,77 @@ x:
   self~assertSame("USER d", r~call)
   self~unreg("RAISES2")
 
+-- rule 1 for any condition, from a Rexx Routine (CallRoutine): needs ooRexx
+-- #2123 (r13320: the condition kept for the native caller); the bridge raises
+-- it again with RaiseCondition, with its description, additional and result
+::method routineRaiser
+  return .routine~new("r", 'raise user x description "d" additional ("a") return 7')
+
+::method test_a_user_condition_from_a_routine_through_a_handler
+  self~reg("RAISESR", .lua~eval("local f = ...; return function() return f() end", self~routineRaiser))
+  signal on user x
+  address raisesr 'x'
+  self~fail("no USER X")
+x:
+  c = condition("O")
+  self~assertSame("USER X", c~condition)
+  self~assertSame("d", c~description)
+  self~assertSame("a", c~additional)
+  self~assertSame(.nil, c~result, "as in pure Rexx: RAISE ... RETURN under SIGNAL ON leaves no RESULT")
+  self~unreg("RAISESR")
+
+::method test_a_user_condition_from_a_routine_through_eval
+  signal on user x
+  .lua~eval("local f = ...; return f()", self~routineRaiser)
+  self~fail("no USER X")
+x:
+  c = condition("O")
+  self~assertSame("USER X", c~condition)
+  self~assertSame("d", c~description)
+  self~assertSame("a", c~additional)
+  self~assertSame(.nil, c~result, "as in pure Rexx: RAISE ... RETURN under SIGNAL ON leaves no RESULT")
+
+-- under ::OPTIONS ERROR SYNTAX: this one comes back by RaiseCondition, so it
+-- is where #2119 (fixed in r13282) would have mattered
+::method test_a_user_condition_from_a_routine_under_options_error_syntax
+  self~reg("RAISESR2", .lua~eval("local f = ...; return function() return f() end", self~routineRaiser))
+  r = .routine~new("r", .array~of("signal on user x", "signal on syntax", "address raisesr2 'go'", -
+      "return 'nothing'", "x: return 'USER' condition('o')~description", -
+      "syntax: return 'SYNTAX' condition('o')~code", "::options error syntax"))
+  self~assertSame("USER d", r~call)
+  self~unreg("RAISESR2")
+
+-- the other conditions, from a Routine, through eval and through a handler,
+-- trapped by SIGNAL ON: condition, description and additional as in plain
+-- Rexx (ERROR's and FAILURE's RC cannot come back yet: RaiseCondition has
+-- no RC; topics/command-handlers.md, rule 1, "The RC waits for ooRexx")
+::method test_other_conditions_from_a_routine
+  s = .LuaState~new
+  do cond over .array~of("NOTREADY", "ERROR", "FAILURE")
+    raiser = .routine~new("r", "raise" cond (cond = "NOTREADY")~?("", 5) -
+      "description 'd" cond"' additional ('a') return 7")
+    c = trapOf(cond, s, "local f = ...; return f()", raiser)
+    self~assertSame(cond, c~condition, cond "through eval")
+    self~assertSame("d" cond, c~description, cond "through eval")
+    self~assertSame("a", c~additional, cond "through eval")
+    .CommandHandler~register("RAISESR3", s~commandHandler(s~eval("local f = ...; return function() return f() end", raiser)))
+    c = trapOf(cond, "RAISESR3")
+    .CommandHandler~deregister("RAISESR3")
+    self~assertSame(cond, c~condition, cond "through a handler")
+    self~assertSame("d" cond, c~description, cond "through a handler")
+    self~assertSame("a", c~additional, cond "through a handler")
+  end
+  s~close
+
+-- a DESCRIPTION that is not a String comes back as it was (RAISE takes any
+-- object; DecodeConditionInfo gives only Strings)
+::method test_a_description_that_is_not_a_string
+  d = .object~new                       -- crosses Lua as itself (an Array would be a table)
+  raiser = .routine~new("r", "use arg d; raise user x description (d) additional ('a') return 7")
+  c = trapOf("USER X", .lua, "local f, d = ...; return f(d)", raiser, d)
+  self~assertSame("USER X", c~condition)
+  self~assertSame(d, c~description, "the same object")
+
 -- a SIGNAL ON in the issuer for a condition that a Rexx method raises, sent
 -- from the Lua handler on the context Rexx handed it: the SIGNAL unwinds
 -- through Lua's frames, which the bridge catches and gives back (docs/
@@ -443,6 +514,18 @@ syntax:
   address sig kind
   return 0
 trapped: return 1
+
+-- the condition object of the condition named cond that running target
+-- raises: target~eval(code, args...) for a LuaState, else ADDRESS target
+::routine trapOf
+  use arg cond, target, code, ...
+  signal on notready; signal on error; signal on failure; signal on user x
+  if target~isA(.String) then address value target
+  if target~isA(.String) then 'go'
+  else .message~new(target, "EVAL", "A", arg(1, "A")~section(3))~send
+  return .nil
+notready: error: failure: x:
+  return condition("O")
 
 ::routine waitAll           -- the results of all the threads (a Queue's pull does not wait)
   use arg done, threads

@@ -605,7 +605,9 @@ static void raiseCondition(RexxThreadContext *c, RexxObjectPtr cond)
         }
         return;
     }
-    c->RaiseCondition(c->CString(cd.conditionName), cd.description,
+    // the DESCRIPTION as the condition object holds it: RAISE takes any object
+    // there, and DecodeConditionInfo gives it only when it is a String (#2123)
+    c->RaiseCondition(c->CString(cd.conditionName), (RexxStringObject)c->DirectoryAt(d, "DESCRIPTION"),
                       c->DirectoryAt(d, "ADDITIONAL"), c->DirectoryAt(d, "RESULT"));
 }
 

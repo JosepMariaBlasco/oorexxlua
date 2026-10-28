@@ -552,6 +552,22 @@ cross whole both ways: a NUL in one does not cut it short.
   was recognized by its text). `error(tostring(e))` is a new Lua error.
   The table is the condition wherever it goes: a HALT's table that Lua keeps
   and raises in a later call into Lua halts there too.
+  Conditions other than SYNTAX from a Rexx routine that Lua calls
+  (`CallRoutine`) come back since ooRexx r13320 (#2123; before, ooRexx
+  dropped them there; from a method they came back already): `USER`,
+  `NOTREADY`, `ERROR`, `FAILURE` with condition, description and
+  `additional` as in plain Rexx, the description whatever object it is
+  (`DecodeConditionInfo` gives only Strings, so the bridge takes it from the
+  condition object). Not yet: the **RC** of ERROR and FAILURE
+  (`RaiseCondition` has none: `.nil`; ooRexx RFE #883, filed). Tests in
+  `CommandHandlers.testGroup`.
+- A native routine that uses its caller's variables (rexxutil's
+  `SysStemSort`, `SysFileTree` with a stem, anything using
+  `RexxVariablePool` or `GetContextVariable`), passed to Lua as a Routine and
+  called there, **crashes ooRexx** (#2129, filed, not fixed at r13324: such
+  a routine called through `CallRoutine` by native code; measured through
+  the bridge with `SysStemSort`). Until #2129 is in, call it from a small
+  Rexx routine and pass that one to Lua.
 - A Lua error that goes through Rexx and back to Lua (the 98.900 above,
   which the Rexx code did not trap) is the error value again, not a Rexx
   error around it: the same table, the same string. A `.LuaObject` of
