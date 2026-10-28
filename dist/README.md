@@ -10,7 +10,7 @@ Source, documentation and design: https://github.com/JosepMariaBlasco/oorexxlua
 
 ## What you need
 
-- **ooRexx 5.3.0, r13297 or later** (beta, from
+- **ooRexx 5.3.0, r13324 or later** (beta, from
   [SourceForge](https://sourceforge.net/projects/oorexx/files/oorexx/5.3.0beta/)),
   installed so that `rexx` runs (`rexx -v` gives the revision).
 - **No Lua**: this package carries its own (the version in the zip's name;

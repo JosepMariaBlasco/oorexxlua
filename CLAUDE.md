@@ -31,11 +31,12 @@ A Lua C function of the bridge that raises a Lua error (`lua_error`,
 a helper: MSVC's `longjmp` would destroy it again (`docs/design.md`,
 *Errors*). Keep such objects in `NOINLINE` functions.
 
-ooRexx: r13297 or later (`.LogicalWrapper`, RFE #880, r13278; the fixes of
+ooRexx: r13324 or later, the family's revision (`.LogicalWrapper`, RFE #880, r13278; the fixes of
 #2111 and #2112, which `WITH` and command environments registered while other
 threads run need; that of #2122, `IsInstanceOf`/`IsRoutine` with other
 threads running Rexx; `.CommandHandler`, r13288; `StackCommandEnvironment`,
-r13297, for `ADDRESS LUA`). The CI uses
+r13297, for `ADDRESS LUA`; #2123, r13320, for rule 1 with conditions other
+than SYNTAX). The CI uses
 the portable builds, pinned to one revision (`OOREXX_REV` in the workflow).
 
 Tests that check a text compare it with `==` or `assertSame`, never `=` or
