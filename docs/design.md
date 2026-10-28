@@ -371,7 +371,9 @@ multi-dimensional one was flattened):
   empty slot (until 17/10/2026: `.nil`), so a sparse Array that goes to Lua
   and comes back with `~makeArray` has its size and its items again. More
   than 100,000,000 items (an `n` or a `__len` that large) is Error 98.900,
-  not an attempt to allocate them.
+  not an attempt to allocate them. Kept after ooRexx #2125 (r13310; the
+  user, 28/10/2026): `NewArray` now refuses only sizes above 10^17, so a
+  bogus `n` of 10^12 would still try to allocate terabytes.
 - **`~supplier`** is Lua's `pairs`: every key and value, by the usual rules,
   in Lua's order (unspecified, as a Rexx Directory's is), honouring
   `__pairs`. So `DO WITH INDEX k ITEM v OVER t` gives every pair, and
