@@ -563,6 +563,17 @@ cross whole both ways: a NUL in one does not cut it short.
   condition object). Not yet: the **RC** of ERROR and FAILURE
   (`RaiseCondition` has none: `.nil`; ooRexx RFE #883, filed). Tests in
   `CommandHandlers.testGroup`.
+  Untrapped, or under `CALL ON`, such a condition still ends the Lua code,
+  and the call gives the routine's own value, as in plain Rexx
+  (`x = s~eval("local f = ...; return f()", r)`, `r` doing `raise user x
+  ... return 7`: x = 7, the `CALL ON` handler having run; a Lua handler's
+  RC is 7). A **workaround** (the user, 29/10/2026, as ooRexx/.NET does):
+  after `RaiseCondition`, ooRexx replaces a native method's value by the
+  condition's RESULT (with none, Error 91), so the bridge keeps the
+  routine's value as the condition's RESULT when it has none. The one
+  difference from plain Rexx: `condition("O")~result` is that value.
+  Dropped when ooRexx keeps a native method's own value (oorexx-bridges
+  `oorexx-bugs/raise-return-value/`).
 - A native routine that uses its caller's variables (rexxutil's
   `SysStemSort`, `SysFileTree` with a stem, anything using
   `RexxVariablePool` or `GetContextVariable`), passed to Lua as a Routine and

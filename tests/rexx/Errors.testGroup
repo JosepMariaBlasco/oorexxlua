@@ -231,6 +231,24 @@ x:
 x:
   self~assertSame("from string", condition("O")~description)
 
+-- the same with the value a callback returns (oorexx-bridges, lesson 6):
+-- the bridge does not convert it (a userdata, no message sent); its STRING
+-- runs only when Lua asks, under the same guard, many times
+::method test_signal_past_lua_from_a_callbacks_reply
+  f = .lua~eval("return function(o) return tostring(o:reply()) end")
+  do 200
+    self~assertSame("from string", self~replyTrap(f))
+  end
+  self~assertEquals(42, .lua~eval("return 6 * 7"), "Lua still works")
+
+::method replyTrap
+  use arg f
+  signal on user x
+  f~call(.ReplyMaker~new)
+  return "no USER X"
+x:
+  return condition("O")~description
+
 ::method test_signal_past_address_lua
   .lua~eval("unwindRaiser = ...", .Raiser~new)
   signal on user x
@@ -270,3 +288,7 @@ x:
 ::class StringRaiser
 ::method string
   raise user x description "from string" return "s"
+
+::class ReplyMaker                -- a callback whose reply raises in its STRING
+::method reply
+  return .StringRaiser~new

@@ -297,7 +297,7 @@ x:
   self~assertSame("USER X", c~condition)
   self~assertSame("d", c~description)
   self~assertSame("a", c~additional)
-  self~assertSame(.nil, c~result, "as in pure Rexx: RAISE ... RETURN under SIGNAL ON leaves no RESULT")
+  self~assertSame(7, c~result, "the routine's value (a workaround: plain Rexx has no RESULT)")
   self~unreg("RAISESR")
 
 ::method test_a_user_condition_from_a_routine_through_eval
@@ -309,7 +309,7 @@ x:
   self~assertSame("USER X", c~condition)
   self~assertSame("d", c~description)
   self~assertSame("a", c~additional)
-  self~assertSame(.nil, c~result, "as in pure Rexx: RAISE ... RETURN under SIGNAL ON leaves no RESULT")
+  self~assertSame(7, c~result, "the routine's value (a workaround: plain Rexx has no RESULT)")
 
 -- under ::OPTIONS ERROR SYNTAX: this one comes back by RaiseCondition, so it
 -- is where #2119 (fixed in r13282) would have mattered
@@ -342,6 +342,20 @@ x:
     self~assertSame("a", c~additional, cond "through a handler")
   end
   s~close
+
+-- untrapped, or under CALL ON, the call gives the routine's value (RAISE ...
+-- RETURN 7), as in plain Rexx; not Error 91.  A workaround in
+-- pushRexxCondition (oorexx-bridges oorexx-bugs/raise-return-value/): the
+-- value is the condition's RESULT, which plain Rexx does not have
+::method test_a_condition_untrapped_or_under_call_on_gives_the_value
+  raiser = .routine~new("r", "raise user x description 'd' additional ('a') return 7")
+  self~assertSame(7, .lua~eval("local f = ...; return f()", raiser), "untrapped")
+  self~assertSame(7, callOnValue(raiser), "under CALL ON")
+  self~assertSame("d", .local~lua.test.handled, "and the handler ran")
+  .CommandHandler~register("RAISESR4", .lua~commandHandler(.lua~eval("local f = ...; return function() return f() end", raiser)))
+  address raisesr4 'x'
+  .CommandHandler~deregister("RAISESR4")
+  self~assertEquals(7, rc, "a handler: RC is the value, untrapped")
 
 -- a DESCRIPTION that is not a String comes back as it was (RAISE takes any
 -- object; DecodeConditionInfo gives only Strings)
@@ -517,6 +531,15 @@ trapped: return 1
 
 -- the condition object of the condition named cond that running target
 -- raises: target~eval(code, args...) for a LuaState, else ADDRESS target
+::routine callOnValue        -- .lua~eval of raiser() under CALL ON USER X
+  use arg raiser
+  .local~lua.test.handled = .nil
+  call on user x name handled
+  return .lua~eval("local f = ...; return f()", raiser)
+handled:
+  .local~lua.test.handled = condition("D")
+  return
+
 ::routine trapOf
   use arg cond, target, code, ...
   signal on notready; signal on error; signal on failure; signal on user x

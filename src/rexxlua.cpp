@@ -998,12 +998,22 @@ static bool pushLuaError(lua_State *L, RexxThreadContext *c, const RexxCondition
     return done;
 }
 
-static NOINLINE void pushRexxCondition(lua_State *L, RexxThreadContext *c)
+static NOINLINE void pushRexxCondition(lua_State *L, RexxThreadContext *c, RexxObjectPtr value)
 {
     RexxDirectoryObject cond = c->GetConditionInfo();
     RexxCondition cd;
     c->DecodeConditionInfo(cond, &cd);
     c->ClearCondition();
+    // WORKAROUND (oorexx-bridges oorexx-bugs/raise-return-value/; the user,
+    // 29/10/2026; drop it when ooRexx keeps a native routine's own value):
+    // a condition other than SYNTAX that the Rexx code raised as it returned
+    // value (RAISE ... RETURN 7) keeps value as its RESULT, so that raised
+    // again (raiseCondition) untrapped or under CALL ON the call gives it, as
+    // in plain Rexx: after RaiseCondition ooRexx replaces a native method's
+    // value by the condition's RESULT, and with none it is Error 91.  The one
+    // difference: condition("O")~result is the value, where plain Rexx has none.
+    if (value != NULLOBJECT && cd.code == 0 && c->DirectoryAt(cond, "RESULT") == NULLOBJECT)
+        c->DirectoryPut(cond, value, "RESULT");
     if (pushLuaError(L, c, cd)) { release(c, cond); return; }
     lua_createtable(L, 0, 8);
     setStringField(L, c, "condition", cd.conditionName);
@@ -1172,7 +1182,7 @@ static int rexxCallBack(lua_State *L, RexxObjectPtr target, const char *message,
     if (!ran) { END_THREAD(); return unwindError(L); }   // (no more Rexx calls until it goes on)
     release(c, args);
     if (c->CheckCondition()) {
-        pushRexxCondition(L, c);
+        pushRexxCondition(L, c, r);
         END_THREAD();
         return lua_error(L);
     }
@@ -1271,7 +1281,7 @@ static int pairs_next(lua_State *L)
     if (!guarded(st, [&] { available = c->SupplierAvailable(sp) != 0; })) { END_THREAD(); return unwindError(L); }
     if (!available) {
         bool error = c->CheckCondition();
-        if (error) pushRexxCondition(L, c);
+        if (error) pushRexxCondition(L, c, NULLOBJECT);
         END_THREAD();
         if (error) return lua_error(L);
         return 0;
@@ -1281,7 +1291,7 @@ static int pairs_next(lua_State *L)
         END_THREAD();
         return unwindError(L);
     }
-    if (c->CheckCondition()) { pushRexxCondition(L, c); END_THREAD(); return lua_error(L); }
+    if (c->CheckCondition()) { pushRexxCondition(L, c, NULLOBJECT); END_THREAD(); return lua_error(L); }
     bool ok = false;
     if (!guarded(st, [&] { ok = pushValue(st, index) && pushValue(st, item); })) { END_THREAD(); return unwindError(L); }
     release(c, index);
@@ -1304,7 +1314,7 @@ static int box_pairs(lua_State *L)
     RexxThreadContext *c = st->tc;
     RexxObjectPtr sup = NULLOBJECT;
     if (!guarded(st, [&] { sup = c->SendMessage0(b->obj, "SUPPLIER"); })) { END_THREAD(); return unwindError(L); }
-    if (c->CheckCondition()) { pushRexxCondition(L, c); END_THREAD(); return lua_error(L); }
+    if (c->CheckCondition()) { pushRexxCondition(L, c, NULLOBJECT); END_THREAD(); return lua_error(L); }
     if (sup == NULLOBJECT || !c->IsOfType(sup, "SUPPLIER")) {
         END_THREAD();
         return luaL_error(L, "pairs: the Rexx object's supplier is not a Supplier");
@@ -1367,7 +1377,7 @@ static int box_tostring(lua_State *L)
     bool ok = false;
     if (!guarded(st, [&] { ok = stringValue(c, b->obj, s); })) { END_THREAD(); return unwindError(L); }
     if (!ok) {
-        if (c->CheckCondition()) pushRexxCondition(L, c);
+        if (c->CheckCondition()) pushRexxCondition(L, c, NULLOBJECT);
         else lua_pushstring(L, "the Rexx object has no string value");
     }
     else {
@@ -1988,7 +1998,7 @@ static NOINLINE bool pushValue(State *st, RexxObjectPtr v, int memo, int depth)
     if (c->IsString(v) || c->IsOfType(v, "STRING")) {   // Integers from literals too
         RexxStringObject s;
         if (!stringValue(c, v, s)) {
-            if (c->CheckCondition()) pushRexxCondition(L, c);
+            if (c->CheckCondition()) pushRexxCondition(L, c, NULLOBJECT);
             else lua_pushstring(L, "a Rexx string with no string value");
             return false;
         }
@@ -3226,7 +3236,7 @@ static NOINLINE int intoRexx(lua_State *L, int first, const RexxOp &op)
     }
     release(tc, args);
     int n;
-    if (tc->CheckCondition()) { pushRexxCondition(L, tc); n = -1; }
+    if (tc->CheckCondition()) { pushRexxCondition(L, tc, r); n = -1; }
     else if (r == NULLOBJECT) n = 0;
     else {
         bool ok = false;
@@ -3671,7 +3681,7 @@ static int rdWrite(lua_State *L, State *st, Redirect *r, int first, bool err)
         bool ran = guarded(st, [&] { if (err) r->io->WriteErrorBuffer(s, len); else r->io->WriteOutputBuffer(s, len); });
         st->L = outerL;
         if (!ran) return unwindError(L);
-        if (st->tc->CheckCondition()) { pushRexxCondition(L, st->tc); return lua_error(L); }
+        if (st->tc->CheckCondition()) { pushRexxCondition(L, st->tc, NULLOBJECT); return lua_error(L); }
     }
     return 0;
 }
@@ -3985,7 +3995,7 @@ static int rdRead(lua_State *L, State *st, Redirect *r, int first)
         }
         n++;
         if (st->unwind) return unwindError(L);
-        if (st->tc->CheckCondition()) { pushRexxCondition(L, st->tc); return lua_error(L); }
+        if (st->tc->CheckCondition()) { pushRexxCondition(L, st->tc, NULLOBJECT); return lua_error(L); }
         if (!ok) break;
     }
     return n;
