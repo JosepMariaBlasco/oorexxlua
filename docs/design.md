@@ -536,15 +536,19 @@ cross whole both ways: a NUL in one does not cut it short.
 
 - A Rexx condition that goes through Lua and back to Rexx (the Lua code did
   not catch it, or raised the same table again with `error(e)`) is raised
-  again as it is: a copy of its condition object, with everything it holds
-  (code, substitutions, description, additional, result, RC, and the
-  traceback from where the error was, as in plain Rexx), raised by
-  `RaiseConditionObject` (ooRexx RFE #883, r13329). `POSITION` and `PROGRAM`
-  are those of the clause that called into Lua: ooRexx sets them so for any
-  error leaving a native method. Not a 98.900 around it. (Until ooRexx
-  r13329, a SYNTAX was raised with `RaiseException` and its `DESCRIPTION` and
-  `RESULT` put into the new condition object, oorexxwasm's workaround; the
-  traceback was a new one, from where it came back.) The table keeps its
+  again: a condition other than SYNTAX as it is, a copy of its condition
+  object with everything it holds (description, additional, result, and the
+  RC of ERROR and FAILURE), raised by `RaiseConditionObject` (ooRexx RFE
+  #883, r13329); a SYNTAX with the same code, substitutions, description and
+  result, and a new traceback, from where it came back. Not a 98.900 around
+  it. (A SYNTAX goes by `RaiseException`, with the original's `DESCRIPTION`
+  and `RESULT` then put into the condition object that `GetConditionInfo()`
+  gives, which is the one ooRexx raises in the caller: oorexxwasm's
+  workaround, `Errors.testGroup` would show it if ooRexx stopped working
+  that way. `RaiseConditionObject` would raise it as it is, traceback
+  included, but until ooRexx #2132 is fixed the object it raises is held by
+  nothing the collector marks while the stack unwinds: with other threads
+  allocating, it crashed now and then. The user, 29/10/2026.) The table keeps its
   condition object (a weak-keyed table in the registry: the table, the
   object's userdata), and the bridge recognizes the table by its metatable.
   A HALT is the exception: one that ends a callback untrapped (ooRexx

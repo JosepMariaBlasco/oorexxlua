@@ -579,23 +579,41 @@ static bool isHalt(RexxThreadContext *c, RexxObjectPtr cond)
     return cd.code / 1000 == 4;
 }
 
-// Raise again a Rexx condition that went through Lua, as it is: a copy of its
-// condition object, with everything it holds (code, description, additional,
-// result, RC, traceback), raised by RaiseConditionObject (ooRexx RFE #883,
-// r13329, thread interface 104).  An older ooRexx (below the bridge's minimum)
-// has no such entry: there SYNTAX goes with its code and substitutions, any
-// other condition with its description, additional and result, and the rest is
-// lost, rather than calling past the end of the interface.
+// Raise again a Rexx condition that went through Lua.
+// Any condition but SYNTAX, as it is: a copy of its condition object, with
+// everything it holds (description, additional, result, RC), raised by
+// RaiseConditionObject (ooRexx RFE #883, r13329, thread interface 104).
+// SYNTAX with RaiseException, its code and substitutions (a new traceback,
+// from here), and then:
+// WORKAROUND (oorexx-bridges, ooRexx #2132; the user, 29/10/2026: drop it,
+// and raise SYNTAX with RaiseConditionObject too, when #2132 is in): a SYNTAX
+// raised by RaiseConditionObject is held, while the stack unwinds, by nothing
+// the collector marks, and with other threads allocating it crashed now and
+// then (oorexxpython's finding; here 3 runs of 30 of a threaded stress test).
+// No other API raises SYNTAX with a DESCRIPTION, so put the original's
+// DESCRIPTION and RESULT into the condition just raised: GetConditionInfo()
+// gives the native activation's own condition object (read at r13297), the
+// one ooRexx then raises in the caller (Errors.testGroup would show it if not).
+// An older ooRexx (below the bridge's minimum) has no RaiseConditionObject:
+// there any other condition goes with RaiseCondition, its RC lost, rather
+// than calling past the end of the interface.
 static void raiseCondition(RexxThreadContext *c, RexxObjectPtr cond)
 {
     RexxDirectoryObject d = (RexxDirectoryObject)cond;
-    if (c->functions->interfaceVersion >= THREAD_INTERFACE_VERSION_5_3_0) {
-        c->RaiseConditionObject(d);
-        return;
-    }
     RexxCondition cd;
     c->DecodeConditionInfo(d, &cd);
-    if (cd.code != 0) c->RaiseException(cd.code, cd.additional != NULLOBJECT ? cd.additional : c->NewArray(0));
+    if (cd.code != 0) {
+        c->RaiseException(cd.code, cd.additional != NULLOBJECT ? cd.additional : c->NewArray(0));
+        RexxDirectoryObject now = c->GetConditionInfo();
+        if (now != NULLOBJECT) {
+            RexxObjectPtr desc = c->DirectoryAt(d, "DESCRIPTION");
+            RexxObjectPtr result = c->DirectoryAt(d, "RESULT");
+            if (desc != NULLOBJECT) c->DirectoryPut(now, desc, "DESCRIPTION");
+            if (result != NULLOBJECT) c->DirectoryPut(now, result, "RESULT");
+        }
+        return;
+    }
+    if (c->functions->interfaceVersion >= THREAD_INTERFACE_VERSION_5_3_0) c->RaiseConditionObject(d);
     else c->RaiseCondition(c->CString(cd.conditionName), (RexxStringObject)c->DirectoryAt(d, "DESCRIPTION"),
                            c->DirectoryAt(d, "ADDITIONAL"), c->DirectoryAt(d, "RESULT"));
 }
