@@ -117,14 +117,15 @@ also makes them, as artifacts of the CI run, without a release.
 ## Getting started
 
 You need a C++ compiler (on Windows, MSVC, used from Git Bash in a developer
-command prompt's environment), an ooRexx 5.3.0 r13324 or later with its API
+command prompt's environment), an ooRexx 5.3.0 r13329 or later with its API
 headers (the one installed in `/usr/local`, say, or a portable build) on the
 `PATH` (`.LogicalWrapper` is in ooRexx since r13278; `WITH` and threads
 registering command environments need the fixes of ooRexx bugs #2111 and
 #2112, r13274 and r13275; threads, that of #2122, r13286; Lua command
 handlers, `.CommandHandler`, r13288; `ADDRESS LUA`, `StackCommandEnvironment`,
 r13297; conditions other than SYNTAX coming back as themselves, #2123,
-r13320; the bridge's minimum is the family's revision), and a
+r13320; a condition raised again as it is, `RaiseConditionObject`, RFE #883,
+r13329; the bridge's minimum is the family's revision), and a
 Lua: 5.4 by default, or `LUA_VERSION=5.3` or `5.5`.
 
 - On Linux, the distribution's development files (Debian/Ubuntu:

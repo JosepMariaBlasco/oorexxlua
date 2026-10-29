@@ -90,7 +90,7 @@ would hold the Rexx object while Lua runs.
 `tests/rexx/Threads.testGroup` runs several Rexx threads in one state, with
 callbacks, and several threads with states of their own.
 
-**Needs ooRexx r13286 (bug #2122)** (the bridge's minimum is the family's revision, r13324). Before it, `IsInstanceOf`, `IsRoutine`
+**Needs ooRexx r13286 (bug #2122)** (the bridge's minimum is the family's revision, r13329). Before it, `IsInstanceOf`, `IsRoutine`
 and `IsMethod` asked of a number that has no string value yet (any result of
 Rexx arithmetic) made that string without the kernel lock: with other threads
 running Rexx, ooRexx's heap was corrupted (found by ooRexx/Python). r13286
@@ -529,15 +529,15 @@ cross whole both ways: a NUL in one does not cut it short.
 
 - A Rexx condition that goes through Lua and back to Rexx (the Lua code did
   not catch it, or raised the same table again with `error(e)`) is raised
-  again: the same code, substitutions, description and result (SYNTAX), or
-  the same condition, description, additional and result (any other), with
-  a new traceback, from where it came back. Not a 98.900 around it. (No
-  API raises SYNTAX with a description: after `RaiseException` the bridge
-  puts the original's `DESCRIPTION` and `RESULT` into the condition object
-  that `GetConditionInfo()` gives, which is the one ooRexx raises in the
-  caller. A workaround, oorexxwasm's, until ooRexx can raise a condition
-  object as it is: oorexx-bridges `oorexx-bugs/2026-10-26-raise-syntax-description.md`;
-  `Errors.testGroup` would show it if ooRexx stopped working that way.) The table keeps its
+  again as it is: a copy of its condition object, with everything it holds
+  (code, substitutions, description, additional, result, RC, and the
+  traceback from where the error was, as in plain Rexx), raised by
+  `RaiseConditionObject` (ooRexx RFE #883, r13329). `POSITION` and `PROGRAM`
+  are those of the clause that called into Lua: ooRexx sets them so for any
+  error leaving a native method. Not a 98.900 around it. (Until ooRexx
+  r13329, a SYNTAX was raised with `RaiseException` and its `DESCRIPTION` and
+  `RESULT` put into the new condition object, oorexxwasm's workaround; the
+  traceback was a new one, from where it came back.) The table keeps its
   condition object (a weak-keyed table in the registry: the table, the
   object's userdata), and the bridge recognizes the table by its metatable.
   A HALT is the exception: one that ends a callback untrapped (ooRexx
@@ -560,8 +560,8 @@ cross whole both ways: a NUL in one does not cut it short.
   `NOTREADY`, `ERROR`, `FAILURE` with condition, description and
   `additional` as in plain Rexx, the description whatever object it is
   (`DecodeConditionInfo` gives only Strings, so the bridge takes it from the
-  condition object). Not yet: the **RC** of ERROR and FAILURE
-  (`RaiseCondition` has none: `.nil`; ooRexx RFE #883, filed). Tests in
+  condition object), and the **RC** of ERROR and FAILURE (since r13329, with
+  `RaiseConditionObject`; until then `.nil`). Tests in
   `CommandHandlers.testGroup`.
   Untrapped, or under `CALL ON`, such a condition still ends the Lua code,
   and the call gives the routine's own value, as in plain Rexx
@@ -577,10 +577,10 @@ cross whole both ways: a NUL in one does not cut it short.
 - A native routine that uses its caller's variables (rexxutil's
   `SysStemSort`, `SysFileTree` with a stem, anything using
   `RexxVariablePool` or `GetContextVariable`), passed to Lua as a Routine and
-  called there, **crashes ooRexx** (#2129, filed, not fixed at r13324: such
-  a routine called through `CallRoutine` by native code; measured through
-  the bridge with `SysStemSort`). Until #2129 is in, call it from a small
-  Rexx routine and pass that one to Lua.
+  called there, has no Rexx caller whose variables it could use: a SYNTAX
+  error (40.919, 40.925), since ooRexx r13326 (#2129; before, ooRexx crashed).
+  To work on a stem of the Rexx code, call it from a small Rexx routine and
+  pass that one to Lua (`test_a_native_routine_wanting_its_callers_variables`).
 - A Lua error that goes through Rexx and back to Lua (the 98.900 above,
   which the Rexx code did not trap) is the error value again, not a Rexx
   error around it: the same table, the same string. A `.LuaObject` of
@@ -837,7 +837,7 @@ documents it.
 uncovers it (until 0.4.0, `AddCommandEnvironment` replaced it, and a
 `deregister` left `LUA` unknown; measured on r13297,
 `test_lua_cls_stacks_over_a_registered_lua`). It needs ooRexx r13297
-(the bridge's minimum is the family's revision, r13324). The work on
+(the bridge's minimum is the family's revision, r13329). The work on
 command handlers in ooRexx/WASM found that `AddCommandEnvironment` changes
 the instance's table of handlers without the interpreter's lock, and that a
 command sent to an environment before it is registered can cache a handler

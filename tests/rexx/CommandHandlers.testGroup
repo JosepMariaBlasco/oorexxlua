@@ -322,9 +322,9 @@ x:
   self~unreg("RAISESR2")
 
 -- the other conditions, from a Routine, through eval and through a handler,
--- trapped by SIGNAL ON: condition, description and additional as in plain
--- Rexx (ERROR's and FAILURE's RC cannot come back yet: RaiseCondition has
--- no RC; topics/command-handlers.md, rule 1, "The RC waits for ooRexx")
+-- trapped by SIGNAL ON: condition, description, additional and (ERROR,
+-- FAILURE) RC as in plain Rexx (the RC since RaiseConditionObject, ooRexx
+-- RFE #883, r13329)
 ::method test_other_conditions_from_a_routine
   s = .LuaState~new
   do cond over .array~of("NOTREADY", "ERROR", "FAILURE")
@@ -334,12 +334,14 @@ x:
     self~assertSame(cond, c~condition, cond "through eval")
     self~assertSame("d" cond, c~description, cond "through eval")
     self~assertSame("a", c~additional, cond "through eval")
+    if cond \== "NOTREADY" then self~assertEquals(5, c~rc, cond "through eval")
     .CommandHandler~register("RAISESR3", s~commandHandler(s~eval("local f = ...; return function() return f() end", raiser)))
     c = trapOf(cond, "RAISESR3")
     .CommandHandler~deregister("RAISESR3")
     self~assertSame(cond, c~condition, cond "through a handler")
     self~assertSame("d" cond, c~description, cond "through a handler")
     self~assertSame("a", c~additional, cond "through a handler")
+    if cond \== "NOTREADY" then self~assertEquals(5, c~rc, cond "through a handler")
   end
   s~close
 

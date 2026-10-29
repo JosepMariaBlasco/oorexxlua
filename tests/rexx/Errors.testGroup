@@ -148,6 +148,22 @@ syntax:
   c = self~conditionOf(.lua, "EVAL", "local f = ...; local ok, e = pcall(f); error(e)", bad)
   self~assertSame("the description", c~description, "raised again by Lua")
 
+-- raised again as it is (RaiseConditionObject): its traceback starts where
+-- the error was, in the Rexx code Lua called, as in plain Rexx
+::method test_a_syntax_keeps_its_traceback
+  bad = .routine~new("bad", .array~of("nop", "x = 1 + 'a'"))
+  c = self~conditionOf(.lua, "EVAL", "local f = ...; return f()", bad)
+  self~assertEquals(41.1, c~code)
+  self~assertTrue(c~traceback~firstItem~strip~startsWith("2 *-* x = 1 + 'a'"), c~traceback~firstItem)
+
+-- a native routine that uses its caller's variables, called from Lua, has no
+-- Rexx caller: a SYNTAX error since ooRexx r13326 (#2129; before, a crash)
+::method test_a_native_routine_wanting_its_callers_variables
+  s.0 = 2; s.1 = 'b'; s.2 = 'a'
+  c = self~conditionOf(.lua, "EVAL", "local f = ...; return f('s.')", .context~package~findRoutine("STEMSORT"))
+  self~assertEquals(40.919, c~code)
+  self~assertSame("b", s.1, "the stem untouched")
+
 ::method test_a_Lua_error_through_Rexx_is_itself
   -- Lua -> Rexx -> Lua: the error value Lua raised, not a Rexx error around it
   inner = .routine~new("inner", "return .lua~eval('error({code = 42})')")
@@ -292,3 +308,5 @@ x:
 ::class ReplyMaker                -- a callback whose reply raises in its STRING
 ::method reply
   return .StringRaiser~new
+
+::routine stemSort external "LIBRARY rexxutil SysStemSort"
