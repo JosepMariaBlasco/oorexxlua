@@ -2061,15 +2061,39 @@ static bool room(State *st, int n)
 /* Entering, from a native method                                             */
 /* ------------------------------------------------------------------------ */
 
+// WORKAROUND (oorexx-bridges, ooRexx #2132; the user, 29/10/2026: drop it when
+// #2132 is in): a SYNTAX that Rexx code the method ran raised (a `string`, a
+// `supplier`, a `dimensions` of the user's), left pending as the method
+// returns, is held by nothing the collector marks while ooRexx takes it to
+// the caller's trap, and with other threads allocating that can crash.  So on
+// the way out a pending SYNTAX is cleared and raised again with
+// RaiseException (raiseCondition), which ooRexx keeps in the activity.  Not
+// while a C++ exception unwinds the method (a SIGNAL going past it).
+static void anchorSyntax(RexxThreadContext *c)
+{
+    if (!c->CheckCondition()) return;
+    RexxDirectoryObject cond = c->GetConditionInfo();
+    if (cond == NULLOBJECT) return;
+    RexxCondition cd;
+    c->DecodeConditionInfo(cond, &cd);
+    if (cd.code == 0) return;
+    c->ClearCondition();
+    raiseCondition(c, cond);
+}
+
 // Every native method starts here: drain the graveyard, then enter the state
-// (if open).  `ok` is false after a Rexx error has been raised.
+// (if open).  `ok` is false after a Rexx error has been raised.  On the way
+// out, anchorSyntax.
 struct Entry {
     State *st;
     Enter enter;
     bool ok;
+    RexxThreadContext *tc;
+    int exceptions;
+    ~Entry() { if (std::uncaught_exceptions() == exceptions) anchorSyntax(tc); }
     Entry(RexxMethodContext *m, State *s, RexxObjectPtr stateObj)
         : st(s), enter((drain(m->threadContext), s), m->threadContext, stateObj, foreignThread(s) ? SKIP : LOCK),
-          ok(true)
+          ok(true), tc(m->threadContext), exceptions(std::uncaught_exceptions())
     {
         if (foreignThread(st)) {
             raise(m->threadContext, "Lua error: the LuaState of the Lua that runs ooRexx can only be used "

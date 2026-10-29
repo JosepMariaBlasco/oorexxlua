@@ -73,6 +73,19 @@ return testResult
   self~assertEquals(98.900, tableError(.TStringDimensionsArray~of(1)), "DIMENSIONS")
   self~assertSame(2, .lua~eval("return 1 + 1"), "Lua still works")
 
+-- A SYNTAX the user's SUPPLIER raised comes back as itself: code,
+-- substitutions, description (raised again on the way out, anchorSyntax:
+-- ooRexx #2132)
+::method test_a_syntax_from_the_users_supplier
+  signal on syntax
+  .lua~table(.TRaisingSupplierDir~new)
+  self~fail("no SYNTAX")
+syntax:
+  c = condition("O")
+  self~assertEquals(40.1, c~code)
+  self~assertSame("from supplier", c~additional[1])
+  self~assertSame("described", c~description)
+
 -- An Array subclass keeps its shape (DIMENSIONS): trailing empty slots, and
 -- dimensions, as the class itself (topics/array-shape.md)
 ::method test_array_subclass_shape
@@ -136,3 +149,5 @@ syntax:
   return 0
 syntax:
   return condition("O")~code
+::class TRaisingSupplierDir subclass directory
+::method supplier; raise syntax 40.1 array("from supplier") description "described"

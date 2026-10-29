@@ -548,7 +548,12 @@ cross whole both ways: a NUL in one does not cut it short.
   that way. `RaiseConditionObject` would raise it as it is, traceback
   included, but until ooRexx #2132 is fixed the object it raises is held by
   nothing the collector marks while the stack unwinds: with other threads
-  allocating, it crashed now and then. The user, 29/10/2026.) The table keeps its
+  allocating, it crashed now and then. The user, 29/10/2026.) For the same
+  reason a SYNTAX that Rexx code a method of the bridge ran raised (the
+  user's `string`, `supplier`, `dimensions`), still pending as the method
+  returns, is cleared and raised again the same way on the way out
+  (`anchorSyntax`, in `Entry`): the same code, substitutions, description
+  and result, a traceback from the method's caller. The table keeps its
   condition object (a weak-keyed table in the registry: the table, the
   object's userdata), and the bridge recognizes the table by its metatable.
   A HALT is the exception: one that ends a callback untrapped (ooRexx
