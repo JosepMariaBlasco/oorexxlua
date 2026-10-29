@@ -61,6 +61,18 @@ return testResult
   a = .TAtArray~of(1, 2)
   self~assertSame("1=1 2=2", self~show(.lua~table(a)), "own AT of an Array")
 
+-- A SUPPLIER that answers no Supplier is SYNTAX 98.994, as DO ... OVER gives
+-- in plain Rexx (crashed before: oorexx-bridges, lesson 7 of 29/10/2026);
+-- for pairs() from Lua too.  DIMENSIONS that are not an Array: an error
+::method test_a_supplier_that_is_not_one
+  do v over .array~of(.TNoSupplierDir~new, .TStringSupplierDir~new, .TStringSupplierTable~new, .TStringSupplierArray~new)
+    self~assertEquals(98.994, tableError(v), v~class~id)
+    self~assertEquals(98.994, doOverError(v), v~class~id "in plain Rexx")
+  end
+  self~assertEquals(98.994, tableError(.TStringSupplier~new, "local o = ...; for k in pairs(o) do end"), "pairs")
+  self~assertEquals(98.900, tableError(.TStringDimensionsArray~of(1)), "DIMENSIONS")
+  self~assertSame(2, .lua~eval("return 1 + 1"), "Lua still works")
+
 -- An Array subclass keeps its shape (DIMENSIONS): trailing empty slots, and
 -- dimensions, as the class itself (topics/array-shape.md)
 ::method test_array_subclass_shape
@@ -94,3 +106,33 @@ return testResult
 ::method at
   use arg i
   return self~at:super(i) * 10
+
+::class TNoSupplierDir subclass directory
+::method supplier; return
+::class TStringSupplierDir subclass directory
+::method supplier; return "str"
+::class TStringSupplierTable subclass stringtable
+::method supplier; return "str"
+::class TStringSupplierArray subclass array
+::method supplier; return "str"
+::class TStringSupplier
+::method supplier; return "str"
+::class TStringDimensionsArray subclass array
+::method dimensions; return "str"
+
+::routine tableError                     -- the code of ~table(v)'s error, or of eval(code, v)'s
+  use arg v, code
+  signal on syntax
+  if arg(2, "E") then .lua~eval(code, v)
+  else .lua~table(v)
+  return 0
+syntax:
+  return condition("O")~code
+
+::routine doOverError
+  use arg v
+  signal on syntax
+  do with index i item x over v; end
+  return 0
+syntax:
+  return condition("O")~code

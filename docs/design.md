@@ -341,7 +341,14 @@ OVER x` sees): an own `SUPPLIER` is honoured, an own `AT` only as far as
 data and is not copied. An Array subclass also gives its shape by
 `DIMENSIONS`, so trailing empty slots and every dimension are kept, as for
 the class (`oorexx-bridges`, `topics/directory-crossing.md`, 2026-10-18,
-with its amendment to point 2).
+with its amendment to point 2). A `SUPPLIER` that answers no Supplier is SYNTAX
+98.994, as `DO ... OVER` gives in plain Rexx (here and in `pairs(obj)`;
+before 0.4.0 `~table` crashed on one, and `pairs` gave a Lua error:
+oorexx-bridges, lesson 7 of 29/10/2026); `DIMENSIONS` that answer no Array,
+the 98.900 "an Array whose dimensions cannot be read". The items are read
+with the API's supplier functions, which use the Supplier's own
+implementation: a Supplier subclass's own `AVAILABLE`, `INDEX`, `ITEM` or
+`NEXT` is not run (in `DO ... OVER` it is).
 
 The copy keeps the Array's shape (`oorexx-bridges`, `topics/array-shape.md`,
 decided 17/10/2026; until then a sparse Array lost its size and a

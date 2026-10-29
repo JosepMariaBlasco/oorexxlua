@@ -1095,6 +1095,22 @@ static bool stringValue(RexxThreadContext *c, RexxObjectPtr o, RexxStringObject 
     return s != NULLOBJECT && !c->CheckCondition();
 }
 
+// o~supplier, checked: NULLOBJECT with a condition pending when it raised one,
+// or when what it answered is not a Supplier (the API's supplier functions
+// take any object, and crash on one that is not: oorexx-bridges, lesson 7 of
+// 29/10/2026).  That is SYNTAX 98.994, as DO ... OVER gives in plain Rexx.
+static RexxSupplierObject supplierOf(RexxThreadContext *c, RexxObjectPtr o)
+{
+    RexxObjectPtr sup = c->SendMessage0(o, "SUPPLIER");
+    if (c->CheckCondition()) return NULLOBJECT;
+    if (sup == NULLOBJECT || !c->IsOfType(sup, "SUPPLIER")) {
+        if (sup != NULLOBJECT) release(c, sup);
+        c->RaiseException1(Rexx_Error_Execution_no_supplier, o);
+        return NULLOBJECT;
+    }
+    return (RexxSupplierObject)sup;
+}
+
 /*
  * The Lua C functions below run in some Lua thread L: the main one, or a
  * coroutine.  Everything the bridge does meanwhile (converting arguments,
@@ -1302,12 +1318,8 @@ static int box_pairs(lua_State *L)
     USE_THREAD(L);
     RexxThreadContext *c = st->tc;
     RexxObjectPtr sup = NULLOBJECT;
-    if (!guarded(st, [&] { sup = c->SendMessage0(b->obj, "SUPPLIER"); })) { END_THREAD(); return unwindError(L); }
-    if (c->CheckCondition()) { pushRexxCondition(L, c, NULLOBJECT); END_THREAD(); return lua_error(L); }
-    if (sup == NULLOBJECT || !c->IsOfType(sup, "SUPPLIER")) {
-        END_THREAD();
-        return luaL_error(L, "pairs: the Rexx object's supplier is not a Supplier");
-    }
+    if (!guarded(st, [&] { sup = supplierOf(c, b->obj); })) { END_THREAD(); return unwindError(L); }
+    if (sup == NULLOBJECT) { pushRexxCondition(L, c, NULLOBJECT); END_THREAD(); return lua_error(L); }
     pushBox(st, sup);
     release(c, sup);                                // the userdata keeps it
     END_THREAD();
@@ -2292,6 +2304,10 @@ static NOINLINE int pushArraySubclass(State *st, RexxObjectPtr a)
     lua_State *L = st->L;
     RexxObjectPtr ds = c->SendMessage0(a, "DIMENSIONS");
     if (c->CheckCondition()) return 2;
+    if (ds == NULLOBJECT || !c->IsArray(ds)) {
+        lua_pushstring(L, "an Array whose dimensions cannot be read");
+        return 1;
+    }
     size_t ndims = c->ArrayItems((RexxArrayObject)ds), dims[MAX_ARRAY_DIMS];
     if (ndims > MAX_ARRAY_DIMS) { lua_pushstring(L, "an Array of more than 32 dimensions"); return 1; }
     if (ndims == 0) { lua_newtable(L); return 0; }
@@ -2304,8 +2320,8 @@ static NOINLINE int pushArraySubclass(State *st, RexxObjectPtr a)
     if (!lua_checkstack(L, (int)ndims + 8)) { lua_pushstring(L, "an Array nested too deeply"); return 1; }
     shapeLevel(L, dims, ndims, 0);
     int t = lua_gettop(L);
-    RexxSupplierObject sup = (RexxSupplierObject)c->SendMessage0(a, "SUPPLIER");
-    if (c->CheckCondition()) return 2;
+    RexxSupplierObject sup = supplierOf(c, a);
+    if (sup == NULLOBJECT) { lua_settop(L, t - 1); return 2; }
     while (c->SupplierAvailable(sup)) {
         RexxObjectPtr index = c->SupplierIndex(sup), item = c->SupplierItem(sup);
         size_t pos[MAX_ARRAY_DIMS];
@@ -2355,15 +2371,15 @@ RexxMethod2(RexxObjectPtr, LuaState_Table, OPTIONAL_RexxObjectPtr, src, CSELF, s
              c->IsInstanceOf(src, c->FindClass("DIRECTORY")) ||
              c->IsInstanceOf(src, c->FindClass("STRINGTABLE"))) {
         lua_newtable(L);
-        RexxObjectPtr sup = c->SendMessage0(src, "SUPPLIER");
-        if (c->CheckCondition()) { lua_settop(L, top); return NULLOBJECT; }
-        while (c->SupplierAvailable((RexxSupplierObject)sup)) {
-            if (!pushValue(st, c->SupplierIndex((RexxSupplierObject)sup)) ||
-                !pushValue(st, c->SupplierItem((RexxSupplierObject)sup))) {
+        RexxSupplierObject sup = supplierOf(c, src);
+        if (sup == NULLOBJECT) { lua_settop(L, top); return NULLOBJECT; }
+        while (c->SupplierAvailable(sup)) {
+            if (!pushValue(st, c->SupplierIndex(sup)) ||
+                !pushValue(st, c->SupplierItem(sup))) {
                 raiseTop(st); lua_settop(L, top); return NULLOBJECT;
             }
             lua_settable(L, -3);
-            c->SupplierNext((RexxSupplierObject)sup);
+            c->SupplierNext(sup);
         }
     }
     else if (c->IsInstanceOf(src, c->FindClass("ARRAY"))) {
