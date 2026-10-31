@@ -1035,7 +1035,15 @@ a Rexx condition that went through Lua is itself (USER too: a Rexx method
 the handler calls that raises `USER X` reaches the issuer's trap); a HALT of
 Rexx code the handler called is a HALT again after the command (RC 1), as
 from `~eval` (*Errors*: `SIGNAL ON HALT`, `CALL ON HALT`, untrapped SYNTAX
-4.1; rule 1 for host code, kept by rule 6). (`ADDRESS LUA` differs, on
+4.1; rule 1 for host code, kept by rule 6), given back through the
+command's context, `caller~raise("HALT", 1)`, the core's way for a handler
+(the same after a Ctrl-C while the handler runs). Not by halting the thread,
+as `~eval` does: since ooRexx r13334 (#2124) the core's
+`CommandContext~finish`, which runs after the handler returns, would take
+that halt, and the issuer's traps would not see it (oorexx-bridges
+`oorexx-bugs/2026-10-31-halt-taken-by-commandcontext-finish.md`; the user,
+31/10/2026, as oorexxnet and oorexxpython). Should the context refuse it (the
+handler already raised a condition there), the thread is halted. (`ADDRESS LUA` differs, on
 purpose: there the command *is* Lua code, and its failing is the command's
 ERROR; here it is the handler's own bug.) A handler whose state is closed,
 or the host's state on another thread than its own (*Lua → ooRexx*), is

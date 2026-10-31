@@ -641,7 +641,7 @@ static NOINLINE void raiseLuaError(State *st, int idx, const LuaFailure &f)
  * or for any other Lua error SYNTAX 98.900 (raiseLuaError).
  * Ctrl-C (docs/design.md, *Ctrl-C*): the caller's HALT is made pending; if
  * that stopped the Lua code, -1 with no condition (see failed).            */
-static int pcallAll(State *st, int nargs)
+static int pcallAll(State *st, int nargs, bool *halted = NULL)
 {
     LuaFailure f;
     int n = pcallQuiet(st, nargs, f);
@@ -657,13 +657,17 @@ static int pcallAll(State *st, int nargs)
     // would be lost).  As a real Ctrl-C: SIGNAL ON HALT and CALL ON HALT trap
     // it at the end of the clause, untrapped it is SYNTAX 4.1.  No condition:
     // the method gives .nil meanwhile (failed).  oorexx-bridges
-    // topics/command-handlers.md, rule 1 (the user, 21/10/2026).
+    // topics/command-handlers.md, rule 1 (the user, 21/10/2026).  With
+    // halted (a command handler), not halting the thread: *halted is set, and
+    // the handler gives the HALT back through its .CommandContext.
     if (cond != NULLOBJECT && isHalt(st->tc, cond)) {
         lua_pop(st->L, 1);
-        st->tc->HaltThread();
+        if (halted != NULL) *halted = true; else st->tc->HaltThread();
         return -1;
     }
-    if (ctrlC) st->tc->HaltThread();            // (not twice if ooRexx's handler already did)
+    if (ctrlC) {                                // (not twice if ooRexx's handler already did)
+        if (halted != NULL) *halted = true; else st->tc->HaltThread();
+    }
     st->returned = NULLOBJECT;
     if (n < 0) {
         if (!ctrlC) {
@@ -2568,7 +2572,13 @@ static bool isCallable(lua_State *L, int idx);
  * a number), caller the core's .CommandContext.  RC is its value (nil or
  * none: 0); a Lua error is SYNTAX 98.900, a Rexx condition that went through
  * Lua itself (pcallAll); after Ctrl-C, or a HALT of Rexx code it called, RC 1
- * and the HALT after the command (docs/design.md, *Command environments*). */
+ * and the HALT after the command, raised through the .CommandContext,
+ * caller~raise("HALT", 1), the core's way for a command handler (not by
+ * HaltThread: since ooRexx r13334, #2124, the core's CommandContext~FINISH,
+ * run after COMMAND returns, would take it, where nothing traps it; oorexx-
+ * bridges, 31/10/2026, as oorexxnet and oorexxpython).  Should the context
+ * refuse it (a condition the handler already raised there), HaltThread
+ * (docs/design.md, *Command environments*).                              */
 RexxMethod2(RexxObjectPtr, LuaCmd_Command, RexxStringObject, command, RexxObjectPtr, caller)
 {
     RexxThreadContext *c = context->threadContext;
@@ -2585,10 +2595,19 @@ RexxMethod2(RexxObjectPtr, LuaCmd_Command, RexxStringObject, command, RexxObject
     pushSelf(px);
     lua_pushlstring(L, c->StringData(command), c->StringLength(command));
     if (!pushValue(st, caller)) { raiseTop(st); lua_settop(L, top); return NULLOBJECT; }
-    int n = pcallAll(st, 2);
-    if (n < 0) { lua_settop(L, top); return c->CheckCondition() ? failed(st) : c->WholeNumber(1); }
-    RexxObjectPtr rc = n == 0 || lua_isnil(L, -n) ? c->WholeNumber(0) : toRexx(st, -n);
+    bool halted = false;
+    int n = pcallAll(st, 2, &halted);
+    RexxObjectPtr rc;
+    if (n < 0) rc = c->CheckCondition() ? failed(st) : c->WholeNumber(1);
+    else rc = n == 0 || lua_isnil(L, -n) ? c->WholeNumber(0) : toRexx(st, -n);
     lua_settop(L, top);
+    if (halted && !c->CheckCondition()) {
+        rc = c->WholeNumber(1);
+        c->SendMessage2(caller, "RAISE", c->String("HALT"), rc);
+        if (c->CheckCondition()) { c->ClearCondition(); c->HaltThread(); }
+        return rc;
+    }
+    if (n < 0) return rc;                       // (failed: the value, with the condition raised)
     return c->CheckCondition() ? NULLOBJECT : rc;
 }
 
