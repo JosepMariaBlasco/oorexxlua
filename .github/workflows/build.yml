@@ -2,8 +2,8 @@
 # Linux, macOS (arm64 and x64) and Windows: one job per platform and Lua,
 # since the bridge is compiled against one Lua. ooRexx comes from its
 # portable builds on SourceForge, pinned to one revision; a newer one is
-# taken deliberately, after checking it (r13329, the family's revision since
-# 29/10/2026: #2129, RFE #883's RaiseConditionObject; r13324, 28/10/2026: #2123, conditions other than SYNTAX through the API, #2126,
+# taken deliberately, after checking it (r13344, the family's revision since
+# 31/10/2026: #2132, #2130, #2131, #2108, #2124, #2104; r13329, 29/10/2026: #2129, RFE #883's RaiseConditionObject; r13324, 28/10/2026: #2123, conditions other than SYNTAX through the API, #2126,
 # #2128, #2116; r13297, the family's revision since
 # 25/10/2026: StackCommandEnvironment, and r13294's forwarding fix of RFE #882;
 # r13289, 25/10/2026: RFE #882, command environments written in Rexx, and #2121;
@@ -34,7 +34,7 @@ on:
   workflow_dispatch:
 
 env:
-  OOREXX_REV: "13329"
+  OOREXX_REV: "13344"
   OOREXX_URL: https://downloads.sourceforge.net/project/oorexx/oorexx/5.3.0beta/portable
 
 jobs:

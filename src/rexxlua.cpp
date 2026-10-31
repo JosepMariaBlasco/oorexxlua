@@ -119,6 +119,11 @@ struct State {
     // caught before it crossed Lua's frames: Lua unwinds by a Lua error, and
     // the bridge's lua_pcall throws it again (rethrowUnwind)
     std::exception_ptr unwind;
+    // The value the Rexx code returned as it raised a condition other than
+    // SYNTAX (RAISE ... RETURN 7), when pcallAll raised that condition again:
+    // what the method returns, which ooRexx gives the caller untrapped or
+    // under CALL ON (since r13339, #2130), as in plain Rexx (see failed)
+    RexxObjectPtr returned = NULLOBJECT;
     // Ctrl-C (docs/design.md, *Ctrl-C*); read by the signal handler
     std::atomic<int> running{0};            // lua_pcalls of the bridge's in progress (nested too)
     std::atomic<bool> interrupted{false};   // a signal stopped its Lua code: until the outer
@@ -579,43 +584,34 @@ static bool isHalt(RexxThreadContext *c, RexxObjectPtr cond)
     return cd.code / 1000 == 4;
 }
 
-// Raise again a Rexx condition that went through Lua.
-// Any condition but SYNTAX, as it is: a copy of its condition object, with
-// everything it holds (description, additional, result, RC), raised by
-// RaiseConditionObject (ooRexx RFE #883, r13329, thread interface 104).
-// SYNTAX with RaiseException, its code and substitutions (a new traceback,
-// from here), and then:
-// WORKAROUND (oorexx-bridges, ooRexx #2132; the user, 29/10/2026: drop it,
-// and raise SYNTAX with RaiseConditionObject too, when #2132 is in): a SYNTAX
-// raised by RaiseConditionObject is held, while the stack unwinds, by nothing
-// the collector marks, and with other threads allocating it crashed now and
-// then (oorexxpython's finding; here 3 runs of 30 of a threaded stress test).
-// No other API raises SYNTAX with a DESCRIPTION, so put the original's
-// DESCRIPTION and RESULT into the condition just raised: GetConditionInfo()
-// gives the native activation's own condition object (read at r13297), the
-// one ooRexx then raises in the caller (Errors.testGroup would show it if not).
-// An older ooRexx (below the bridge's minimum) has no RaiseConditionObject:
-// there any other condition goes with RaiseCondition, its RC lost, rather
-// than calling past the end of the interface.
-static void raiseCondition(RexxThreadContext *c, RexxObjectPtr cond)
+// Raise again a Rexx condition that went through Lua, as it is: a copy of its
+// condition object, with everything it holds (code, substitutions,
+// description, additional, result, RC, traceback), raised by
+// RaiseConditionObject (ooRexx RFE #883, r13329; for SYNTAX safe since
+// r13344, #2132).  Returns the value the Rexx code returned as it raised it
+// (pushRexxCondition keeps it as LUA.RETURNED, left out of the copy raised),
+// or NULLOBJECT.  An older ooRexx (below the bridge's minimum) has no
+// RaiseConditionObject: there SYNTAX goes with its code and substitutions,
+// any other condition with its description, additional and result, and the
+// rest is lost, rather than calling past the end of the interface.
+static RexxObjectPtr raiseCondition(RexxThreadContext *c, RexxObjectPtr cond)
 {
     RexxDirectoryObject d = (RexxDirectoryObject)cond;
+    RexxObjectPtr returned = c->DirectoryAt(d, "LUA.RETURNED");
+    if (returned != NULLOBJECT) {
+        d = (RexxDirectoryObject)c->SendMessage0(d, "COPY");
+        c->DirectoryRemove(d, "LUA.RETURNED");
+    }
+    if (c->functions->interfaceVersion >= THREAD_INTERFACE_VERSION_5_3_0) {
+        c->RaiseConditionObject(d);
+        return returned;
+    }
     RexxCondition cd;
     c->DecodeConditionInfo(d, &cd);
-    if (cd.code != 0) {
-        c->RaiseException(cd.code, cd.additional != NULLOBJECT ? cd.additional : c->NewArray(0));
-        RexxDirectoryObject now = c->GetConditionInfo();
-        if (now != NULLOBJECT) {
-            RexxObjectPtr desc = c->DirectoryAt(d, "DESCRIPTION");
-            RexxObjectPtr result = c->DirectoryAt(d, "RESULT");
-            if (desc != NULLOBJECT) c->DirectoryPut(now, desc, "DESCRIPTION");
-            if (result != NULLOBJECT) c->DirectoryPut(now, result, "RESULT");
-        }
-        return;
-    }
-    if (c->functions->interfaceVersion >= THREAD_INTERFACE_VERSION_5_3_0) c->RaiseConditionObject(d);
+    if (cd.code != 0) c->RaiseException(cd.code, cd.additional != NULLOBJECT ? cd.additional : c->NewArray(0));
     else c->RaiseCondition(c->CString(cd.conditionName), (RexxStringObject)c->DirectoryAt(d, "DESCRIPTION"),
                            c->DirectoryAt(d, "ADDITIONAL"), c->DirectoryAt(d, "RESULT"));
+    return returned;
 }
 
 static RexxObjectPtr newProxy(State *st, int idx);
@@ -668,9 +664,10 @@ static int pcallAll(State *st, int nargs)
         return -1;
     }
     if (ctrlC) st->tc->HaltThread();            // (not twice if ooRexx's handler already did)
+    st->returned = NULLOBJECT;
     if (n < 0) {
         if (!ctrlC) {
-            if (cond != NULLOBJECT) raiseCondition(st->tc, cond);
+            if (cond != NULLOBJECT) st->returned = raiseCondition(st->tc, cond);
             else raiseLuaError(st, -1, f);
         }
         lua_pop(st->L, 1);
@@ -678,12 +675,16 @@ static int pcallAll(State *st, int nargs)
     return n;
 }
 
-/* What a method returns when pcallAll returned -1: NULLOBJECT, with the
- * condition raised; or, after Ctrl-C, .nil, so that the clause ends and the
- * HALT comes at its boundary (a missing result would raise Error 91 first). */
+/* What a method returns when pcallAll returned -1: with the condition
+ * raised, the value the Rexx code returned as it raised it (st->returned:
+ * untrapped or under CALL ON the caller gets it, as in plain Rexx), or
+ * NULLOBJECT; or, after Ctrl-C, .nil, so that the clause ends and the HALT
+ * comes at its boundary (a missing result would raise Error 91 first).     */
 static RexxObjectPtr failed(State *st)
 {
-    return st->tc->CheckCondition() ? NULLOBJECT : st->tc->Nil();
+    RexxObjectPtr r = st->returned;
+    st->returned = NULLOBJECT;
+    return st->tc->CheckCondition() ? r : st->tc->Nil();
 }
 
 /*
@@ -1011,16 +1012,11 @@ static NOINLINE void pushRexxCondition(lua_State *L, RexxThreadContext *c, RexxO
     RexxCondition cd;
     c->DecodeConditionInfo(cond, &cd);
     c->ClearCondition();
-    // WORKAROUND (oorexx-bridges oorexx-bugs/raise-return-value/; the user,
-    // 29/10/2026; drop it when ooRexx keeps a native routine's own value):
     // a condition other than SYNTAX that the Rexx code raised as it returned
-    // value (RAISE ... RETURN 7) keeps value as its RESULT, so that raised
-    // again (raiseCondition) untrapped or under CALL ON the call gives it, as
-    // in plain Rexx: after RaiseCondition ooRexx replaces a native method's
-    // value by the condition's RESULT, and with none it is Error 91.  The one
-    // difference: condition("O")~result is the value, where plain Rexx has none.
-    if (value != NULLOBJECT && cd.code == 0 && c->DirectoryAt(cond, "RESULT") == NULLOBJECT)
-        c->DirectoryPut(cond, value, "RESULT");
+    // value (RAISE ... RETURN 7) keeps it, as LUA.RETURNED, for the method
+    // that raises it again to return (raiseCondition, failed): untrapped or
+    // under CALL ON the call gives it, as in plain Rexx (ooRexx #2130, r13339)
+    if (value != NULLOBJECT && cd.code == 0) c->DirectoryPut(cond, value, "LUA.RETURNED");
     if (pushLuaError(L, c, cd)) { release(c, cond); return; }
     lua_createtable(L, 0, 8);
     setStringField(L, c, "condition", cd.conditionName);
@@ -2061,39 +2057,15 @@ static bool room(State *st, int n)
 /* Entering, from a native method                                             */
 /* ------------------------------------------------------------------------ */
 
-// WORKAROUND (oorexx-bridges, ooRexx #2132; the user, 29/10/2026: drop it when
-// #2132 is in): a SYNTAX that Rexx code the method ran raised (a `string`, a
-// `supplier`, a `dimensions` of the user's), left pending as the method
-// returns, is held by nothing the collector marks while ooRexx takes it to
-// the caller's trap, and with other threads allocating that can crash.  So on
-// the way out a pending SYNTAX is cleared and raised again with
-// RaiseException (raiseCondition), which ooRexx keeps in the activity.  Not
-// while a C++ exception unwinds the method (a SIGNAL going past it).
-static void anchorSyntax(RexxThreadContext *c)
-{
-    if (!c->CheckCondition()) return;
-    RexxDirectoryObject cond = c->GetConditionInfo();
-    if (cond == NULLOBJECT) return;
-    RexxCondition cd;
-    c->DecodeConditionInfo(cond, &cd);
-    if (cd.code == 0) return;
-    c->ClearCondition();
-    raiseCondition(c, cond);
-}
-
 // Every native method starts here: drain the graveyard, then enter the state
-// (if open).  `ok` is false after a Rexx error has been raised.  On the way
-// out, anchorSyntax.
+// (if open).  `ok` is false after a Rexx error has been raised.
 struct Entry {
     State *st;
     Enter enter;
     bool ok;
-    RexxThreadContext *tc;
-    int exceptions;
-    ~Entry() { if (std::uncaught_exceptions() == exceptions) anchorSyntax(tc); }
     Entry(RexxMethodContext *m, State *s, RexxObjectPtr stateObj)
         : st(s), enter((drain(m->threadContext), s), m->threadContext, stateObj, foreignThread(s) ? SKIP : LOCK),
-          ok(true), tc(m->threadContext), exceptions(std::uncaught_exceptions())
+          ok(true)
     {
         if (foreignThread(st)) {
             raise(m->threadContext, "Lua error: the LuaState of the Lua that runs ooRexx can only be used "
@@ -2614,7 +2586,7 @@ RexxMethod2(RexxObjectPtr, LuaCmd_Command, RexxStringObject, command, RexxObject
     lua_pushlstring(L, c->StringData(command), c->StringLength(command));
     if (!pushValue(st, caller)) { raiseTop(st); lua_settop(L, top); return NULLOBJECT; }
     int n = pcallAll(st, 2);
-    if (n < 0) { lua_settop(L, top); return c->CheckCondition() ? NULLOBJECT : c->WholeNumber(1); }
+    if (n < 0) { lua_settop(L, top); return c->CheckCondition() ? failed(st) : c->WholeNumber(1); }
     RexxObjectPtr rc = n == 0 || lua_isnil(L, -n) ? c->WholeNumber(0) : toRexx(st, -n);
     lua_settop(L, top);
     return c->CheckCondition() ? NULLOBJECT : rc;

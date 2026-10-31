@@ -136,9 +136,7 @@ syntax:
   self~assertEquals(98.900, c~code)
   self~assertTrue(c~additional[2]~pos("Rexx error 93.907") = 1, c~additional[2])
 
--- its DESCRIPTION too (a workaround in raiseCondition: oorexx-bridges
--- oorexx-bugs/2026-10-26-raise-syntax-description.md; if ooRexx stopped
--- giving its own condition object to GetConditionInfo, this would fail)
+-- its DESCRIPTION too (raised again as it is, RaiseConditionObject)
 ::method test_a_syntax_keeps_its_description
   bad = .routine~new("bad", "raise syntax 40.1 array('BOOM') description 'the description'")
   c = self~conditionOf(.lua, "EVAL", "local f = ...; return f()", bad)
@@ -147,6 +145,14 @@ syntax:
   self~assertSame("the description", c~description, "through Lua")
   c = self~conditionOf(.lua, "EVAL", "local f = ...; local ok, e = pcall(f); error(e)", bad)
   self~assertSame("the description", c~description, "raised again by Lua")
+
+-- raised again as it is (RaiseConditionObject): its traceback starts where
+-- the error was, in the Rexx code Lua called, as in plain Rexx
+::method test_a_syntax_keeps_its_traceback
+  bad = .routine~new("bad", .array~of("nop", "x = 1 + 'a'"))
+  c = self~conditionOf(.lua, "EVAL", "local f = ...; return f()", bad)
+  self~assertEquals(41.1, c~code)
+  self~assertTrue(c~traceback~firstItem~strip~startsWith("2 *-* x = 1 + 'a'"), c~traceback~firstItem)
 
 -- a native routine that uses its caller's variables, called from Lua, has no
 -- Rexx caller: a SYNTAX error since ooRexx r13326 (#2129; before, a crash)

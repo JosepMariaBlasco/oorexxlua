@@ -212,7 +212,7 @@ syntax:
   self~assertSame("41.1", condition("O")~code, "the Rexx error, itself")
   self~unreg("THROUGH")
 
--- with its DESCRIPTION (a workaround: see Errors.testGroup)
+-- with its DESCRIPTION (raised again as it is: see Errors.testGroup)
 ::method test_rexx_error_through_lua_keeps_its_description
   self~reg("THROUGH", .lua~eval("local o = ...; return function() return o:boom() end", .Boom3~new))
   signal on syntax
@@ -297,7 +297,8 @@ x:
   self~assertSame("USER X", c~condition)
   self~assertSame("d", c~description)
   self~assertSame("a", c~additional)
-  self~assertSame(7, c~result, "the routine's value (a workaround: plain Rexx has no RESULT)")
+  self~assertSame(.nil, c~result, "no RESULT, as in plain Rexx (the routine's value is not one)")
+  self~assertFalse(c~hasIndex("LUA.RETURNED"), "the bridge's own entry left out")
   self~unreg("RAISESR")
 
 ::method test_a_user_condition_from_a_routine_through_eval
@@ -309,7 +310,8 @@ x:
   self~assertSame("USER X", c~condition)
   self~assertSame("d", c~description)
   self~assertSame("a", c~additional)
-  self~assertSame(7, c~result, "the routine's value (a workaround: plain Rexx has no RESULT)")
+  self~assertSame(.nil, c~result, "no RESULT, as in plain Rexx (the routine's value is not one)")
+  self~assertFalse(c~hasIndex("LUA.RETURNED"), "the bridge's own entry left out")
 
 -- under ::OPTIONS ERROR SYNTAX: this one comes back by RaiseCondition, so it
 -- is where #2119 (fixed in r13282) would have mattered
@@ -346,9 +348,8 @@ x:
   s~close
 
 -- untrapped, or under CALL ON, the call gives the routine's value (RAISE ...
--- RETURN 7), as in plain Rexx; not Error 91.  A workaround in
--- pushRexxCondition (oorexx-bridges oorexx-bugs/raise-return-value/): the
--- value is the condition's RESULT, which plain Rexx does not have
+-- RETURN 7), as in plain Rexx; not Error 91: the method returns it as it
+-- raises the condition again (ooRexx #2130, r13339, keeps it)
 ::method test_a_condition_untrapped_or_under_call_on_gives_the_value
   raiser = .routine~new("r", "raise user x description 'd' additional ('a') return 7")
   self~assertSame(7, .lua~eval("local f = ...; return f()", raiser), "untrapped")

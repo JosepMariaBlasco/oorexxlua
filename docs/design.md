@@ -90,7 +90,7 @@ would hold the Rexx object while Lua runs.
 `tests/rexx/Threads.testGroup` runs several Rexx threads in one state, with
 callbacks, and several threads with states of their own.
 
-**Needs ooRexx r13286 (bug #2122)** (the bridge's minimum is the family's revision, r13329). Before it, `IsInstanceOf`, `IsRoutine`
+**Needs ooRexx r13286 (bug #2122)** (the bridge's minimum is the family's revision, r13344). Before it, `IsInstanceOf`, `IsRoutine`
 and `IsMethod` asked of a number that has no string value yet (any result of
 Rexx arithmetic) made that string without the kernel lock: with other threads
 running Rexx, ooRexx's heap was corrupted (found by ooRexx/Python). r13286
@@ -536,24 +536,17 @@ cross whole both ways: a NUL in one does not cut it short.
 
 - A Rexx condition that goes through Lua and back to Rexx (the Lua code did
   not catch it, or raised the same table again with `error(e)`) is raised
-  again: a condition other than SYNTAX as it is, a copy of its condition
-  object with everything it holds (description, additional, result, and the
-  RC of ERROR and FAILURE), raised by `RaiseConditionObject` (ooRexx RFE
-  #883, r13329); a SYNTAX with the same code, substitutions, description and
-  result, and a new traceback, from where it came back. Not a 98.900 around
-  it. (A SYNTAX goes by `RaiseException`, with the original's `DESCRIPTION`
-  and `RESULT` then put into the condition object that `GetConditionInfo()`
-  gives, which is the one ooRexx raises in the caller: oorexxwasm's
-  workaround, `Errors.testGroup` would show it if ooRexx stopped working
-  that way. `RaiseConditionObject` would raise it as it is, traceback
-  included, but until ooRexx #2132 is fixed the object it raises is held by
-  nothing the collector marks while the stack unwinds: with other threads
-  allocating, it crashed now and then. The user, 29/10/2026.) For the same
-  reason a SYNTAX that Rexx code a method of the bridge ran raised (the
-  user's `string`, `supplier`, `dimensions`), still pending as the method
-  returns, is cleared and raised again the same way on the way out
-  (`anchorSyntax`, in `Entry`): the same code, substitutions, description
-  and result, a traceback from the method's caller. The table keeps its
+  again as it is: a copy of its condition object, with everything it holds
+  (code, substitutions, description, additional, result, the RC of ERROR
+  and FAILURE, and, for SYNTAX, the traceback from where the error was, as
+  in plain Rexx), raised by `RaiseConditionObject` (ooRexx RFE #883, r13329).
+  `POSITION` and `PROGRAM` are those of the clause that called into Lua:
+  ooRexx sets them so for any error leaving a native method. Not a 98.900
+  around it. (Until ooRexx r13344 a SYNTAX went by `RaiseException`, with the
+  original's `DESCRIPTION` and `RESULT` put into the new condition object,
+  and a SYNTAX that the user's code raised in a method of the bridge was
+  raised again on the way out: ooRexx #2132, a condition object the collector
+  could take under threads.) The table keeps its
   condition object (a weak-keyed table in the registry: the table, the
   object's userdata), and the bridge recognizes the table by its metatable.
   A HALT is the exception: one that ends a callback untrapped (ooRexx
@@ -583,13 +576,12 @@ cross whole both ways: a NUL in one does not cut it short.
   and the call gives the routine's own value, as in plain Rexx
   (`x = s~eval("local f = ...; return f()", r)`, `r` doing `raise user x
   ... return 7`: x = 7, the `CALL ON` handler having run; a Lua handler's
-  RC is 7). A **workaround** (the user, 29/10/2026, as ooRexx/.NET does):
-  after `RaiseCondition`, ooRexx replaces a native method's value by the
-  condition's RESULT (with none, Error 91), so the bridge keeps the
-  routine's value as the condition's RESULT when it has none. The one
-  difference from plain Rexx: `condition("O")~result` is that value.
-  Dropped when ooRexx keeps a native method's own value (oorexx-bridges
-  `oorexx-bugs/raise-return-value/`).
+  RC is 7), and the condition object has no RESULT, as in plain Rexx: the
+  bridge keeps the value with the condition (as `LUA.RETURNED`, left out of
+  the copy it raises) and the method returns it as it raises the condition
+  again, which ooRexx keeps since r13339 (#2130). (Until r13344 the value
+  was put into the condition as its RESULT, a workaround: ooRexx replaced a
+  native method's value by the condition's RESULT, with none Error 91.)
 - A native routine that uses its caller's variables (rexxutil's
   `SysStemSort`, `SysFileTree` with a stem, anything using
   `RexxVariablePool` or `GetContextVariable`), passed to Lua as a Routine and
@@ -853,7 +845,7 @@ documents it.
 uncovers it (until 0.4.0, `AddCommandEnvironment` replaced it, and a
 `deregister` left `LUA` unknown; measured on r13297,
 `test_lua_cls_stacks_over_a_registered_lua`). It needs ooRexx r13297
-(the bridge's minimum is the family's revision, r13329). The work on
+(the bridge's minimum is the family's revision, r13344). The work on
 command handlers in ooRexx/WASM found that `AddCommandEnvironment` changes
 the instance's table of handlers without the interpreter's lock, and that a
 command sent to an environment before it is registered can cache a handler
