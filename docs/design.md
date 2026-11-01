@@ -1033,10 +1033,12 @@ issued the command, `additional` as for any Lua error reaching Rexx
 (*Errors*: `[1]` the message, `[2]` the error value, `[3]` Lua's traceback);
 a Rexx condition that went through Lua is itself (USER too: a Rexx method
 the handler calls that raises `USER X` reaches the issuer's trap); a HALT of
-Rexx code the handler called is a HALT again after the command (RC 1), as
+Rexx code the handler called is a HALT again after the command (RC 0, what
+a handler written in Rexx gives: the family's rule 1, the user, 1/11/2026;
+until then 1), as
 from `~eval` (*Errors*: `SIGNAL ON HALT`, `CALL ON HALT`, untrapped SYNTAX
 4.1; rule 1 for host code, kept by rule 6), given back through the
-command's context, `caller~raise("HALT", 1)`, the core's way for a handler
+command's context, `caller~raise("HALT", 0)`, the core's way for a handler
 (the same after a Ctrl-C while the handler runs). Not by halting the thread,
 as `~eval` does: since ooRexx r13334 (#2124) the core's
 `CommandContext~finish`, which runs after the handler returns, would take
@@ -1047,8 +1049,8 @@ handler already raised a condition there), the thread is halted. (`ADDRESS LUA` 
 purpose: there the command *is* Lua code, and its failing is the command's
 ERROR; here it is the handler's own bug.) A handler whose state is closed,
 or the host's state on another thread than its own (*Lua → ooRexx*), is
-SYNTAX 98.900 too. A Ctrl-C while it runs: RC 1, no condition, then the
-HALT, as `ADDRESS LUA`.
+SYNTAX 98.900 too. A Ctrl-C while it runs: RC 0, no condition, then the
+HALT, through the context as above (`ADDRESS LUA` gives RC 1).
 
 **How.** `.LuaCommandHandler` (`lua.cls`) keeps the Lua callable in
 `HANDLER`; its `COMMAND` method is native (`LuaCmd_Command` in

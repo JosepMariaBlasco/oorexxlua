@@ -386,7 +386,8 @@ x:
 
 -- a HALT in Rexx code the Lua handler called (host code): a HALT again for
 -- the issuer (rule 1, the user, 21/10/2026; kept by rule 6 for host code),
--- as a real Ctrl-C: SIGNAL ON HALT, CALL ON HALT (after the command, RC 1),
+-- as a real Ctrl-C: SIGNAL ON HALT, CALL ON HALT (after the command, RC 0, as
+-- a handler written in Rexx gives: the user, 1/11/2026),
 -- untrapped SYNTAX 4.1
 ::method haltHandler
   self~reg("HALTS", .lua~eval("local f = ...; return function() f(); return 5 end", -
@@ -406,7 +407,7 @@ halt:
   self~halted = 0
   call on halt name h
   address halts 'x'
-  self~assertEquals(1, rc, "RC 1, as ADDRESS LUA after a Ctrl-C")
+  self~assertEquals(0, rc, "RC 0, as a handler written in Rexx")
   self~assertEquals(1, self~halted, "CALL ON HALT ran")
   self~unreg("HALTS")
   return

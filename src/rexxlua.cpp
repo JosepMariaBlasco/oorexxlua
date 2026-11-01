@@ -2571,9 +2571,10 @@ static bool isCallable(lua_State *L, int idx);
  * .LuaObject) as handler(command, caller), command always a Lua string (never
  * a number), caller the core's .CommandContext.  RC is its value (nil or
  * none: 0); a Lua error is SYNTAX 98.900, a Rexx condition that went through
- * Lua itself (pcallAll); after Ctrl-C, or a HALT of Rexx code it called, RC 1
- * and the HALT after the command, raised through the .CommandContext,
- * caller~raise("HALT", 1), the core's way for a command handler (not by
+ * Lua itself (pcallAll); after Ctrl-C, or a HALT of Rexx code it called, RC 0
+ * (what a handler written in Rexx gives, the family's rule 1, the user,
+ * 1/11/2026) and the HALT after the command, raised through the
+ * .CommandContext, caller~raise("HALT", 0), the core's way for a command handler (not by
  * HaltThread: since ooRexx r13334, #2124, the core's CommandContext~FINISH,
  * run after COMMAND returns, would take it, where nothing traps it; oorexx-
  * bridges, 31/10/2026, as oorexxnet and oorexxpython).  Should the context
@@ -2598,11 +2599,11 @@ RexxMethod2(RexxObjectPtr, LuaCmd_Command, RexxStringObject, command, RexxObject
     bool halted = false;
     int n = pcallAll(st, 2, &halted);
     RexxObjectPtr rc;
-    if (n < 0) rc = c->CheckCondition() ? failed(st) : c->WholeNumber(1);
+    if (n < 0) rc = c->CheckCondition() ? failed(st) : c->WholeNumber(0);
     else rc = n == 0 || lua_isnil(L, -n) ? c->WholeNumber(0) : toRexx(st, -n);
     lua_settop(L, top);
     if (halted && !c->CheckCondition()) {
-        rc = c->WholeNumber(1);
+        rc = c->WholeNumber(0);
         c->SendMessage2(caller, "RAISE", c->String("HALT"), rc);
         if (c->CheckCondition()) { c->ClearCondition(); c->HaltThread(); }
         return rc;
