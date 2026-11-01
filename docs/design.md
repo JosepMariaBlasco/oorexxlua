@@ -551,16 +551,22 @@ cross whole both ways: a NUL in one does not cut it short.
   object's userdata), and the bridge recognizes the table by its metatable.
   A HALT is the exception: one that ends a callback untrapped (ooRexx
   makes it Error 4.1 there, its description, `additional` and result gone)
-  is a **HALT again** for the Rexx code that called into Lua, raised by
-  halting the thread (`HaltThread`), not by `RaiseCondition`, which ooRexx
-  ignores when nobody traps it (the halt would be lost): as a real Ctrl-C,
-  `SIGNAL ON HALT` and `CALL ON HALT` trap it at the end of the clause (the
-  call gives `.nil` meanwhile, so that `CALL ON HALT` can resume it), and
-  untrapped it is Error 4.1, as in plain Rexx (`oorexx-bridges`
-  `topics/command-handlers.md`, rule 1, the user, 21/10/2026; until then
-  it was Error 4.1 directly, which `SIGNAL ON HALT` could not trap; until
-  0.2.0, `~eval` and the other calls gave the 98.900; until 0.3.0 the HALT
-  was recognized by its text). `error(tostring(e))` is a new Lua error.
+  is a **HALT again** for the Rexx code that called into Lua, raised as a
+  `raise halt ... return .nil` in Rexx would be: `RaiseCondition("HALT")`
+  (with no description: ooRexx dropped it), the call giving `.nil`.
+  `SIGNAL ON HALT` traps it at the call; `CALL ON HALT` runs its handler
+  there, and the clause then goes on with `.nil` (without a value it would
+  end in Error 44.1); untrapped it is Error 4.1, as in plain Rexx
+  (`oorexx-bridges` `topics/command-handlers.md`, rule 1, the user,
+  21/10/2026, revised 1/11/2026; measured in `oorexx-bugs/halt-raisecondition/`).
+  A SYNTAX 4.1 still pending is cleared first; should another condition be
+  pending, which cannot be replaced, the thread is halted instead
+  (`HaltThread`, as a Ctrl-C). (Until 1/11/2026 the thread was halted
+  always, because on r13283 ooRexx ignored an untrapped `RaiseCondition("HALT")`
+  and the halt would have been lost: then `CALL ON HALT` ran only after the
+  next clause; until 21/10/2026 it was Error 4.1 directly, which `SIGNAL ON
+  HALT` could not trap; until 0.2.0, `~eval` and the other calls gave the
+  98.900; until 0.3.0 the HALT was recognized by its text.) `error(tostring(e))` is a new Lua error.
   The table is the condition wherever it goes: a HALT's table that Lua keeps
   and raises in a later call into Lua halts there too.
   Conditions other than SYNTAX from a Rexx routine that Lua calls
@@ -1040,7 +1046,7 @@ from `~eval` (*Errors*: `SIGNAL ON HALT`, `CALL ON HALT`, untrapped SYNTAX
 4.1; rule 1 for host code, kept by rule 6), given back through the
 command's context, `caller~raise("HALT", 0)`, the core's way for a handler
 (the same after a Ctrl-C while the handler runs). Not by halting the thread,
-as `~eval` does: since ooRexx r13334 (#2124) the core's
+as `~eval` did until 1/11/2026: since ooRexx r13334 (#2124) the core's
 `CommandContext~finish`, which runs after the handler returns, would take
 that halt, and the issuer's traps would not see it (oorexx-bridges
 `oorexx-bugs/2026-10-31-halt-taken-by-commandcontext-finish.md`; the user,

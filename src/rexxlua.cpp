@@ -635,6 +635,27 @@ static NOINLINE void raiseLuaError(State *st, int idx, const LuaFailure &f)
     c->RaiseException(Rexx_Error_Execution_user_defined, a);
 }
 
+/* A HALT given back to the Rexx code that called into Lua, as a `raise halt`
+ * with `return .nil` in Rexx: RaiseCondition("HALT") (no description: ooRexx
+ * dropped it when it made the HALT SYNTAX 4.1), and .nil as the value the
+ * method returns (st->returned, failed), without which CALL ON HALT would not
+ * run and the clause would end in Error 44.1.  A SYNTAX 4.1 still pending is
+ * cleared first.  Any other condition already pending cannot be replaced:
+ * then, as a Ctrl-C, HaltThread (oorexx-bridges topics/command-handlers.md,
+ * rule 1, revised 1/11/2026; measured on r13344 and r13346, oorexx-bugs/
+ * halt-raisecondition/).                                                  */
+static void raiseHalt(State *st)
+{
+    RexxThreadContext *c = st->tc;
+    RexxDirectoryObject pending = c->GetConditionInfo();
+    if (pending != NULLOBJECT) {
+        if (!isHalt(c, pending)) { c->HaltThread(); st->returned = c->Nil(); return; }
+        c->ClearCondition();
+    }
+    c->RaiseCondition("HALT", NULLOBJECT, NULLOBJECT, NULLOBJECT);
+    st->returned = c->Nil();
+}
+
 /* The same, raising a Rexx condition.  Leaves all results on the stack and
  * returns their count, or -1 after raising a Rexx condition: the one a Rexx
  * error that went through Lua came from (Error 4.1 for a HALT in a callback),
@@ -652,17 +673,17 @@ static int pcallAll(State *st, int nargs, bool *halted = NULL)
     bool ctrlC = takeInterrupt(st);
     RexxObjectPtr cond = n < 0 ? conditionOf(st->L, -1) : NULLOBJECT;
     // A HALT that Rexx code Lua called did not trap (ooRexx made it SYNTAX
-    // 4.1): a HALT again for the Rexx caller, by halting the thread, not by
-    // RaiseCondition, which ooRexx ignores when nobody traps it (the halt
-    // would be lost).  As a real Ctrl-C: SIGNAL ON HALT and CALL ON HALT trap
-    // it at the end of the clause, untrapped it is SYNTAX 4.1.  No condition:
-    // the method gives .nil meanwhile (failed).  oorexx-bridges
-    // topics/command-handlers.md, rule 1 (the user, 21/10/2026).  With
-    // halted (a command handler), not halting the thread: *halted is set, and
-    // the handler gives the HALT back through its .CommandContext.
+    // 4.1): a HALT again for the Rexx caller, raised as a `raise halt ...
+    // return .nil` in Rexx would (raiseHalt): SIGNAL ON HALT traps it at the
+    // call, CALL ON HALT runs its handler there and the clause then goes on
+    // with .nil (failed), untrapped it is Error 4.1.  oorexx-bridges
+    // topics/command-handlers.md, rule 1 (the user, 21/10/2026; revised
+    // 1/11/2026: RaiseCondition, not HaltThread).  With halted (a command
+    // handler), not raised here: *halted is set, and the handler gives the
+    // HALT back through its .CommandContext.
     if (cond != NULLOBJECT && isHalt(st->tc, cond)) {
         lua_pop(st->L, 1);
-        if (halted != NULL) *halted = true; else st->tc->HaltThread();
+        if (halted != NULL) *halted = true; else raiseHalt(st);
         return -1;
     }
     if (ctrlC) {                                // (not twice if ooRexx's handler already did)
@@ -681,9 +702,10 @@ static int pcallAll(State *st, int nargs, bool *halted = NULL)
 
 /* What a method returns when pcallAll returned -1: with the condition
  * raised, the value the Rexx code returned as it raised it (st->returned:
- * untrapped or under CALL ON the caller gets it, as in plain Rexx), or
- * NULLOBJECT; or, after Ctrl-C, .nil, so that the clause ends and the HALT
- * comes at its boundary (a missing result would raise Error 91 first).     */
+ * untrapped or under CALL ON the caller gets it, as in plain Rexx; .nil for
+ * a HALT given back, raiseHalt), or NULLOBJECT; or, after Ctrl-C, .nil, so
+ * that the clause ends and the HALT comes at its boundary (a missing result
+ * would raise Error 91 first).                                            */
 static RexxObjectPtr failed(State *st)
 {
     RexxObjectPtr r = st->returned;
