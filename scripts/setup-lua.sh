@@ -26,7 +26,12 @@ DIR=$WORK/lua-$V
 if [ "$OS" = Windows ]; then OUT=$DIR/src/lua$XY.dll EXE=$DIR/src/lua.exe; else OUT=$DIR/src/liblua.a EXE=$DIR/src/lua; fi
 if [ ! -f "$OUT" ]; then
   mkdir -p "$WORK"
-  curl -sSfL --retry 3 --retry-all-errors "https://www.lua.org/ftp/lua-$V.tar.gz" | tar xz -C "$WORK"
+  # To a file, then tar: piped, a retry after a cut transfer would append to
+  # what tar already got (CI, 3-4/11/2026: "tar: Error is not recoverable")
+  TGZ=$WORK/lua-$V.tar.gz
+  curl -sSfL --retry 5 --retry-all-errors --retry-delay 5 -o "$TGZ" "https://www.lua.org/ftp/lua-$V.tar.gz"
+  tar xzf "$TGZ" -C "$WORK"
+  rm -f "$TGZ"
   cd "$DIR/src"
   case $OS in
     Windows)
