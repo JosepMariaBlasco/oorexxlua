@@ -31,7 +31,7 @@ A Lua C function of the bridge that raises a Lua error (`lua_error`,
 a helper: MSVC's `longjmp` would destroy it again (`docs/design.md`,
 *Errors*). Keep such objects in `NOINLINE` functions.
 
-ooRexx: r13365 or later, the family's revision (`.LogicalWrapper`, RFE #880, r13278; the fixes of
+ooRexx: r13379 or later, the family's revision (`.LogicalWrapper`, RFE #880, r13278; the fixes of
 #2111 and #2112, which `WITH` and command environments registered while other
 threads run need; that of #2122, `IsInstanceOf`/`IsRoutine` with other
 threads running Rexx; `.CommandHandler`, r13288; `StackCommandEnvironment`,
@@ -40,7 +40,8 @@ than SYNTAX; `RaiseConditionObject`, RFE #883, r13329, to raise a kept condition
 again as it is, for SYNTAX safe since #2132, r13344; #2130, r13339, a native
 method's own value kept after it raises a condition; r13346, #2124's
 regression fixed; r13358, #2107, #2133, #2115, #2135;
-r13365, #2075, #2134, #2136, #2084). The CI uses
+r13365, #2075, #2134, #2136, #2084; r13379, #2018, #1317, #2137,
+#2138, #2009, #2011, #2014, #1890). The CI uses
 the portable builds, pinned to one revision (`OOREXX_REV` in the workflow).
 
 Tests that check a text compare it with `==` or `assertSame`, never `=` or
