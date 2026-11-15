@@ -27,11 +27,24 @@ if [ "$OS" = Windows ]; then OUT=$DIR/src/lua$XY.dll EXE=$DIR/src/lua.exe; else 
 if [ ! -f "$OUT" ]; then
   mkdir -p "$WORK"
   # To a file, then tar: piped, a retry after a cut transfer would append to
-  # what tar already got (CI, 3-4/11/2026: "tar: Error is not recoverable")
-  TGZ=$WORK/lua-$V.tar.gz
-  curl -sSfL --retry 5 --retry-all-errors --retry-delay 5 -o "$TGZ" "https://www.lua.org/ftp/lua-$V.tar.gz"
-  tar xzf "$TGZ" -C "$WORK"
-  rm -f "$TGZ"
+  # what tar already got (CI, 3-4/11/2026: "tar: Error is not recoverable").
+  # With ORXLUA_LUA_TARBALLS set, the tarball is kept in that directory and
+  # taken from there next time (the CI caches it: www.lua.org timed out on
+  # Windows runners, 5/11/2026)
+  if [ -n "${ORXLUA_LUA_TARBALLS:-}" ]; then
+    ORXLUA_LUA_TARBALLS=${ORXLUA_LUA_TARBALLS/#\~/$HOME}    # as the workflow writes it
+    mkdir -p "$ORXLUA_LUA_TARBALLS"; TGZ=$ORXLUA_LUA_TARBALLS/lua-$V.tar.gz
+  else
+    TGZ=$WORK/lua-$V.tar.gz
+  fi
+  if [ ! -s "$TGZ" ]; then
+    curl -sSfL --retry 5 --retry-all-errors --retry-delay 5 -o "$TGZ.part" "https://www.lua.org/ftp/lua-$V.tar.gz"
+    mv "$TGZ.part" "$TGZ"
+  else
+    echo "setup-lua.sh: $TGZ (kept)" >&2
+  fi
+  tar xzf "$TGZ" -C "$WORK" || { rm -f "$TGZ"; exit 1; }    # a bad one is not kept
+  [ -n "${ORXLUA_LUA_TARBALLS:-}" ] || rm -f "$TGZ"
   cd "$DIR/src"
   case $OS in
     Windows)

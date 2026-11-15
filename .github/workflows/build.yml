@@ -16,7 +16,10 @@
 # run need). Lua: on Linux, 5.3 and 5.4 are the
 # distribution's (shared liblua, through pkg-config); everything else is
 # built from lua.org's sources by scripts/setup-lua.sh, pinned to a release
-# (static on Linux and macOS, a DLL on Windows).
+# (static on Linux and macOS, a DLL on Windows). Its tarball is cached
+# (actions/cache, one per runner OS and release; ORXLUA_LUA_TARBALLS), so a
+# job does not depend on reaching www.lua.org, which timed out on Windows
+# (5/11/2026).
 #
 # The Lua 5.3 jobs also run the tests of the Lua module (tests/lua) in TeX
 # Live's own LuaTeX (texlua, from CTAN: scripts/setup-luatex.sh), the Lua the
@@ -39,6 +42,7 @@ on:
 
 env:
   OOREXX_REV: "13514"
+  ORXLUA_LUA_TARBALLS: ~/lua-tarballs     # setup-lua.sh keeps lua.org's tarballs here
   OOREXX_URL: https://downloads.sourceforge.net/project/oorexx/oorexx/5.3.0beta/portable
 
 jobs:
@@ -75,6 +79,11 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install -q coreutils
       - run: rexx -v
+      - name: Lua's tarball (cached)
+        uses: actions/cache@v4
+        with:
+          path: ~/lua-tarballs
+          key: lua-tarball-${{ runner.os }}-${{ matrix.lua }}
       - name: Lua ${{ matrix.lua }}
         run: |
           V=${LUA_RELEASE%.*}; echo "LUA_VERSION=$V" >> "$GITHUB_ENV"
@@ -147,6 +156,11 @@ jobs:
           unzip -q "$RUNNER_TEMP/oorexx.zip" -d "$RUNNER_TEMP"
           cygpath -w "$RUNNER_TEMP/oorexx-5.3.0-$OOREXX_REV.windows.x86_64-portable-release/bin" >> "$GITHUB_PATH"
       - run: rexx -v
+      - name: Lua's tarball (cached)
+        uses: actions/cache@v4
+        with:
+          path: ~/lua-tarballs
+          key: lua-tarball-${{ runner.os }}-${{ matrix.lua }}
       - name: Lua ${{ matrix.lua }}
         run: |
           echo "LUA_VERSION=${LUA_RELEASE%.*}" >> "$GITHUB_ENV"
