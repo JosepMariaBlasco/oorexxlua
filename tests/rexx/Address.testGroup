@@ -74,31 +74,25 @@ return testResult
 
 ::method test_runtime_error_is_ERROR
   trace off
-  call on error name trapped
-  call on failure name trapped
-  address lua 'error("boom")'
+  do
+    address lua 'error("boom")'
+  catch c = error, failure
+  end
   self~assertEquals(1, rc)
-  self~assertSame("ERROR", self~caught)
-  self~assertEquals('error("boom")', self~description)
-  self~assertSame("ADDRESS LUA:1: boom", self~additional~makeArray("0a"x)[1])
-  self~assertTrue(self~additional~pos("stack traceback:") > 0, "with Lua's traceback")
-  return
-trapped:
-  self~caught = condition("C"); self~description = condition("D"); self~additional = condition("A")
-  return
+  self~assertSame("ERROR", c~condition)
+  self~assertEquals('error("boom")', c~description)
+  self~assertSame("ADDRESS LUA:1: boom", c~additional~makeArray("0a"x)[1])
+  self~assertTrue(c~additional~pos("stack traceback:") > 0, "with Lua's traceback")
 
 ::method test_compile_error_is_FAILURE
   trace off
-  call on error name trapped
-  call on failure name trapped
-  address lua 'this is not Lua'
+  do
+    address lua 'this is not Lua'
+  catch c = error, failure
+  end
   self~assertEquals(-1, rc)
-  self~assertSame("FAILURE", self~caught)
-  self~assertTrue(self~additional~pos("syntax error") > 0, self~additional)
-  return
-trapped:
-  self~caught = condition("C"); self~additional = condition("A")
-  return
+  self~assertSame("FAILURE", c~condition)
+  self~assertTrue(c~additional~pos("syntax error") > 0, c~additional)
 
 ::method test_signal_on_error
   signal on error
@@ -118,35 +112,33 @@ error:
   address lua 'return addressTwice(21)'; r = result
   self~assertEquals(0, rc)
   self~assertEquals(42, r)
-  trace off
-  call on error name trapped
-  address lua 'addressTwice("x")'           -- a Rexx error inside: a Lua error, so ERROR
-  self~assertEquals(1, rc)
-  self~assertTrue(self~additional~pos("Rexx error 41.1") = 1, self~additional)
+  do
+    address lua 'addressTwice("x")'         -- a Rexx error inside: a Lua error, so ERROR
+  catch c = error
+  end
   .lua~global("_G")["addressTwice"] = .nil
-  return
-trapped:
-  self~additional = condition("A")
-  return
+  self~assertEquals(1, rc)
+  self~assertTrue(c~additional~pos("Rexx error 41.1") = 1, c~additional)
 
 ::method test_no_usable_lua_is_FAILURE
   trace off
   saved = .lua
-  call on failure name trapped
   .local~lua = "not a state"
-  address lua '1'
+  do
+    address lua '1'
+  catch c = failure
+  end
   self~assertEquals(-2, rc)
   s = .LuaState~new
   s~close
   .local~lua = s
-  address lua '1'
-  self~assertEquals(-2, rc)
-  self~assertSame("the LuaState is closed", self~additional)
+  do
+    address lua '1'
+  catch c = failure
+  end
   .local~lua = saved
-  return
-trapped:
-  self~additional = condition("A")
-  return
+  self~assertEquals(-2, rc)
+  self~assertSame("the LuaState is closed", c~additional)
 
 ::method test_follows_dot_lua
   saved = .lua
@@ -160,34 +152,32 @@ trapped:
 
 ::method test_halt_in_a_callback_is_Error_4_1
   .lua~global("_G")["addressHalt"] = .routines~halts
-  signal on syntax
-  address lua 'addressHalt()'
-  self~fail("a HALT in a callback was lost")
-syntax:
+  do
+    address lua 'addressHalt()'
+    c = .nil
+  catch c = syntax
+  end
   .lua~global("_G")["addressHalt"] = .nil
-  self~assertSame("4.1", condition("O")~code, "as ~eval: the program stops unless SYNTAX is trapped")
+  self~assertFalse(c~isNil, "a HALT in a callback was lost")
+  self~assertSame("4.1", c~code, "as ~eval: the program stops unless SYNTAX is trapped")
 
 ::method test_message_with_a_NUL
-  trace off
-  call on error name trapped
-  address lua 'error("x\0y")'
-  self~assertTrue(self~additional~pos("x" || "00"x || "y") > 0, "the whole message")
-  return
-trapped:
-  self~additional = condition("A")
-  return
+  do
+    address lua 'error("x\0y")'
+  catch c = error
+  end
+  self~assertTrue(c~additional~pos("x" || "00"x || "y") > 0, "the whole message")
 
 ::method test_a_LuaObject_as_dot_lua
   trace off
   saved = .lua
-  call on failure name trapped
   .local~lua = saved~global("_G")
-  address lua '1'
+  do
+    address lua '1'
+  catch failure
+  end
   .local~lua = saved
   self~assertEquals(-2, rc)
-  return
-trapped:
-  return
 
 ::method test_registered_once
   .LuaState~"LUA.ADDRESS"                   -- again: nothing happens

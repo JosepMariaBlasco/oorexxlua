@@ -36,9 +36,11 @@ say (seven & 3) (seven | 8) (seven && 1)           -- 3 15 6: bitwise
 say \.lua~box("integer", 0)                        -- -1: Lua's ~0
 
 -- 5. An operator a Lua value does not support is a Lua error
-signal on syntax name e1
-say .lua~table + 1
-e1: say "Rexx catches:" condition("O")~message
+do
+  say .lua~table + 1
+catch e = syntax
+  say "Rexx catches:" e~message
+end
 exit
 
 ::requires "lua.cls"

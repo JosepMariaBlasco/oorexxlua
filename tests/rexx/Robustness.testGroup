@@ -23,11 +23,12 @@ return testResult
 
 -- Callbacks from a coroutine use the coroutine's stack (*Coroutines*)
 ::method test_a_NUL_in_a_Lua_error_message
-  signal on syntax
-  .lua~eval('error("x\0y")')
-  self~fail("no error")
-syntax:
-  self~assertTrue(condition("O")~message~pos("x" || "00"x || "y") > 0, "the whole message")
+  do
+    .lua~eval('error("x\0y")')
+    self~fail("no error")
+  catch c = syntax
+  end
+  self~assertTrue(c~message~pos("x" || "00"x || "y") > 0, "the whole message")
 
 ::method test_callbacks_in_a_coroutine
   add = .routine~new("add", "use arg a, b; return a + b")
@@ -118,17 +119,15 @@ syntax:
 -- the caller that traps it (ObjectToString would raise it there; found by
 -- oorexxwasm, oorexx-bridges 25/10/2026)
 ::method test_no_nostring_in_the_caller
-  signal on nostring
   do o over .array~of(.object~new, .Plain~new)
     name = o~string
     self~assertSame(name, .lua~eval("return tostring(...)", o))
     self~assertSame(name, .lua~eval("return string.format('%s', ...)", o))
     self~assertSame("x" || name, .lua~eval("return 'x' .. tostring(...)", o))
     self~assertSame("string", .lua~eval("return type(...)", .lua~box("string", o)))
+  catch nostring
+    self~fail("NOSTRING in the caller, line" sigl)
   end
-  return
-nostring:
-  self~fail("NOSTRING in the caller, line" sigl)
 
 ::class Plain
 

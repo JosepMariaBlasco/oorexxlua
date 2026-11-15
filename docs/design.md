@@ -90,7 +90,7 @@ would hold the Rexx object while Lua runs.
 `tests/rexx/Threads.testGroup` runs several Rexx threads in one state, with
 callbacks, and several threads with states of their own.
 
-**Needs ooRexx r13286 (bug #2122)** (the bridge's minimum is the family's revision, r13379). Before it, `IsInstanceOf`, `IsRoutine`
+**Needs ooRexx r13286 (bug #2122)** (the bridge's minimum is the family's revision, r13514). Before it, `IsInstanceOf`, `IsRoutine`
 and `IsMethod` asked of a number that has no string value yet (any result of
 Rexx arithmetic) made that string without the kernel lock: with other threads
 running Rexx, ooRexx's heap was corrupted (found by ooRexx/Python). r13286
@@ -662,7 +662,12 @@ the unwinding goes on to the trap, with the condition itself. The state's
 entry (`Enter`) puts the Lua stack back when it is left that way. A
 `pcall` in Lua catches that Lua error, and the Lua code after it goes on
 until it returns to the bridge, where the SIGNAL happens all the same: Lua
-cannot stop a Rexx SIGNAL. `CALL ON` unwinds nothing (the trap runs and
+cannot stop a Rexx SIGNAL. A `CATCH` clause (ooRexx RFE #31, r13514)
+unwinds to its block the same way, and goes through the same path: the
+Lua error says "SIGNAL" for it too (`Errors.testGroup`
+`test_catch_past_lua_*`; `CommandHandlers.testGroup`
+`test_a_signal_through_lua_for_any_condition`, every condition, by SIGNAL
+ON and by CATCH). `CALL ON` unwinds nothing (the trap runs and
 the code goes on). A Rexx **Routine** called from Lua does not get there:
 ooRexx drops the condition at `CallRoutine` (oorexx-bridges,
 `oorexx-bugs/2026-10-19-api-calls-drop-non-syntax-conditions.md`). Tests:
@@ -851,7 +856,7 @@ documents it.
 uncovers it (until 0.4.0, `AddCommandEnvironment` replaced it, and a
 `deregister` left `LUA` unknown; measured on r13297,
 `test_lua_cls_stacks_over_a_registered_lua`). It needs ooRexx r13297
-(the bridge's minimum is the family's revision, r13379). The work on
+(the bridge's minimum is the family's revision, r13514). The work on
 command handlers in ooRexx/WASM found that `AddCommandEnvironment` changes
 the instance's table of handlers without the interpreter's lock, and that a
 command sent to an environment before it is registered can cache a handler

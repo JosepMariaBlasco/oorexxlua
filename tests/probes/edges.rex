@@ -81,18 +81,20 @@ o = .object~new
 say left("Rexx object there and back: ==", 34) (.lua~eval("return ...", o) == o)
 say left("t = t2 (Lua ==)", 34) (t = t2)
 say "--- Errors"
-signal on syntax name e1
-.lua~eval("error('plain message')")
-e1: c = condition("O")
+do
+  .lua~eval("error('plain message')")
+catch c = syntax
+end
 say left("Lua error: code / rc", 34) c~code "/" c~rc
 say left("  additional items", 34) c~additional~items
 say left("  additional[1]", 34) c~additional[1]
 say left("  additional[2] (the value)", 34) c~additional[2]
 say left("  additional[3] (first line)", 34) c~additional[3]~makeArray("0a"x)[1]
 say left("  message", 34) c~message
-signal on syntax name e2
-.lua~eval("error({code = 42})")
-e2: c = condition("O")
+do
+  .lua~eval("error({code = 42})")
+catch c = syntax
+end
 say left("Lua error with a table", 34) noaddr(c~additional[1])
 say left("  additional[2]~code", 34) c~additional[2]~code
 r = .routine~new("r", "x = 'a' + 1")
@@ -102,9 +104,10 @@ say left("Rexx raise syntax 98.900 in Lua", 34) .lua~eval("local ok, e = pcall(.
 t3 = .lua~eval("return {}")
 inner = .routine~new("i", "use arg f; return f~call")
 say left("Lua table error through Rexx back", 34) .lua~eval("local f = function() error({code = 7}) end local ok, e = pcall(..., f) return describe(e)", inner)
-signal on syntax name e3
-.lua~eval("local r = ... r()", r)
-e3: c = condition("O")
+do
+  .lua~eval("local r = ... r()", r)
+catch c = syntax
+end
 say left("Rexx error through Lua to Rexx", 34) c~code c~message
 say "--- The text of a float (oorexx-bridges, topics/float-text.md)"
 say "Lua -> Rexx (value made in Lua: the string, its length, datatype N)"
@@ -126,10 +129,11 @@ exit
 -- "NaN": MSVC's printf writes the one ooRexx makes from "nan" as "nan(snan)")
 ::routine boxFloat
   use strict arg v
-  signal on syntax
-  return .lua~eval("local x = ... if x ~= x then return math.type(x) .. ':NaN' end return describe(x) .. (1/x < 0 and ' (negative)' or '')", .lua~box("float", v))
-syntax:
-  return "error" condition("O")~code":" condition("O")~additional[1]
+  do
+    return .lua~eval("local x = ... if x ~= x then return math.type(x) .. ':NaN' end return describe(x) .. (1/x < 0 and ' (negative)' or '')", .lua~box("float", v))
+  catch c = syntax
+    return "error" c~code":" c~additional[1]
+  end
 
 -- s with the address after each "table: ", "function: ", "thread: ",
 -- "userdata: " or "file (" as 0x... (Windows prints addresses without 0x)

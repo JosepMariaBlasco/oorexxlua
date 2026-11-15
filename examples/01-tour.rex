@@ -41,10 +41,11 @@ say .lua~eval("(...) and 'true' or 'false'", .lua~false)   -- false
 -- 7. Callbacks: Lua calling Rexx
 byLength = .routine~new("cmp", "return length(arg(1)) < length(arg(2))")
 words = .lua~table(.array~of("ccc", "a", "bb", "dddd"))
-signal on syntax name e0
-.lua~global("table")~sort(words, byLength)         -- "0" is true in Lua...
-e0: say "Without predicate:" condition("O")~message
-signal off syntax
+do
+  .lua~global("table")~sort(words, byLength)       -- "0" is true in Lua...
+catch e = syntax
+  say "Without predicate:" e~message
+end
 .lua~global("table")~sort(words, .lua~predicate(byLength))
 say .lua~global("table")~concat(words, " ")        -- a bb ccc dddd
 -- a Rexx object inside Lua, with methods
@@ -52,12 +53,16 @@ d = .directory~new; d~name = "JM"
 say .lua~eval("local d = ...; return d:at('NAME') .. ' / ' .. tostring(d)", d)
 
 -- 8. Errors, both ways
-signal on syntax name e1
-say .lua~eval("error('boom')")                     -- a Lua error: SYNTAX 98.900
-e1: say "Rexx catches:" condition("O")~code condition("O")~additional[2]
-signal on syntax name e2                           -- a Rexx error through Lua: itself
-say .lua~eval("local f = ...; return f()", .routine~new("bad", "return 1 + 'a'"))
-e2: say "Rexx catches:" condition("O")~code condition("O")~message
+do
+  say .lua~eval("error('boom')")                   -- a Lua error: SYNTAX 98.900
+catch e = syntax
+  say "Rexx catches:" e~code e~additional[2]
+end
+do                                                 -- a Rexx error through Lua: itself
+  say .lua~eval("local f = ...; return f()", .routine~new("bad", "return 1 + 'a'"))
+catch e = syntax
+  say "Rexx catches:" e~code e~message
+end
 exit
 
 ::requires "lua.cls"

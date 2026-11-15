@@ -87,8 +87,9 @@ return testResult
   self~assertSame("", self~pairs(.lua~eval("return {}")))
   self~assertSame(0, .lua~eval("return {}")~makeStringTable~items)
   f = .lua~eval("return print")
-  signal on syntax
-  f~supplier
-  self~fail("a function cannot be enumerated")
-syntax:
-  self~assertSame("98.900", condition("O")~code)
+  do
+    f~supplier
+    self~fail("a function cannot be enumerated")
+  catch c = syntax
+  end
+  self~assertSame("98.900", c~code)

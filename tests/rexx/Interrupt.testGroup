@@ -32,30 +32,28 @@ return testResult
 ::method halts
   use strict arg code
   .local~interruptValue = "unset"
-  signal on halt
-  .local~interruptValue = .lua~eval(code)  -- the clause ends; the HALT comes after it
+  do
+    .local~interruptValue = .lua~eval(code)  -- the clause ends; the HALT comes after it
+  catch halt
+    return .true
+  end
   return .false
-halt:
-  return .true
 
 -- ADDRESS LUA ... WITH: after a Ctrl-C, print and io.write are Lua's again,
 -- and the output so far stays
 ::method test_with_restores_after_a_ctrl_c
   .lua~eval('withOrigPrint, withOrigWrite = print, io.write')
   halted = .false
-  signal on halt
-  address lua 'print("before"); hello.interrupt(); while true do end' with output stem out.
-  signal off halt
-after:
+  do
+    address lua 'print("before"); hello.interrupt(); while true do end' with output stem out.
+  catch halt
+    halted = .true
+  end
   self~assertTrue(halted, "a HALT")
   self~assertEquals(1, out.0)
   self~assertSame("before", out.1)
   self~assertTrue(.lua~eval('return print == withOrigPrint and io.write == withOrigWrite'), "restored")
   .lua~eval('withOrigPrint, withOrigWrite = nil')
-  return
-halt:
-  halted = .true
-  signal after
 
 ::method test_a_loop_stops
   self~assertTrue(self~halts('hello.interrupt(); while true do end'))
@@ -108,12 +106,13 @@ halt:
 ::method test_another_state
   s = .LuaState~new
   s~eval('hello = require "hello"')
-  signal on halt
-  s~eval('hello.interrupt(); while true do end')
-  nop
-  s~close
-  self~fail("no HALT")
-halt:
+  do
+    s~eval('hello.interrupt(); while true do end')
+    nop
+    s~close
+    self~fail("no HALT")
+  catch halt
+  end
   self~assertEquals(7, s~eval('return 7'))
   s~close
 
@@ -121,21 +120,23 @@ halt:
   -- a metamethod that loops: the operation returns .nil, then the HALT
   o = .lua~eval('return setmetatable({}, {__index = function() hello.interrupt(); while true do end end})')
   r = "unset"
-  signal on halt
-  r = o~field
-  nop
-  self~fail("no HALT")
-halt:
+  do
+    r = o~field
+    nop
+    self~fail("no HALT")
+  catch halt
+  end
   self~assertEquals(.nil, r)
 
 ::method test_do_over
   o = .lua~eval('return setmetatable({}, {__len = function() hello.interrupt(); while true do end end})')
   n = 0
-  signal on halt
-  do x over o; n += 1; end
-  nop
-  self~fail("no HALT")
-halt:
+  do
+    do x over o; n += 1; end
+    nop
+    self~fail("no HALT")
+  catch halt
+  end
   self~assertEquals(0, n, "an empty Array: the loop ends first")
 
 ::method test_a_comparison
@@ -144,10 +145,11 @@ halt:
   -- boundary after the IF clause, before its THEN)
   o = .lua~eval('return setmetatable({}, {__lt = function() hello.interrupt(); while true do end end})')
   r = "unset"
-  signal on halt
-  if o < 1 then r = "less"; else r = "not less"
-  self~fail("no HALT")
-halt:
+  do
+    if o < 1 then r = "less"; else r = "not less"
+    self~fail("no HALT")
+  catch halt
+  end
   self~assertSame("unset", r)
 
 ::method test_a_nested_call_does_not_end_it
@@ -162,30 +164,33 @@ halt:
   -- Lua code caught a callback's HALT with pcall, then failed otherwise:
   -- that error, not Error 4.1
   .lua~global("_G")["haltCallback"] = .routines~haltCallback
-  signal on syntax
-  .lua~eval('pcall(haltCallback); error("plain")')
-  self~fail("no SYNTAX condition")
-syntax:
-  self~assertEquals(98.900, condition("O")~code)
+  do
+    .lua~eval('pcall(haltCallback); error("plain")')
+    self~fail("no SYNTAX condition")
+  catch c = syntax
+  end
+  self~assertEquals(98.900, c~code)
 
 ::method test_address_lua
   rc = "unset"
-  signal on halt
-  address lua 'hello.interrupt(); while true do end'
-  nop
-  self~fail("no HALT")
-halt:
+  do
+    address lua 'hello.interrupt(); while true do end'
+    nop
+    self~fail("no HALT")
+  catch halt
+  end
   self~assertEquals(1, rc, "RC 1, no ERROR condition")
 
 ::method test_in_a_callback
   -- the HALT lands in the Rexx code of a callback: Error 4.1 from ~eval, as
   -- from ADDRESS LUA
   .lua~global("_G")["interruptCallback"] = .routines~interruptCallback
-  signal on syntax
-  .lua~eval('interruptCallback(); while true do end')
-  self~fail("no SYNTAX condition")
-syntax:
-  self~assertEquals(4.1, condition("O")~code)
+  do
+    .lua~eval('interruptCallback(); while true do end')
+    self~fail("no SYNTAX condition")
+  catch c = syntax
+  end
+  self~assertEquals(4.1, c~code)
 
 -- A HALT that Rexx code Lua called did not trap comes back to the Rexx caller
 -- as a HALT (oorexx-bridges topics/command-handlers.md, rule 1, the user,
@@ -217,11 +222,12 @@ h:
 
 ::method test_a_callbacks_halt_untrapped_is_syntax_4_1
   .lua~global("_G")["haltCallback"] = .routines~haltCallback
-  signal on syntax
-  .lua~eval('haltCallback(); return "back"')
-  self~fail("no SYNTAX")
-syntax:
-  self~assertEquals(4.1, condition("O")~code)
+  do
+    .lua~eval('haltCallback(); return "back"')
+    self~fail("no SYNTAX")
+  catch c = syntax
+  end
+  self~assertEquals(4.1, c~code)
 
 ::routine interruptCallback
   .lua~eval('hello.interrupt()')            -- the HALT of this activation

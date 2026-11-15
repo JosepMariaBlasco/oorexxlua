@@ -77,11 +77,11 @@ return testResult
 -- substitutions, description (raised again on the way out, anchorSyntax:
 -- ooRexx #2132)
 ::method test_a_syntax_from_the_users_supplier
-  signal on syntax
-  .lua~table(.TRaisingSupplierDir~new)
-  self~fail("no SYNTAX")
-syntax:
-  c = condition("O")
+  do
+    .lua~table(.TRaisingSupplierDir~new)
+    self~fail("no SYNTAX")
+  catch c = syntax
+  end
   self~assertEquals(40.1, c~code)
   self~assertSame("from supplier", c~additional[1])
   self~assertSame("described", c~description)
@@ -135,19 +135,21 @@ syntax:
 
 ::routine tableError                     -- the code of ~table(v)'s error, or of eval(code, v)'s
   use arg v, code
-  signal on syntax
-  if arg(2, "E") then .lua~eval(code, v)
-  else .lua~table(v)
+  do
+    if arg(2, "E") then .lua~eval(code, v)
+    else .lua~table(v)
+  catch c = syntax
+    return c~code
+  end
   return 0
-syntax:
-  return condition("O")~code
 
 ::routine doOverError
   use arg v
-  signal on syntax
-  do with index i item x over v; end
+  do
+    do with index i item x over v; end
+  catch c = syntax
+    return c~code
+  end
   return 0
-syntax:
-  return condition("O")~code
 ::class TRaisingSupplierDir subclass directory
 ::method supplier; raise syntax 40.1 array("from supplier") description "described"

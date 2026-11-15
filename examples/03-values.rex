@@ -40,12 +40,16 @@ a = .array~of("x")
 say a~toString(, ",")                              -- x,y: the Rexx Array itself
 .lua~eval("local a = ...; a[2] = 'z'", a)          -- an Array alone goes as a copy
 say a~toString(, ",")                              -- x,y
-signal on syntax name e1
-say .lua~box("integer", 1.5)
-e1: say "Error:" condition("O")~message
-signal on syntax name e2
-say .lua~box("boolean", "yes")
-e2: say "Error:" condition("O")~message
+do
+  say .lua~box("integer", 1.5)
+catch e = syntax
+  say "Error:" e~message
+end
+do
+  say .lua~box("boolean", "yes")
+catch e = syntax
+  say "Error:" e~message
+end
 
 -- 5. Booleans: .LogicalWrapper~true and ~false are Lua's true and false, both
 --    ways (.true is the string "1", which Lua takes for the number 1)

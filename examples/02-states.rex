@@ -10,9 +10,11 @@ t = other~table(.array~of(1, 2, 3))
 say t~"LUA.STATE" == other                         -- 1: each object knows its state
 
 -- 2. A Lua object cannot go to another state
-signal on syntax name e1
-say .lua~global("table")~concat(t, "+")
-e1: say "Error:" condition("O")~message
+do
+  say .lua~global("table")~concat(t, "+")
+catch e = syntax
+  say "Error:" e~message
+end
 
 -- 3. A Rexx object keeps its identity in Lua, and comes back as itself
 d = .directory~new
@@ -26,12 +28,16 @@ say .lua~eval("return ...", d) == d                -- 1
 say other~isClosed                                 -- 0
 other~close
 say other~isClosed                                 -- 1
-signal on syntax name e2
-say t[1]
-e2: say "Error:" condition("O")~message
-signal on syntax name e3
-say other~eval("1 + 1")
-e3: say "Error:" condition("O")~message
+do
+  say t[1]
+catch e = syntax
+  say "Error:" e~message
+end
+do
+  say other~eval("1 + 1")
+catch e = syntax
+  say "Error:" e~message
+end
 other~close                                        -- closing twice is harmless
 exit
 

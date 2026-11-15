@@ -49,9 +49,11 @@ say r~items                             -- 1: return nil
 
 -- 6. A Lua error in a metamethod is a Rexx condition, not a crash
 strict = .lua~eval("setmetatable({}, {__index = function(t, k) error('no field ' .. k, 2) end})")
-signal on syntax name e1
-say strict~colour
-e1: say "Rexx catches:" condition("O")~message
+do
+  say strict~colour
+catch e = syntax
+  say "Rexx catches:" e~message
+end
 
 -- 7. Coroutines are used like any other function
 gen = .lua~eval("coroutine.wrap(function() for i = 1, 3 do coroutine.yield(i * 10) end end)")

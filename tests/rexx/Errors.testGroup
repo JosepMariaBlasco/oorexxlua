@@ -27,12 +27,12 @@ return testResult
 ::method conditionOf
   use strict arg receiver, name, ...
   args = arg(3, "A")
-  signal on syntax
-  .message~new(receiver, name, "A", args)~send
-  signal off syntax
+  do
+    .message~new(receiver, name, "A", args)~send
+  catch c = syntax
+    return c
+  end
   self~fail("no SYNTAX condition raised by message" name)
-syntax:
-  return condition("O")
 
 -- A Lua error in Rexx ----------------------------------------------------------
 
@@ -273,6 +273,33 @@ x:
   address lua 'unwindRaiser = nil; return 1 + 1'
   self~assertEquals(2, result, "ADDRESS LUA still works")
 
+-- the same with CATCH (ooRexx RFE #31, r13514): it unwinds as SIGNAL does
+::method test_catch_past_lua_many_times
+  o = .Raiser~new
+  f = .lua~eval("return function(o) return o:boom() end")
+  do i = 1 to 500
+    if \catchPast(f, o) then do
+      self~fail("not caught, at" i)
+      leave
+    end
+  end
+  self~assertEquals(50, .lua~eval("local function d(n) if n == 0 then return 0 end return 1 + d(n - 1) end return d(50)"), -
+    "Lua is still sound")
+
+::method test_catch_past_lua_through_a_pcall
+  f = .lua~eval("return function(o, mk) local junk = {} for i = 1, 200 do junk[i] = mk() end junk = nil" -
+                "  local ok, e = pcall(function() return o:boom() end)" -
+                "  collectgarbage(); collectgarbage()" -
+                "  unwindSeen = tostring(ok) .. ' ' .. tostring(e) return 'after' end")
+  do
+    r = f~call(.Raiser~new, .routine~new("mk", "return .object~new"))
+    self~fail("no USER X; the function returned" r)
+  catch c = user x
+  end
+  self~assertSame("d", c~description)
+  self~assertSame("false a Rexx SIGNAL is unwinding through Lua", .lua~global("unwindSeen"))
+  .lua~eval("unwindSeen = nil")
+
 -- CALL ON: the trap runs, then the code goes on: nothing unwinds
 ::method test_call_on_past_lua
   f = .lua~eval("return function(o) return o:boom() end")
@@ -294,6 +321,15 @@ trapped:
   return .false
 x:
   return .true
+
+::routine catchPast         -- true if f~call(o)'s USER X reached this CATCH
+  use arg f, o
+  do
+    f~call(o)
+  catch user x
+    return .true
+  end
+  return .false
 
 ::class Raiser
 ::method boom

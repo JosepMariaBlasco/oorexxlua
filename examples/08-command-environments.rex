@@ -30,19 +30,21 @@ say total                                          -- 12.75
 .CommandHandler~register("CHECK", .lua~commandHandler(.lua~eval("return function(command, ctx)" -
   "  if command ~= 'ok' then print('no: ' .. command); return ctx:raiseError(8) end" -
   "end")))
-signal on error
-address check 'ok'; say 'ok:' rc                   -- ok: 0
-address check 'bad'
-say 'not here'
-error:
-  say condition('C') rc condition('D')             -- ERROR 8 bad
+do
+  address check 'ok'; say 'ok:' rc                 -- ok: 0
+  address check 'bad'
+  say 'not here'
+catch e = error
+  say e~condition e~rc e~description               -- ERROR 8 bad
+end
 
 -- 4. A Lua error in the handler is a SYNTAX error where the command was issued
 .CommandHandler~register("BROKEN", .lua~commandHandler(.lua~eval("return function() error('oops') end")))
-signal on syntax
-address broken 'x'
-syntax:
-  say condition('O')~code condition('O')~additional[2]   -- 98.900 ...: oops
+do
+  address broken 'x'
+catch e = syntax
+  say e~code e~additional[2]                       -- 98.900 ...: oops
+end
 
 -- 5. Stacked: a second handler covers the first; deregister uncovers it
 .CommandHandler~register("CALC", .lua~commandHandler(.lua~eval("return function(command) return #command end")))
@@ -52,11 +54,12 @@ address calc '6 * 7'; say rc result                -- 0 42
 
 -- 6. Removed: FAILURE RC 30, as an environment that was never there
 .CommandHandler~deregister("CALC")
-signal on failure
 trace off                                          -- (TRACE NORMAL would show the failed command)
-address calc '1 + 1'
-failure:
-  say condition('C') rc                            -- FAILURE 30
+do
+  address calc '1 + 1'
+catch e = failure
+  say e~condition e~rc                             -- FAILURE 30
+end
 exit
 
 ::requires "lua.cls"

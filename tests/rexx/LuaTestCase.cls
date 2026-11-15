@@ -17,12 +17,12 @@
 ::method errorOf
   use strict arg receiver, name, ...
   args = arg(3, "A")
-  signal on syntax
-  .message~new(receiver, name, "A", args)~send
-  signal off syntax
+  do
+    .message~new(receiver, name, "A", args)~send
+  catch c = syntax
+    return c~message~makeArray("0a"x)[1]
+  end
   self~fail("no SYNTAX condition raised by message" name)
-syntax:
-  return condition("O")~message~makeArray("0a"x)[1]
 
 /** assertOutputs(dir, minimum, what)
  * Runs each .rex (with rexx) and .lua (with the standalone lua in ORXLUA_LUA)

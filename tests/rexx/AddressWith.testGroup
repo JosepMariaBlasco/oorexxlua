@@ -73,17 +73,13 @@ return testResult
 
 ::method test_io_write_rejects_tables
   trace off
-  call on error name trapped
-  address lua 'io.write({})' with output stem out.
+  do
+    address lua 'io.write({})' with output stem out.
+  catch c = error
+  end
   self~assertEquals(1, rc)
-  self~assertTrue(self~additional~pos("string expected") > 0, self~additional)
+  self~assertTrue(c~additional~pos("string expected") > 0, c~additional)
   self~assertTrue(self~restored, "restored after an error")
-  return
-trapped:
-  self~additional = condition('A')
-  return
-
-::attribute additional
 
 ::method test_output_appended
   out.0 = 1; out.1 = "before"
@@ -167,15 +163,13 @@ trapped:
 
 ::method test_read_invalid_format
   trace off
-  call on error name trapped
   in.0 = 1; in.1 = "x"
-  address lua 'io.read("x")' with input stem in.
+  do
+    address lua 'io.read("x")' with input stem in.
+  catch c = error
+  end
   self~assertEquals(1, rc)
-  self~assertTrue(self~additional~pos("invalid format") > 0, self~additional)
-  return
-trapped:
-  self~additional = condition('A')
-  return
+  self~assertTrue(c~additional~pos("invalid format") > 0, c~additional)
 
 ::method test_empty_input
   in.0 = 0
@@ -300,15 +294,12 @@ trapped:
 
 ::method test_a_delegated_error_says_where
   trace off
-  call on error name trapped
-  self~additional = ""
-  address lua 'io.output(withOrig.stderr); io.write({})' with output stem out.
+  do
+    address lua 'io.output(withOrig.stderr); io.write({})' with output stem out.
+  catch c = error
+  end
   self~assertEquals(1, rc)
-  self~assertTrue(self~additional~pos("ADDRESS LUA:1: bad argument #1 to 'write'") > 0, self~additional)
-  return
-trapped:
-  self~additional = condition('A')
-  return
+  self~assertTrue(c~additional~pos("ADDRESS LUA:1: bad argument #1 to 'write'") > 0, c~additional)
 
 ::method test_io_input_from_a_file
   file = SysTempFileName("withtest???")
@@ -341,15 +332,14 @@ trapped:
 
 ::method test_restored_after_an_error
   trace off
-  call on error name trapped
-  address lua 'print("before"); error("boom")' with output stem out.
+  do
+    address lua 'print("before"); error("boom")' with output stem out.
+  catch error
+  end
   self~assertEquals(1, rc)
   self~assertEquals(1, out.0, "what was written stays")
   self~assertSame("before", out.1)
   self~assertTrue(self~restored)
-  return
-trapped:
-  return
 
 ::method test_a_change_by_the_command_stays
   address lua 'print = function() return "mine" end' with output stem out.
@@ -360,23 +350,22 @@ trapped:
 
 ::method test_a_kept_stand_in_fails_after
   trace off
-  call on error name trapped
   in.0 = 0
   address lua 'keptPrint, keptRead = print, io.read' with output stem out. input stem in.
   self~assertEquals(0, rc)
-  self~additional = ""
-  address lua 'keptPrint("late")'
+  do
+    address lua 'keptPrint("late")'
+  catch c = error
+  end
   self~assertEquals(1, rc)
-  self~assertTrue(self~additional~pos("has ended") > 0, self~additional)
-  self~additional = ""
-  address lua 'keptRead()'
+  self~assertTrue(c~additional~pos("has ended") > 0, c~additional)
+  do
+    address lua 'keptRead()'
+  catch c = error
+  end
   self~assertEquals(1, rc)
-  self~assertTrue(self~additional~pos("has ended") > 0, self~additional)
+  self~assertTrue(c~additional~pos("has ended") > 0, c~additional)
   address lua 'keptPrint, keptRead = nil'
-  return
-trapped:
-  self~additional = condition('A')
-  return
 
 ::method test_nested_commands
   .lua~global("_G")["withInner"] = .WithInner~new
@@ -391,30 +380,26 @@ trapped:
 
 ::method test_a_rexx_error_of_the_target_is_a_lua_error
   trace off
-  call on error name trapped
-  self~additional = ""
-  address lua 'print("one"); print("two"); return "not reached"' with output using (.FailingTarget~new("never-written"))
+  do
+    address lua 'print("one"); print("two"); return "not reached"' with output using (.FailingTarget~new("never-written"))
+  catch c = error
+  end
   self~assertEquals(1, rc)
-  self~assertTrue(self~additional~pos("Rexx error") > 0, self~additional)
+  self~assertTrue(c~additional~pos("Rexx error") > 0, c~additional)
   self~assertTrue(self~restored)
-  return
-trapped:
-  self~additional = condition('A')
-  return
 
 ::method test_rc_and_result_as_without_with
   address lua 'print("x"); return 1, 2' with output stem out.; r = result
   self~assertEquals(0, rc)
   self~assertEquals(2, r~items)
   trace off
-  call on failure name trapped
-  address lua 'print(' with output stem out.
+  do
+    address lua 'print(' with output stem out.
+  catch failure
+  end
   self~assertEquals(-1, rc, "does not compile")
   self~assertEquals(0, out.0, "nothing ran")
   self~assertTrue(self~restored)
-  return
-trapped:
-  return
 
 -- an ADDRESS LUA ... WITH of its own, inside a command with output redirected
 ::class WithInner

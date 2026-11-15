@@ -143,7 +143,7 @@ end)
 
 T.test("errors come back as themselves", function()
   -- a Rexx error that Lua raises again is that Rexx error in Rexx
-  local relay = rexx.routine("use arg f; signal on syntax; f~call; return 'none'; syntax: return 'code' condition('O')~code")
+  local relay = rexx.routine("use arg f; do; f~call; catch c = syntax; return 'code' c~code; end; return 'none'")
   T.eq(relay(function() local ok, e = pcall(rexx.eval, "1 + 'a'"); error(e) end), "code 41.1")
   T.eq(relay(function() error("boom") end), "code 98.900")
   -- a Lua error value that goes through Rexx is that value in Lua
@@ -275,10 +275,12 @@ T.test("ADDRESS LUA runs in the host's state, in every instance", function()
   T.eq(other.routine("'addressCount = 100'; return rc")(), 0)
   T.eq(addressCount, 100)
   T.eq(other.routine([[
-    signal on error name e
-    'error("boom")'
+    do
+      'error("boom")'
+    catch c = error
+      return rc c~additional~makeArray('0a'x)[1]
+    end
     return "no ERROR"
-    e: return rc condition('A')~makeArray('0a'x)[1]
   ]])(), "1 ADDRESS LUA:1: boom")
   other.close()
   T.eq(rexx.routine([[
@@ -288,10 +290,12 @@ T.test("ADDRESS LUA runs in the host's state, in every instance", function()
     return m~result
     ::class Address
     ::method run class
-      signal on failure name f
-      address lua '1'
+      do
+        address lua '1'
+      catch c = failure
+        return rc c~additional
+      end
       return "no FAILURE"
-      f: return rc condition('A')
   ]])(), "-2 the LuaState of the Lua that runs ooRexx can only be used from that Lua's thread")
   addressCount = nil
 end)
@@ -322,10 +326,12 @@ T.test("command environments written in Lua: command_environments, add, remove (
   T.eq(r.routine("address calc '2^3'; return rc result")(), "0 8.0", "the one below again")
   r.remove_command_environment("CALC")
   T.eq(r.routine([[
-    signal on failure
-    address calc 'x'
+    do
+      address calc 'x'
+    catch failure
+      return rc
+    end
     return "no FAILURE"
-    failure: return rc
   ]])(), 30)
   -- a Lua error in the handler: SYNTAX 98.900, a Lua error again back in Lua
   r.add_command_environment("BAD", function() error({code = 42}) end)
@@ -333,10 +339,12 @@ T.test("command environments written in Lua: command_environments, add, remove (
   T.ok(not ok)
   T.eq(type(e), "table"); T.eq(e.code, 42, "the error value itself, back in Lua")
   T.eq(r.routine([[
-    signal on syntax
-    address bad 'x'
+    do
+      address bad 'x'
+    catch c = syntax
+      return c~code c~additional[2]~code
+    end
     return "no SYNTAX"
-    syntax: return condition('O')~code condition('O')~additional[2]~code
   ]])(), "98.900 42")
   -- the module's default instance, and the core's errors (a Lua error here)
   rexx.add_command_environment("DOUBLE", function(command) return 2 * tonumber(command) end)
