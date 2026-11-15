@@ -213,9 +213,13 @@ template <class F> static NOINLINE bool guarded(State *st, F &&f)
     catch (...) { st->unwind = std::current_exception(); return false; }
 }
 
+// The Lua error of an unwind that stopped in Lua: a SIGNAL ON trap's or a
+// CATCH clause's, which the bridge cannot tell apart (docs/design.md)
+#define UNWIND_MESSAGE "a Rexx condition is unwinding through Lua"
+
 static int unwindError(lua_State *L)
 {
-    lua_pushliteral(L, "a Rexx SIGNAL is unwinding through Lua");
+    lua_pushliteral(L, UNWIND_MESSAGE);
     return lua_error(L);
 }
 
@@ -3292,7 +3296,7 @@ static NOINLINE int intoRexx(lua_State *L, int first, const RexxOp &op)
     RexxObjectPtr r = NULLOBJECT;
     // a SIGNAL past the bridge (guarded): its Lua error, no more Rexx calls
     if (!guarded(st, [&] { if (!tc->CheckCondition()) r = op(tc, args); })) {
-        lua_pushliteral(L, "a Rexx SIGNAL is unwinding through Lua");
+        lua_pushliteral(L, UNWIND_MESSAGE);
         return -1;
     }
     release(tc, args);
@@ -3302,7 +3306,7 @@ static NOINLINE int intoRexx(lua_State *L, int first, const RexxOp &op)
     else {
         bool ok = false;
         if (!guarded(st, [&] { ok = pushValue(st, r); })) {
-            lua_pushliteral(L, "a Rexx SIGNAL is unwinding through Lua");
+            lua_pushliteral(L, UNWIND_MESSAGE);
             return -1;
         }
         n = ok ? 1 : -1;                            // its message, if it fails

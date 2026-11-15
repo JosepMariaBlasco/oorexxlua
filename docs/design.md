@@ -651,7 +651,7 @@ call of the bridge from Lua into Rexx code (`rexxCallBack`, the module's
 functions, `pairs`, `tostring`, the redirection of `WITH`, a handler's
 `ctx`) runs inside `guarded`, which catches the exception, keeps it
 (`std::current_exception`) and makes the Lua C function raise a Lua error,
-"a Rexx SIGNAL is unwinding through Lua"; while one is pending no Rexx
+"a Rexx condition is unwinding through Lua"; while one is pending no Rexx
 call at all runs from that state, ooRexx's activity being half unwound
 (not even a finalizer's: the `__gc` of a Rexx object's userdata, which
 Lua's error can run as it unwinds, leaves its object for later, as outside
@@ -663,8 +663,9 @@ entry (`Enter`) puts the Lua stack back when it is left that way. A
 `pcall` in Lua catches that Lua error, and the Lua code after it goes on
 until it returns to the bridge, where the SIGNAL happens all the same: Lua
 cannot stop a Rexx SIGNAL. A `CATCH` clause (ooRexx RFE #31, r13514)
-unwinds to its block the same way, and goes through the same path: the
-Lua error says "SIGNAL" for it too (`Errors.testGroup`
+unwinds to its block the same way, and goes through the same path, with
+the same Lua error: the bridge cannot tell the two apart, so its message
+names neither (`Errors.testGroup`
 `test_catch_past_lua_*`; `CommandHandlers.testGroup`
 `test_a_signal_through_lua_for_any_condition`, every condition, by SIGNAL
 ON and by CATCH). `CALL ON` unwinds nothing (the trap runs and

@@ -234,7 +234,7 @@ x:
   r = f~call(.Raiser~new, .routine~new("mk", "return .object~new"))
   self~fail("no USER X; the function returned" r)
 x:
-  self~assertSame("false a Rexx SIGNAL is unwinding through Lua", .lua~global("unwindSeen"))
+  self~assertSame("false a Rexx condition is unwinding through Lua", .lua~global("unwindSeen"))
   .lua~eval("unwindSeen = nil")
 
 ::method test_signal_past_lua_from_a_string_method
@@ -297,7 +297,7 @@ x:
   catch c = user x
   end
   self~assertSame("d", c~description)
-  self~assertSame("false a Rexx SIGNAL is unwinding through Lua", .lua~global("unwindSeen"))
+  self~assertSame("false a Rexx condition is unwinding through Lua", .lua~global("unwindSeen"))
   .lua~eval("unwindSeen = nil")
 
 -- CALL ON: the trap runs, then the code goes on: nothing unwinds
