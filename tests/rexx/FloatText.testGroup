@@ -144,9 +144,7 @@ return testResult
     end
     self~assertTrue(.lua~box("float", "2.5")~luaType == "number", loc": box")
     h = b~hashCode
-  catch syntax
+  finally                                       -- however it ends: the next tests need "C"
     .lua~eval("os.setlocale('C', 'numeric')")
-    raise propagate
   end
-  .lua~eval("os.setlocale('C', 'numeric')")
   self~assertSame(h, b~hashCode, "a float's hashCode does not depend on the locale")

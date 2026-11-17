@@ -299,7 +299,7 @@ return testResult
   self~assertSame("USER X", c~condition)
   self~assertSame("d", c~description)
   self~assertSame("a", c~additional)
-  self~assertSame(.nil, c~result, "no RESULT, as in plain Rexx (the routine's value is not one)")
+  self~assertSame(7, c~result, "RESULT is the routine's value, as in plain Rexx since #2174 (r13522)")
   self~assertFalse(c~hasIndex("LUA.RETURNED"), "the bridge's own entry left out")
   self~unreg("RAISESR")
 
@@ -312,7 +312,7 @@ return testResult
   self~assertSame("USER X", c~condition)
   self~assertSame("d", c~description)
   self~assertSame("a", c~additional)
-  self~assertSame(.nil, c~result, "no RESULT, as in plain Rexx (the routine's value is not one)")
+  self~assertSame(7, c~result, "RESULT is the routine's value, as in plain Rexx since #2174 (r13522)")
   self~assertFalse(c~hasIndex("LUA.RETURNED"), "the bridge's own entry left out")
 
 -- under ::OPTIONS ERROR SYNTAX: this one comes back by RaiseCondition, so it

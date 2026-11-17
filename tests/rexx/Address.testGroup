@@ -123,29 +123,35 @@ error:
 ::method test_no_usable_lua_is_FAILURE
   trace off
   saved = .lua
-  .local~lua = "not a state"
   do
-    address lua '1'
-  catch c = failure
+    .local~lua = "not a state"
+    do
+      address lua '1'
+    catch c = failure
+    end
+    self~assertEquals(-2, rc)
+    s = .LuaState~new
+    s~close
+    .local~lua = s
+    do
+      address lua '1'
+    catch c = failure
+    end
+  finally                                       -- the next tests need .lua
+    .local~lua = saved
   end
-  self~assertEquals(-2, rc)
-  s = .LuaState~new
-  s~close
-  .local~lua = s
-  do
-    address lua '1'
-  catch c = failure
-  end
-  .local~lua = saved
   self~assertEquals(-2, rc)
   self~assertSame("the LuaState is closed", c~additional)
 
 ::method test_follows_dot_lua
   saved = .lua
   s = .LuaState~new
-  .local~lua = s
-  address lua 'where = "mine"'
-  .local~lua = saved
+  do
+    .local~lua = s
+    address lua 'where = "mine"'
+  finally
+    .local~lua = saved
+  end
   self~assertSame("mine", s~global("where"))
   self~assertSame(.nil, saved~global("where"))
   s~close
@@ -171,12 +177,13 @@ error:
 ::method test_a_LuaObject_as_dot_lua
   trace off
   saved = .lua
-  .local~lua = saved~global("_G")
   do
+    .local~lua = saved~global("_G")
     address lua '1'
   catch failure
+  finally
+    .local~lua = saved
   end
-  .local~lua = saved
   self~assertEquals(-2, rc)
 
 ::method test_registered_once

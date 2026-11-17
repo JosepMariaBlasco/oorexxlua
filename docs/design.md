@@ -90,7 +90,7 @@ would hold the Rexx object while Lua runs.
 `tests/rexx/Threads.testGroup` runs several Rexx threads in one state, with
 callbacks, and several threads with states of their own.
 
-**Needs ooRexx r13286 (bug #2122)** (the bridge's minimum is the family's revision, r13514). Before it, `IsInstanceOf`, `IsRoutine`
+**Needs ooRexx r13286 (bug #2122)** (the bridge's minimum is the family's revision, r13532). Before it, `IsInstanceOf`, `IsRoutine`
 and `IsMethod` asked of a number that has no string value yet (any result of
 Rexx arithmetic) made that string without the kernel lock: with other threads
 running Rexx, ooRexx's heap was corrupted (found by ooRexx/Python). r13286
@@ -582,7 +582,8 @@ cross whole both ways: a NUL in one does not cut it short.
   and the call gives the routine's own value, as in plain Rexx
   (`x = s~eval("local f = ...; return f()", r)`, `r` doing `raise user x
   ... return 7`: x = 7, the `CALL ON` handler having run; a Lua handler's
-  RC is 7), and the condition object has no RESULT, as in plain Rexx: the
+  RC is 7), and the condition object's RESULT is that value, as in plain
+  Rexx since ooRexx r13522 (#2174; before it there was none): the
   bridge keeps the value with the condition (as `LUA.RETURNED`, left out of
   the copy it raises) and the method returns it as it raises the condition
   again, which ooRexx keeps since r13339 (#2130). (Until r13344 the value
@@ -857,7 +858,7 @@ documents it.
 uncovers it (until 0.4.0, `AddCommandEnvironment` replaced it, and a
 `deregister` left `LUA` unknown; measured on r13297,
 `test_lua_cls_stacks_over_a_registered_lua`). It needs ooRexx r13297
-(the bridge's minimum is the family's revision, r13514). The work on
+(the bridge's minimum is the family's revision, r13532). The work on
 command handlers in ooRexx/WASM found that `AddCommandEnvironment` changes
 the instance's table of handlers without the interpreter's lock, and that a
 command sent to an environment before it is registered can cache a handler
