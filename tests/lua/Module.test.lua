@@ -163,7 +163,23 @@ T.test("a THROW (ooRexx RFE #31) in Rexx code is a Lua error, and comes back thr
   T.ok(not ok)
   T.eq(getmetatable(e), "RexxError")
   T.eq(e.condition, "USER BADCONFIG")
+  T.eq(e.description, "missing key")
+  T.eq(e.thrown, true)
+  T.eq(tostring(e), "Rexx condition USER BADCONFIG: missing key", "the description, as error 4.901 shows it")
   T.eq(rexx.eval("6 * 7"), 42, "nothing pending")
+  -- raised (RAISE), or an error of the interpreter: not thrown
+  ok, e = pcall(rexx.routine('raise user x description "d" return 5'))
+  T.eq(e.thrown, false)
+  T.eq(e.description, "d")
+  ok, e = pcall(rexx.routine("raise user x"))
+  T.eq(e.description, nil, "a null description is none")
+  T.eq(tostring(e), "Rexx condition USER X")
+  ok, e = pcall(rexx.eval, "1 + 'a'")
+  T.eq(e.thrown, false)
+  T.eq(e.description, nil)
+  ok, e = pcall(rexx.routine('throw syntax 40.1 array("BOOM")'))
+  T.eq(e.code, "40.1")
+  T.eq(e.thrown, true, "THROW SYNTAX")
   -- raised again by Lua (error(e)), it is thrown again in Rexx, past a level
   local relay = rexx.routine([[
     use arg f

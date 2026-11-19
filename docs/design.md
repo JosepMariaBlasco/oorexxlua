@@ -523,10 +523,15 @@ named as the other bridges name them, in Lua's lowercase:
 | `program` | the program's name |
 | `line` | the line (absent when the error was not in Rexx code: a message sent by the bridge) |
 | `traceback` | the Rexx traceback, as Rexx shows it, lines joined by `"\n"` |
+| `description` | the condition's description (`USER`'s `DESCRIPTION`, a command's text...); absent when it is a null string, as for most SYNTAX errors |
+| `thrown` | `true` for a condition thrown by `THROW` or the `Throw` API (ooRexx RFE #31; its `THROWN` entry), `false` for one raised by RAISE or by the interpreter |
 
 Its metatable, shared and protected (`getmetatable(e)` is `"RexxError"`,
 which tells a Rexx error from other values), has `__tostring`, which gives the
-string the error was until 0.3.0 (`"Rexx error 41.1: Nonnumeric value..."`),
+string the error was until 0.3.0 (`"Rexx error 41.1: Nonnumeric value..."`;
+for a condition other than SYNTAX `"Rexx condition USER BADCONFIG"`, and,
+since 19/11/2026, `": missing key"` after it when it has a description, as
+ooRexx's error 4.901 shows an uncaught thrown condition),
 and `__concat`, so `print(e)`, `tostring(e)`, `"x" .. e`, `error(e)` and
 the standalone `lua`'s report work as before. `type(e) == "string"` and
 string methods on `e` (`e:match`) do not: `tostring(e)` first. Messages

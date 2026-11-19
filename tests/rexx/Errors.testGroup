@@ -371,8 +371,9 @@ trapped:
 -- code goes on; nothing comes back to Rexx
 ::method test_throw_caught_by_a_pcall_in_lua
   f = .lua~eval("return function(r) local ok, e = pcall(r)" -
-                "  return tostring(ok) .. ' ' .. getmetatable(e) .. ' ' .. e.condition end")
-  self~assertSame("false RexxError USER X", f~call(self~thrower))
+                "  return tostring(ok) .. ' ' .. getmetatable(e) .. ' ' .. e.condition .. ' ' .. tostring(e.thrown)" -
+                "    .. ' ' .. e.description .. ' | ' .. tostring(e) end")
+  self~assertSame("false RexxError USER X true d | Rexx condition USER X: d", f~call(self~thrower))
   self~assertEquals(42, .lua~eval("return 6 * 7"), "nothing pending")
 
 ::method test_throw_raised_again_by_lua_is_thrown_again

@@ -447,7 +447,8 @@ static void rawField(lua_State *L, int t, const char *name)    // pushes t[name]
 }
 
 // tostring(e): "Rexx error 41.1: message" (the secondary message, else the
-// error text); a condition other than SYNTAX, "Rexx condition NAME"
+// error text); a condition other than SYNTAX, "Rexx condition NAME", and
+// ": description" when it has one (as ooRexx's error 4.901 shows it)
 static int rxerr_tostring(lua_State *L)
 {
     luaL_checktype(L, 1, LUA_TTABLE);
@@ -465,7 +466,11 @@ static int rxerr_tostring(lua_State *L)
     lua_pushliteral(L, "Rexx condition ");
     rawField(L, 1, "condition");
     if (lua_type(L, -1) != LUA_TSTRING) { lua_pop(L, 1); lua_pushliteral(L, "?"); }
-    lua_concat(L, 2);
+    rawField(L, 1, "description");
+    if (lua_type(L, -1) == LUA_TSTRING && lua_rawlen(L, -1) > 0) {
+        lua_pushliteral(L, ": "); lua_insert(L, -2); lua_concat(L, 4);
+    }
+    else { lua_pop(L, 1); lua_concat(L, 2); }
     return 1;
 }
 
@@ -998,7 +1003,8 @@ static void setStringField(lua_State *L, RexxThreadContext *c, const char *name,
 /* A Rexx condition, pending on this thread, as a Lua error (pushes it; the
  * caller then returns lua_error(L)): a table with the condition's fields
  * (condition, code "41.1", rc, errortext, message, program, line,
- * traceback), the metatable RXERR, and the condition object kept in
+ * traceback, description when it is not a null string, thrown), the
+ * metatable RXERR, and the condition object kept in
  * registry[&RXCOND] for the way back (docs/design.md, *Errors*).          */
 static Proxy *proxyOf(RexxThreadContext *c, RexxObjectPtr v);
 
@@ -1048,7 +1054,7 @@ static NOINLINE void pushRexxCondition(lua_State *L, RexxThreadContext *c, RexxO
     // under CALL ON the call gives it, as in plain Rexx (ooRexx #2130, r13339)
     if (value != NULLOBJECT && cd.code == 0) c->DirectoryPut(cond, value, "LUA.RETURNED");
     if (pushLuaError(L, c, cd)) { release(c, cond); return; }
-    lua_createtable(L, 0, 8);
+    lua_createtable(L, 0, 10);
     setStringField(L, c, "condition", cd.conditionName);
     if (cd.code != 0) {
         lua_pushfstring(L, "%d.%d", (int)(cd.code / 1000), (int)(cd.code % 1000));
@@ -1059,6 +1065,12 @@ static NOINLINE void pushRexxCondition(lua_State *L, RexxThreadContext *c, RexxO
     setStringField(L, c, "errortext", cd.errortext);
     setStringField(L, c, "message", cd.message);
     setStringField(L, c, "program", cd.program);
+    if (cd.description != NULLOBJECT && c->StringLength(cd.description) > 0)
+        setStringField(L, c, "description", cd.description);
+    RexxObjectPtr thrown = c->DirectoryAt(cond, "THROWN");  // THROW, ooRexx RFE #31
+    lua_pushboolean(L, thrown == c->True());
+    lua_setfield(L, -2, "thrown");
+    release(c, thrown);
     if (cd.position != 0) { lua_pushinteger(L, (lua_Integer)cd.position); lua_setfield(L, -2, "line"); }
     RexxObjectPtr tb = c->DirectoryAt(cond, "TRACEBACK");  // a List of lines
     if (tb != NULLOBJECT && tb != c->Nil()) {
