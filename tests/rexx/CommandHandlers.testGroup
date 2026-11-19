@@ -303,6 +303,24 @@ return testResult
   self~assertFalse(c~hasIndex("LUA.RETURNED"), "the bridge's own entry left out")
   self~unreg("RAISESR")
 
+-- rule 1 for a THROW (ooRexx RFE #31, r13541) in the Rexx code a handler
+-- calls: the issuer gets it as itself, still thrown, and it goes on from
+-- caller to caller (CALL ON does not trap it), as in plain Rexx
+::method test_a_thrown_condition_through_a_handler
+  t = .routine~new("t", 'throw user x description "d" additional ("a")')
+  self~reg("THROWS", .lua~eval("local f = ...; return function() f(); return 5 end", t))
+  .local~lua.test.handled = .false
+  do
+    call issueUnder "THROWS"
+    self~fail("no USER X")
+  catch c = user x
+  end
+  self~assertSame("d", c~description)
+  self~assertSame("a", c~additional)
+  self~assertTrue(c~thrown)
+  self~assertFalse(.local~lua.test.handled, "CALL ON in the issuer does not trap it")
+  self~unreg("THROWS")
+
 ::method test_a_user_condition_from_a_routine_through_eval
   do
     .lua~eval("local f = ...; return f()", self~routineRaiser)
@@ -644,3 +662,13 @@ handled:
   forward message("LINEOUT")
 ::method charout
   return 0
+
+::routine issueUnder        -- issues a command under CALL ON USER X
+  use arg env
+  call on user x name handled
+  address value env
+  'x'
+  return
+handled:
+  .local~lua.test.handled = .true
+  return

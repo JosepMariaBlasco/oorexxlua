@@ -312,7 +312,116 @@ x:
 trapped:
   self~trapped = .true
   return
+-- A THROW (ooRexx RFE #31, r13541) in Rexx code that Lua calls: the API
+-- call returns with it pending, so nothing unwinds through Lua (unlike a
+-- SIGNAL past Lua, above); Lua sees it as its table, and back in Rexx it is
+-- thrown again as itself, from caller to caller, as in plain Rexx
+::method thrower
+  return .routine~new("t", 'throw user x description "d" additional ("a")')
+
+::method test_throw_past_lua_two_levels_out
+  f = .lua~eval("return function(r) r() end")
+  do
+    call throwThrough f, self~thrower
+    self~fail("no USER X")
+  catch c = user x
+  end
+  self~assertSame("USER X", c~condition)
+  self~assertSame("d", c~description)
+  self~assertSame("a", c~additional)
+  self~assertTrue(c~thrown, "still thrown")
+  self~assertTrue(c~propagated)
+
+::method test_throw_past_lua_not_trapped_by_call_on
+  f = .lua~eval("return function(r) r() end")
+  .local~lua.test.handled = .false
+  do
+    call throwPastCallOn f, self~thrower
+    self~fail("no USER X")
+  catch c = user x
+  end
+  self~assertFalse(.local~lua.test.handled, "CALL ON does not trap a thrown condition")
+  self~assertTrue(c~thrown)
+
+::method test_throw_past_lua_signal_on
+  f = .lua~eval("return function(r) r() end")
+  self~assertSame("1 d", throwSignalOn(f, self~thrower))
+
+::method test_throw_past_lua_from_a_method
+  f = .lua~eval("return function(o) return o:throw() end")
+  do
+    f~call(.Thrower~new)
+    self~fail("no USER X")
+  catch c = user x
+  end
+  self~assertSame("from a method", c~description)
+  self~assertTrue(c~thrown)
+
+::method test_throw_syntax_past_lua
+  f = .lua~eval("return function(r) r() end")
+  do
+    f~call(.routine~new("s", 'throw syntax 40.1 array("BOOM")'))
+    self~fail("no SYNTAX")
+  catch c = syntax
+  end
+  self~assertSame("40.1", c~code)
+  self~assertTrue(c~thrown, "THROW SYNTAX is thrown, not raised")
+
+-- Lua sees the condition, not "unwinding": a pcall stops it, and the Lua
+-- code goes on; nothing comes back to Rexx
+::method test_throw_caught_by_a_pcall_in_lua
+  f = .lua~eval("return function(r) local ok, e = pcall(r)" -
+                "  return tostring(ok) .. ' ' .. getmetatable(e) .. ' ' .. e.condition end")
+  self~assertSame("false RexxError USER X", f~call(self~thrower))
+  self~assertEquals(42, .lua~eval("return 6 * 7"), "nothing pending")
+
+::method test_throw_raised_again_by_lua_is_thrown_again
+  f = .lua~eval("return function(r) local ok, e = pcall(r); error(e) end")
+  do
+    call throwThrough f, self~thrower
+    self~fail("no USER X")
+  catch c = user x
+  end
+  self~assertSame("d", c~description)
+  self~assertTrue(c~thrown, "error(e) keeps it thrown")
+
+::method test_throw_past_lua_uncaught_is_error_4_901
+  prog = SysTempFileName("throw????.rex")
+  call lineout prog, 'call r; say "not reached"; exit'
+  call lineout prog, 'r: .lua~eval("local r = ...; r()", .routine~new("t", ''throw user badConfig description "missing key"''))'
+  call lineout prog, '::requires "lua.cls"'
+  call lineout prog
+  out = .array~new
+  address system 'rexx' prog '2>&1' with output using (out)
+  code = rc
+  call SysFileDelete prog
+  self~assertTrue(code \= 0, "an error")
+  self~assertSame("Error 4.901:  Program interrupted with USER BADCONFIG condition: missing key.", out~lastItem~strip("T", "0d"x))
+
 ::attribute trapped
+
+::routine throwThrough      -- a level between the CATCH and the call into Lua
+  use arg f, r
+  f~call(r)
+  return
+
+::routine throwPastCallOn
+  use arg f, r
+  call on user x name handled
+  f~call(r)
+  return
+handled:
+  .local~lua.test.handled = .true
+  return
+
+::routine throwSignalOn
+  use arg f, r
+  signal on user x
+  f~call(r)
+  return "not trapped"
+x:
+  c = condition("O")
+  return c~thrown c~description
 
 ::routine signalPast        -- true if f~call(o)'s USER X reached this trap
   use arg f, o
@@ -334,6 +443,10 @@ x:
 ::class Raiser
 ::method boom
   raise user x description "d" additional ("a") return 7
+
+::class Thrower
+::method throw
+  throw user x description "from a method"
 
 ::class StringRaiser
 ::method string

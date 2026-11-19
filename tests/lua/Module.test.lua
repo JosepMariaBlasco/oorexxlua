@@ -157,6 +157,27 @@ T.test("errors come back as themselves", function()
   T.ok(rawequal(e, mine), "the same table, twice through")
 end)
 
+T.test("a THROW (ooRexx RFE #31) in Rexx code is a Lua error, and comes back thrown", function()
+  -- from an internal routine, past the code that called it
+  local ok, e = pcall(rexx.routine('call r; return "not reached"; r: throw user badConfig description "missing key"'))
+  T.ok(not ok)
+  T.eq(getmetatable(e), "RexxError")
+  T.eq(e.condition, "USER BADCONFIG")
+  T.eq(rexx.eval("6 * 7"), 42, "nothing pending")
+  -- raised again by Lua (error(e)), it is thrown again in Rexx, past a level
+  local relay = rexx.routine([[
+    use arg f
+    do
+      call level f
+    catch c = user badConfig
+      return c~thrown c~description
+    end
+    return "none"
+    level: use arg f; f~call; return]])
+  T.eq(relay(function() local ok, e = pcall(rexx.routine('throw user badConfig description "missing key"')); error(e) end),
+       "1 missing key")
+end)
+
 T.test("callbacks both ways, nested", function()
   function twice(f, v) return f(f(v)) end
   T.eq(rexx.eval(".lua~global('twice')~call(arg(1), 3)", rexx.routine("return arg(1) * 10")), 300)

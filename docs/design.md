@@ -90,7 +90,7 @@ would hold the Rexx object while Lua runs.
 `tests/rexx/Threads.testGroup` runs several Rexx threads in one state, with
 callbacks, and several threads with states of their own.
 
-**Needs ooRexx r13286 (bug #2122)** (the bridge's minimum is the family's revision, r13532). Before it, `IsInstanceOf`, `IsRoutine`
+**Needs ooRexx r13286 (bug #2122)** (the bridge's minimum is ooRexx trunk r13550). Before it, `IsInstanceOf`, `IsRoutine`
 and `IsMethod` asked of a number that has no string value yet (any result of
 Rexx arithmetic) made that string without the kernel lock: with other threads
 running Rexx, ooRexx's heap was corrupted (found by ooRexx/Python). r13286
@@ -676,6 +676,26 @@ ooRexx drops the condition at `CallRoutine` (oorexx-bridges,
 `Errors.testGroup` (`test_signal_past_lua_*`, 500 in a row),
 `CommandHandlers.testGroup`, `Module.test.lua`.
 
+**A THROW past Lua.** A condition thrown by `THROW` (ooRexx RFE #31,
+r13541; or by the `Throw` API) in Rexx code that Lua calls goes from caller
+to caller until something catches it, as a SYNTAX error does, and it crosses
+the bridge in the same way, with nothing for the bridge to do: the API call
+of the bridge returns with the condition pending, so nothing unwinds through
+Lua's frames (unlike a SIGNAL past Lua, above); Lua gets it as its table
+(*A Rexx condition in Lua*), and if Lua lets it through, or raises the same
+table again with `error(e)`, the bridge raises its condition object again as
+it is (`RaiseConditionObject`), whose `THROWN` entry is `.true`, so ooRexx
+throws it again in the Rexx code that called into Lua: it goes on from
+there, past the levels that do not catch it, `CALL ON` does not trap it,
+its `PROPAGATED` is `.true`, and uncaught it ends the program with error
+4.1, or 4.901 with its description (r13550). A `pcall` in Lua stops it, as
+it stops a SYNTAX error: Lua can catch a thrown condition, which it cannot
+do with a SIGNAL past Lua. The same holds through a Lua command handler and
+from the Lua module (a Rexx THROW is a Lua error; that error raised again
+by Lua into Rexx is thrown again). Tests: `Errors.testGroup`
+(`test_throw_*`), `CommandHandlers.testGroup`
+(`test_a_thrown_condition_through_a_handler`), `Module.test.lua`.
+
 ## Operators
 
 Rexx operators on a `.LuaObject` are Lua's, metamethods included, as
@@ -858,7 +878,7 @@ documents it.
 uncovers it (until 0.4.0, `AddCommandEnvironment` replaced it, and a
 `deregister` left `LUA` unknown; measured on r13297,
 `test_lua_cls_stacks_over_a_registered_lua`). It needs ooRexx r13297
-(the bridge's minimum is the family's revision, r13532). The work on
+(the bridge's minimum is ooRexx trunk r13550). The work on
 command handlers in ooRexx/WASM found that `AddCommandEnvironment` changes
 the instance's table of handlers without the interpreter's lock, and that a
 command sent to an environment before it is registered can cache a handler
