@@ -593,6 +593,14 @@ static bool isHalt(RexxThreadContext *c, RexxObjectPtr cond)
     return cd.code / 1000 == 4;
 }
 
+// A condition thrown (THROW, the Throw() API, oorexx.throw: ooRexx RFE #31),
+// not raised: its THROWN entry is .true
+static bool isThrown(RexxThreadContext *c, RexxObjectPtr cond)
+{
+    RexxObjectPtr t = c->DirectoryAt((RexxDirectoryObject)cond, "THROWN");
+    return t == c->True();
+}
+
 // Raise again a Rexx condition that went through Lua, as it is: a copy of its
 // condition object, with everything it holds (code, substitutions,
 // description, additional, result, RC, traceback), raised by
@@ -4535,8 +4543,8 @@ static RexxObjectPtr RexxEntry addressLua(RexxExitContext *c, RexxStringObject a
     LuaFailure f;
     int n = pcallQuiet(st, 0, f);
     // a HALT in a callback (its error, back here): a HALT again, by halting
-    // the thread, as pcallAll does.  Any other Rexx error is a Lua error of
-    // the command: ERROR, with its text
+    // the thread, as pcallAll does; a thrown condition, itself (below).  Any
+    // other Rexx error is a Lua error of the command: ERROR, with its text
     RexxObjectPtr cond = n < 0 && !st->unwind ? conditionOf(L, -1) : NULLOBJECT;
     bool halt = cond != NULLOBJECT && isHalt(tc, cond);
     if (redirected) {
@@ -4554,6 +4562,14 @@ static RexxObjectPtr RexxEntry addressLua(RexxExitContext *c, RexxStringObject a
     if (takeInterrupt(st) || halt) {
         tc->HaltThread();
         if (n < 0) { lua_settop(L, top); return c->WholeNumber(ADDRESS_RUNTIME); }
+    }
+    // a thrown condition (THROW, or oorexx.throw; ooRexx RFE #31): not an
+    // error of the command, but the condition itself, as a HALT is (the user,
+    // 20/11/2026): raised again as it is, so ooRexx throws it in the issuer
+    if (n < 0 && cond != NULLOBJECT && isThrown(tc, cond)) {
+        raiseCondition(tc, cond);                   // (while its table, which keeps it, is on the stack)
+        lua_settop(L, top);
+        return c->WholeNumber(ADDRESS_RUNTIME);
     }
     if (n < 0) {
         lua_settop(L, top);

@@ -608,7 +608,7 @@ cross whole both ways: a NUL in one does not cut it short.
 
 ADDRESS LUA keeps its own rules (*ADDRESS LUA*): an error in the command is
 ERROR or FAILURE, with the text and traceback as `condition('A')`, except a
-HALT. A Ctrl-C while Lua code runs: *Ctrl-C*.
+HALT and a thrown condition. A Ctrl-C while Lua code runs: *Ctrl-C*.
 
 Getting a field, indexing, `tostring` and `#` can all run Lua code
 (metamethods), and a Lua error outside a protected call does not come back
@@ -744,8 +744,7 @@ bridge, on every path, leaves a condition pending and returns
 (`RaiseConditionObject` keeps `THROWN`; should it stop keeping it, as is
 proposed in `oorexx-bugs/2026-11-20-throw-object-api.md`, the bridge
 changes its one call, `raiseCondition`, to the API proposed there). Under
-`ADDRESS LUA` a throw is an error in the command, ERROR with RC 1, as any
-(*ADDRESS LUA*). Measured: 150,000 throws caught in Rexx, no growth (RSS
+`ADDRESS LUA` it reaches the issuer too (*ADDRESS LUA*). Measured: 150,000 throws caught in Rexx, no growth (RSS
 stable), about 28 µs each. Tests: `Errors.testGroup` (`test_lua_throw_*`),
 `CommandHandlers.testGroup` (`test_a_handler_that_throws`),
 `Address.testGroup` (`test_a_throw_in_the_command_is_ERROR`),
@@ -906,6 +905,23 @@ as a chunk otherwise, so an expression gives its value.
 | does not compile | -1 | FAILURE | unchanged |
 | no usable `.lua` (not a `.LuaState`, closed, the host's from another thread) | -2 | FAILURE | unchanged |
 | a Lua error while running | 1 | ERROR | unchanged |
+| a thrown condition (THROW in Rexx code it calls, `oorexx.throw`), not caught in Lua | 1 | the condition itself, thrown | unchanged |
+
+**A thrown condition is not an error of the command** (the user,
+20/11/2026): a condition thrown by THROW in Rexx code the command calls, or
+by `oorexx.throw`, that Lua does not catch, reaches the issuer as itself,
+raised again as it is (its condition object, `THROWN` `.true`), as a HALT
+does; a raised one (a SYNTAX error of that Rexx code, a RAISE) and a Lua
+error are ERROR, RC 1, as before. RC is 1. **ooRexx r13550 does not throw it
+on**: a condition thrown in a native command environment, as `ADDRESS LUA`
+is, reaches the issuer as a RAISE would (`ContextCommandHandlerDispatcher::handleError`
+keeps any condition but SYNTAX as the command's, and the issuer raises it
+one level), so a CATCH clause or a trap in the issuer's code catches it (and
+one around an internal routine that issued the command), but past a
+`::routine`, or with nothing to catch it, it is lost and the program goes
+on (measured without Lua, a native environment that calls `Throw()`; a
+handler registered with `.lua~commandHandler` is not affected). Tests:
+`Address.testGroup` (`test_a_throw_in_the_command_*`).
 
 The sign follows ADDRESS FETCH and DOM of ooRexx/WASM: negative, the program
 is wrong (FAILURE); positive, the command was right but did not succeed

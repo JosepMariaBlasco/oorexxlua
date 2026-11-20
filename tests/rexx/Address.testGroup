@@ -174,15 +174,58 @@ error:
   end
   self~assertTrue(c~additional~pos("x" || "00"x || "y") > 0, "the whole message")
 
--- ADDRESS LUA keeps its own rules: a THROW in the command (oorexx.throw, or
--- Rexx code the command calls) is an error in it, ERROR with RC 1
-::method test_a_throw_in_the_command_is_ERROR
+-- a thrown condition (THROW in Rexx code the command calls, or oorexx.throw)
+-- is not an error of the command: it reaches the issuer as itself, as a
+-- HALT does (the user, 20/11/2026); a raised one, and a Lua error, are ERROR.
+-- (Caught here by a CATCH in the issuer's own code: past a ::routine, or
+-- uncaught, ooRexx r13550 loses a condition thrown by a native command
+-- environment, docs/design.md, *ADDRESS LUA*.)
+::method test_a_throw_in_the_command_from_rexx
+  .lua~global("_G")["addressThrower"] = .routine~new("t", 'throw user badConfig description "from Rexx"')
   do
-    address lua 'require("oorexx").throw("user badConfig", nil, "missing key")'
+    address lua 'addressThrower()'
+    self~fail("no USER BADCONFIG")
+  catch c = user badConfig
+  end
+  .lua~global("_G")["addressThrower"] = .nil
+  self~assertSame("from Rexx", c~description)
+  self~assertTrue(c~thrown)
+
+::method test_a_throw_in_the_command_from_lua
+  do
+    address lua 'require("oorexx").throw("user badConfig", nil, "from Lua")'
+    self~fail("no USER BADCONFIG")
+  catch c = user badConfig
+  end
+  self~assertSame("from Lua", c~description)
+  self~assertTrue(c~thrown)
+
+::method test_a_throw_syntax_in_the_command
+  do
+    address lua 'require("oorexx").throw("syntax", "40.1", nil, {"BOOM"})'
+    self~fail("no SYNTAX")
+  catch c = syntax
+  end
+  self~assertSame("40.1", c~code)
+  self~assertTrue(c~thrown)
+
+::method test_a_throw_caught_in_the_command_is_nothing
+  .lua~global("_G")["addressThrower"] = .routine~new("t", 'throw user badConfig')
+  address lua 'return (pcall(addressThrower))'
+  r = result; code = rc
+  .lua~global("_G")["addressThrower"] = .nil
+  self~assertEquals(0, code)
+  self~assertSame(0, r, "pcall's false")
+
+::method test_a_raised_condition_in_the_command_is_ERROR
+  .lua~global("_G")["addressRaiser"] = .routine~new("t", 'x = 1 + "a"')
+  do
+    address lua 'addressRaiser()'
   catch c = error
   end
+  .lua~global("_G")["addressRaiser"] = .nil
   self~assertEquals(1, rc)
-  self~assertTrue(c~additional~pos("Rexx condition USER BADCONFIG: missing key") = 1, c~additional)
+  self~assertTrue(c~additional~pos("Rexx error 41.1") = 1, c~additional)
 
 ::method test_a_LuaObject_as_dot_lua
   trace off
