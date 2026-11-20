@@ -174,6 +174,16 @@ error:
   end
   self~assertTrue(c~additional~pos("x" || "00"x || "y") > 0, "the whole message")
 
+-- ADDRESS LUA keeps its own rules: a THROW in the command (oorexx.throw, or
+-- Rexx code the command calls) is an error in it, ERROR with RC 1
+::method test_a_throw_in_the_command_is_ERROR
+  do
+    address lua 'require("oorexx").throw("user badConfig", nil, "missing key")'
+  catch c = error
+  end
+  self~assertEquals(1, rc)
+  self~assertTrue(c~additional~pos("Rexx condition USER BADCONFIG: missing key") = 1, c~additional)
+
 ::method test_a_LuaObject_as_dot_lua
   trace off
   saved = .lua

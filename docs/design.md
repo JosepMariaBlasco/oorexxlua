@@ -701,6 +701,56 @@ by Lua into Rexx is thrown again). Tests: `Errors.testGroup`
 (`test_throw_*`), `CommandHandlers.testGroup`
 (`test_a_thrown_condition_through_a_handler`), `Module.test.lua`.
 
+**Lua code throwing a Rexx condition: `throw`.** `require "oorexx"` has
+`throw(condition [, rc [, description [, additional]]])` (oorexx-bridges
+`topics/host-throw.md`, the user, 20/11/2026: the family's one shape, the
+arguments of ooRexx's `Throw()` API in its order, which is THROW's;
+Python's `oorexx.throw`, .NET's `RexxException.Throw`):
+
+```lua
+local rexx = require "oorexx"
+rexx.throw("user badConfig", nil, "missing key 'port'", config)
+rexx.throw("error", 12, "the command")
+rexx.throw("syntax", "40.1", nil, {"BOOM"})
+```
+
+The Rexx code that called into Lua gets a thrown condition, as if THROW had
+run there: `catch c = user badConfig`, `c~description`, `c~thrown` 1; it
+goes on from caller to caller, `CALL ON` does not trap it, and uncaught it
+is error 4.901 with its description (4.1 without one). The arguments are
+checked as THROW checks them, at the call: a name THROW accepts (ERROR,
+FAILURE, HALT, LOSTDIGITS, NOMETHOD, NOSTRING, NOTREADY, NOVALUE, SYNTAX,
+`USER name`, in any case); an rc for ERROR and FAILURE (any value) and for
+SYNTAX (the error code as in Rexx, a string, `"40.1"`, or a number, which
+is what Rexx's `"40.1"` is in Lua), and none for the others; a string as
+the description; for SYNTAX, a table as `additional`, the sequence of the
+message's substitutions (any other condition's `additional` is converted
+as an argument is). A bad one is a Lua error at the call ("bad argument #2
+to 'throw' (the USER X condition has no rc)"), 98.900 in Rexx, as for any
+Lua function.
+
+`throw` raises a Lua error whose value is the table a Rexx condition is in
+Lua (*A Rexx condition in Lua*): `condition`, `rc` (for SYNTAX, `code` and
+`rc`), `description`, `additional` (the Lua value given), `thrown` true;
+`tostring(e)` "Rexx condition USER BADCONFIG: missing key 'port'". When Rexx
+code is running (Lua was called from Rexx), the bridge also makes its Rexx
+condition object, `THROWN` `.true`, and keeps it with the table, as for a
+condition that came from Rexx: so a `pcall` catches it, `error(e)` raises
+it again, and when it reaches the bridge it is raised again as it is, which
+throws it in the Rexx caller (the same path as *A THROW past Lua*). With no
+Rexx code running (Lua as the host, nothing in Rexx called it), the table
+is all there is. Not ooRexx's `Throw()` itself: it does not return, and the
+bridge, on every path, leaves a condition pending and returns
+(`RaiseConditionObject` keeps `THROWN`; should it stop keeping it, as is
+proposed in `oorexx-bugs/2026-11-20-throw-object-api.md`, the bridge
+changes its one call, `raiseCondition`, to the API proposed there). Under
+`ADDRESS LUA` a throw is an error in the command, ERROR with RC 1, as any
+(*ADDRESS LUA*). Measured: 150,000 throws caught in Rexx, no growth (RSS
+stable), about 28 µs each. Tests: `Errors.testGroup` (`test_lua_throw_*`),
+`CommandHandlers.testGroup` (`test_a_handler_that_throws`),
+`Address.testGroup` (`test_a_throw_in_the_command_is_ERROR`),
+`Module.test.lua`.
+
 ## Operators
 
 Rexx operators on a `.LuaObject` are Lua's, metamethods included, as
@@ -1115,6 +1165,7 @@ while another registers them.
 local rexx = require "oorexx"
 rexx.eval("6 * 7")                          --> 42 (arg(1), arg(2)... are extra arguments)
 rexx.run("prog.rex", "a", "b")              --> CALL a program: its result
+rexx.throw("user badConfig", nil, "no port") --> a Rexx condition, thrown (*A THROW past Lua*)
 local f = rexx.routine("use arg a, b; return a * b")
 f(6, 7)                                     --> 42: a Rexx Routine is a Lua function
 local r = rexx.interpreter{rexx_path = {"/my/classes"}, extensions = ".rex",
@@ -1129,7 +1180,7 @@ no setup (`\directlua{rexx = require "oorexx"}`). `interpreter{...}` makes
 others, with ooRexx's options (`EXTERNAL_CALL_PATH`, `..._EXTENSIONS`,
 `INITIAL_ADDRESS_ENVIRONMENT`, `LOAD_REQUIRED_LIBRARY`; and
 `command_environments`, *Command environments*), as a table with `eval`,
-`run`, `routine`, `add_command_environment`, `remove_command_environment`
+`run`, `routine`, `add_command_environment`, `remove_command_environment`, `throw`
 and `close` (dots, not colons: like the module).
 Each instance has `lua.cls` loaded, found next to the module (the call path
 also gets the module's directory), and the code of `eval` and `routine` sees

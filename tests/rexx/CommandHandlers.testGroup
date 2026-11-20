@@ -321,6 +321,20 @@ return testResult
   self~assertFalse(.local~lua.test.handled, "CALL ON in the issuer does not trap it")
   self~unreg("THROWS")
 
+-- a Lua handler that throws (oorexx.throw): the issuer gets it, thrown
+::method test_a_handler_that_throws
+  self~reg("THROWER", "require('oorexx').throw('user badConfig', nil, 'no ' .. command)")
+  .local~lua.test.handled = .false
+  do
+    call issueUnder "THROWER"
+    self~fail("no USER BADCONFIG")
+  catch c = user badConfig
+  end
+  self~assertSame("no x", c~description)
+  self~assertTrue(c~thrown)
+  self~assertFalse(.local~lua.test.handled, "CALL ON in the issuer does not trap it")
+  self~unreg("THROWER")
+
 ::method test_a_user_condition_from_a_routine_through_eval
   do
     .lua~eval("local f = ...; return f()", self~routineRaiser)
@@ -663,9 +677,10 @@ handled:
 ::method charout
   return 0
 
-::routine issueUnder        -- issues a command under CALL ON USER X
+::routine issueUnder        -- issues a command under CALL ON USER X (and BADCONFIG)
   use arg env
   call on user x name handled
+  call on user badConfig name handled
   address value env
   'x'
   return

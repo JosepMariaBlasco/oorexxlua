@@ -194,6 +194,42 @@ T.test("a THROW (ooRexx RFE #31) in Rexx code is a Lua error, and comes back thr
        "1 missing key")
 end)
 
+T.test("rexx.throw: Lua code throws a Rexx condition (topics/host-throw.md)", function()
+  local relay = rexx.routine([[
+    use arg f
+    do
+      call level f
+    catch c = user badConfig
+      return c~condition c~description c~thrown
+    end
+    return "none"
+    level: use arg f; f~call; return]])
+  T.eq(relay(function() rexx.throw("user badConfig", nil, "missing key") end), "USER BADCONFIG missing key 1")
+  local errors = rexx.routine("use arg f; do; f~call; catch c = error; return c~rc c~description c~thrown; end")
+  T.eq(errors(function() rexx.throw("error", 12, "cmd") end), "12 cmd 1")
+  -- with no Rexx code running it is the Lua error alone
+  local ok, e = pcall(rexx.throw, "user x", nil, "d", {1})
+  T.ok(not ok)
+  T.eq(getmetatable(e), "RexxError")
+  T.eq(e.condition, "USER X")
+  T.eq(e.description, "d")
+  T.eq(e.thrown, true)
+  T.eq(e.additional[1], 1)
+  T.eq(tostring(e), "Rexx condition USER X: d")
+  ok, e = pcall(rexx.throw, "syntax", "40.1", nil, {"BOOM"})
+  T.eq(e.code, "40.1")
+  T.eq(e.rc, 40)
+  -- bad arguments, as THROW would not take them
+  ok, e = pcall(rexx.throw, "user")
+  T.ok(e:find("not a condition THROW accepts", 1, true), e)
+  ok, e = pcall(rexx.throw, "notready", 3)
+  T.ok(e:find("the NOTREADY condition has no rc", 1, true), e)
+  ok, e = pcall(rexx.throw, "syntax", "x")
+  T.ok(e:find("not an error code: 'x'", 1, true), e)
+  ok, e = pcall(rexx.throw, "user x", nil, {})
+  T.ok(e:find("the description is a string", 1, true), e)
+end)
+
 T.test("callbacks both ways, nested", function()
   function twice(f, v) return f(f(v)) end
   T.eq(rexx.eval(".lua~global('twice')~call(arg(1), 3)", rexx.routine("return arg(1) * 10")), 300)

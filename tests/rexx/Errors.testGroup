@@ -399,17 +399,111 @@ trapped:
   self~assertTrue(code \= 0, "an error")
   self~assertSame("Error 4.901:  Program interrupted with USER BADCONFIG condition: missing key.", out~lastItem~strip("T", "0d"x))
 
+-- oorexx.throw (oorexx-bridges topics/host-throw.md, decided 20/11/2026):
+-- Lua code throws a Rexx condition, throw(condition, rc, description,
+-- additional), as THROW and the Throw() API do
+::method luaThrower
+  return .lua~eval("local rexx = require 'oorexx'; return function(...) rexx.throw(...) end")
+
+::method test_lua_throw_user_two_levels_out
+  do
+    call throwThrough self~luaThrower, "user badConfig", .nil, "missing key", .lua~eval("return {port = 80}")
+    self~fail("no USER BADCONFIG")
+  catch c = user badConfig
+  end
+  self~assertSame("USER BADCONFIG", c~condition)
+  self~assertSame("missing key", c~description)
+  self~assertTrue(c~thrown)
+  self~assertSame(80, c~additional["port"], "additional, as an argument would be")
+
+::method test_lua_throw_not_trapped_by_call_on
+  .local~lua.test.handled = .false
+  do
+    call throwPastCallOn self~luaThrower, "user x"
+    self~fail("no USER X")
+  catch c = user x
+  end
+  self~assertFalse(.local~lua.test.handled)
+  self~assertSame("", c~description, "none: a null string, as THROW gives")
+
+::method test_lua_throw_error_with_its_rc
+  do
+    call throwThrough self~luaThrower, "error", 12, "the command"
+  catch c = error
+  end
+  self~assertEquals(12, c~rc)
+  self~assertSame("the command", c~description)
+  self~assertTrue(c~thrown)
+
+::method test_lua_throw_syntax
+  do
+    call throwThrough self~luaThrower, "syntax", "40.1", .nil, .lua~eval("return {'BOOM'}")
+  catch c = syntax
+  end
+  self~assertSame("40.1", c~code)
+  self~assertSame('External routine "BOOM" failed.', c~message)
+  self~assertTrue(c~thrown)
+
+::method test_lua_throw_caught_by_a_pcall
+  f = .lua~eval("local rexx = require 'oorexx'; return function()" -
+                "  local ok, e = pcall(rexx.throw, 'user x', nil, 'd')" -
+                "  return tostring(ok) .. ' ' .. getmetatable(e) .. ' ' .. e.condition .. ' ' .. tostring(e.thrown) .. ' | ' .. tostring(e) end")
+  self~assertSame("false RexxError USER X true | Rexx condition USER X: d", f~call)
+  self~assertEquals(42, .lua~eval("return 6 * 7"), "nothing pending")
+
+::method test_lua_throw_raised_again_with_error
+  f = .lua~eval("local rexx = require 'oorexx'; return function() local ok, e = pcall(rexx.throw, 'user x', nil, 'd'); error(e) end")
+  do
+    call throwThrough f
+  catch c = user x
+  end
+  self~assertSame("d", c~description)
+  self~assertTrue(c~thrown)
+
+-- arguments THROW would not accept: a Lua error at the call, 98.900 in Rexx
+::method test_lua_throw_bad_arguments
+  t = self~luaThrower
+  self~assertTrue(self~luaThrowError(t, "oops")~pos("not a condition THROW accepts: 'oops'") > 0)
+  self~assertTrue(self~luaThrowError(t, "user")~pos("not a condition THROW accepts") > 0)
+  self~assertTrue(self~luaThrowError(t, "halt now")~pos("not a condition THROW accepts") > 0)
+  self~assertTrue(self~luaThrowError(t, "user x", 5)~pos("the USER X condition has no rc") > 0)
+  self~assertTrue(self~luaThrowError(t, "failure")~pos("the FAILURE condition needs an rc") > 0)
+  self~assertTrue(self~luaThrowError(t, "syntax", "40.1.2")~pos("not an error code: '40.1.2'") > 0)
+  self~assertTrue(self~luaThrowError(t, "syntax", "40.1", .nil, "BOOM")~pos("are a table") > 0)
+
+::method luaThrowError
+  use arg f, ...
+  do
+    .message~new(f, "CALL", "A", arg(2, "A"))~send
+    return "no error"
+  catch c = syntax
+  end
+  if c~code \== "98.900" then return "SYNTAX" c~code
+  return c~additional[1]
+
+::method test_lua_throw_uncaught_is_error_4_901
+  prog = SysTempFileName("lthrow????.rex")
+  call lineout prog, '.lua~eval("require(''oorexx'').throw(''user badConfig'', nil, ''missing key'')")'
+  call lineout prog, '::requires "lua.cls"'
+  call lineout prog
+  out = .array~new
+  address system 'rexx' prog '2>&1' with output using (out)
+  code = rc
+  call SysFileDelete prog
+  self~assertTrue(code \= 0, "an error")
+  self~assertSame("Error 4.901:  Program interrupted with USER BADCONFIG condition: missing key.", out~lastItem~strip("T", "0d"x))
+
 ::attribute trapped
 
 ::routine throwThrough      -- a level between the CATCH and the call into Lua
-  use arg f, r
-  f~call(r)
+  use arg f, ...
+  .message~new(f, "CALL", "A", arg(2, "A"))~send
   return
 
 ::routine throwPastCallOn
-  use arg f, r
+  use arg f, ...
   call on user x name handled
-  f~call(r)
+  .message~new(f, "CALL", "A", arg(2, "A"))~send
   return
 handled:
   .local~lua.test.handled = .true

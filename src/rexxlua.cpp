@@ -1042,6 +1042,30 @@ static bool pushLuaError(lua_State *L, RexxThreadContext *c, const RexxCondition
     return done;
 }
 
+// The Rexx condition object of the error table on top, kept for the way back
+// (conditionOf): registry[&RXCOND], weak-keyed, table -> its userdata
+static void keepCondition(lua_State *L, State *st, RexxObjectPtr cond)
+{
+    lua_State *saved = st->L;
+    st->L = L;
+    lua_rawgetp(L, LUA_REGISTRYINDEX, &RXCOND);
+    if (!lua_istable(L, -1)) {
+        lua_pop(L, 1);
+        lua_newtable(L);
+        lua_createtable(L, 0, 1);
+        lua_pushliteral(L, "k");
+        lua_setfield(L, -2, "__mode");
+        lua_setmetatable(L, -2);
+        lua_pushvalue(L, -1);
+        lua_rawsetp(L, LUA_REGISTRYINDEX, &RXCOND);
+    }
+    lua_pushvalue(L, -2);                               // e conds e
+    pushBox(st, cond);                                  // e conds e box
+    lua_rawset(L, -3);
+    lua_pop(L, 1);
+    st->L = saved;
+}
+
 static NOINLINE void pushRexxCondition(lua_State *L, RexxThreadContext *c, RexxObjectPtr value)
 {
     RexxDirectoryObject cond = c->GetConditionInfo();
@@ -1096,26 +1120,7 @@ static NOINLINE void pushRexxCondition(lua_State *L, RexxThreadContext *c, RexxO
     pushRxErrMeta(L);
     lua_setmetatable(L, -2);
     State *st = stateOf(L);
-    if (st != NULL && st->tc == c && !st->closed) {         // the condition object, for the way back
-        lua_State *saved = st->L;
-        st->L = L;
-        lua_rawgetp(L, LUA_REGISTRYINDEX, &RXCOND);
-        if (!lua_istable(L, -1)) {
-            lua_pop(L, 1);
-            lua_newtable(L);
-            lua_createtable(L, 0, 1);
-            lua_pushliteral(L, "k");
-            lua_setfield(L, -2, "__mode");
-            lua_setmetatable(L, -2);
-            lua_pushvalue(L, -1);
-            lua_rawsetp(L, LUA_REGISTRYINDEX, &RXCOND);
-        }
-        lua_pushvalue(L, -2);                               // e conds e
-        pushBox(st, cond);                                  // e conds e box
-        lua_rawset(L, -3);
-        lua_pop(L, 1);
-        st->L = saved;
-    }
+    if (st != NULL && st->tc == c && !st->closed) keepCondition(L, st, cond);   // for the way back
     release(c, cond);                       // the userdata keeps it
 }
 
@@ -1133,6 +1138,143 @@ static RexxObjectPtr conditionOf(lua_State *L, int idx)
     RexxObjectPtr cond = b != NULL ? b->obj : NULLOBJECT;
     lua_pop(L, 2);
     return cond;
+}
+
+/*
+ * oorexx.throw(condition [, rc [, description [, additional]]]): Lua code
+ * throws a Rexx condition, as THROW does (ooRexx RFE #31; oorexx-bridges
+ * topics/host-throw.md: the arguments of the Throw() API, in its order, which
+ * is THROW's).  It is a Lua error, the table a Rexx condition is in Lua
+ * (pushRexxCondition) with thrown = true, and, when Rexx code is running, a
+ * Rexx condition object kept with it, THROWN .true: so it goes the way every
+ * Rexx condition in Lua goes (a pcall catches it, error(e) raises it again),
+ * and when it reaches the bridge it is raised again as it is
+ * (raiseCondition), which, THROWN being .true, throws it in the Rexx code
+ * that called into Lua.  (Not the Throw() API itself: it does not return,
+ * and the bridge leaves a condition pending and returns, on many paths.)
+ * The arguments are checked here, as THROW checks them, before anything else:
+ * a bad one is a Lua error at the call, as for any Lua function.            */
+static const char *const THROWABLE[] = {"ERROR", "FAILURE", "HALT", "LOSTDIGITS", "NOMETHOD", "NOSTRING",
+                                        "NOTREADY", "NOVALUE", "SYNTAX", "USER", NULL};
+
+// The Rexx side of a throw: its condition object, kept with the table on top
+static NOINLINE void keepThrown(lua_State *L, State *st, int name, int rc, int desc, int add, int code)
+{
+    RexxThreadContext *c = st->tc;
+    lua_State *saved = st->L;
+    st->L = L;
+    RexxDirectoryObject d = c->NewDirectory();
+    size_t n;
+    const char *s = lua_tolstring(L, name, &n);
+    c->DirectoryPut(d, c->NewString(s, n), "CONDITION");
+    if (lua_isnil(L, desc)) c->DirectoryPut(d, c->NullString(), "DESCRIPTION");
+    else { s = lua_tolstring(L, desc, &n); c->DirectoryPut(d, c->NewString(s, n), "DESCRIPTION"); }
+    if (code != 0) {                                    // SYNTAX: the code, its RC, the substitutions
+        s = lua_tolstring(L, code, &n);
+        c->DirectoryPut(d, c->NewString(s, n), "CODE");
+        c->DirectoryPut(d, c->WholeNumber((wholenumber_t)lua_tointeger(L, rc)), "RC");
+        lua_Integer k = lua_isnil(L, add) ? 0 : (lua_Integer)lua_rawlen(L, add);
+        RexxArrayObject a = c->NewArray((size_t)k);
+        for (lua_Integer i = 1; i <= k; i++) {
+            lua_rawgeti(L, add, i);
+            RexxObjectPtr v = toRexx(st, -1);
+            lua_pop(L, 1);
+            if (v != c->Nil()) c->ArrayPut(a, v, (size_t)i);
+            release(c, v);
+        }
+        c->DirectoryPut(d, a, "ADDITIONAL");
+    }
+    else {
+        if (!lua_isnil(L, rc)) {                        // ERROR, FAILURE
+            RexxObjectPtr v = toRexx(st, rc);
+            c->DirectoryPut(d, v, "RC");
+            release(c, v);
+        }
+        if (!lua_isnil(L, add)) {
+            RexxObjectPtr v = toRexx(st, add);
+            c->DirectoryPut(d, v, "ADDITIONAL");
+            release(c, v);
+        }
+    }
+    c->DirectoryPut(d, c->True(), "THROWN");
+    st->L = saved;
+    if (c->CheckCondition()) { c->ClearCondition(); return; }     // (a conversion failed: a Lua error only)
+    keepCondition(L, st, d);
+}
+
+static int mod_throw(lua_State *L)
+{
+    lua_settop(L, 4);
+    // the condition's name, in uppercase: a name THROW accepts, USER with its own
+    size_t n;
+    const char *s = luaL_checklstring(L, 1, &n);
+    luaL_Buffer b;
+    luaL_buffinit(L, &b);
+    int words = 0;
+    for (size_t i = 0; i < n; ) {
+        while (i < n && (s[i] == ' ' || s[i] == '\t')) i++;
+        if (i == n) break;
+        if (words++ > 0) luaL_addchar(&b, ' ');
+        while (i < n && s[i] != ' ' && s[i] != '\t') luaL_addchar(&b, (char)toupper((unsigned char)s[i++]));
+    }
+    luaL_pushresult(&b);                                // 5: the name
+    const char *u = lua_tostring(L, 5);
+    const char *sp = strchr(u, ' ');
+    size_t first = sp != NULL ? (size_t)(sp - u) : strlen(u);
+    int which = -1;
+    for (int k = 0; THROWABLE[k] != NULL; k++)
+        if (strlen(THROWABLE[k]) == first && memcmp(THROWABLE[k], u, first) == 0) which = k;
+    bool user = which == 9, syntax = which == 8, rcd = which <= 1 || syntax;
+    if (which < 0 || (user && words != 2) || (!user && words != 1))
+        return luaL_argerror(L, 1, lua_pushfstring(L, "not a condition THROW accepts: '%s'", s));
+    // rc: ERROR and FAILURE its value, SYNTAX the error code as in Rexx ("40.1"); no other
+    int code = 0;
+    if (rcd && lua_isnil(L, 2)) return luaL_argerror(L, 2, lua_pushfstring(L, "the %s condition needs an rc", u));
+    if (!rcd && !lua_isnil(L, 2)) return luaL_argerror(L, 2, lua_pushfstring(L, "the %s condition has no rc", u));
+    if (syntax) {
+        // a string, "40.1", or a number (from Rexx, "40.1" comes as one, and
+        // "40.10" as a string: the conversion loses nothing, docs/design.md)
+        if (lua_type(L, 2) != LUA_TSTRING && lua_type(L, 2) != LUA_TNUMBER)
+            return luaL_argerror(L, 2, "the error code of a SYNTAX condition is a string, \"40.1\"");
+        size_t m;
+        const char *e = lua_tolstring(L, 2, &m);
+        size_t i = 0, digits = 0;
+        while (i < m && isdigit((unsigned char)e[i])) { i++; digits++; }
+        bool good = digits > 0 && digits <= 2;
+        if (good && i < m) {
+            size_t j = ++i;
+            while (i < m && isdigit((unsigned char)e[i])) i++;
+            good = e[j - 1] == '.' && i > j && i - j <= 3;
+        }
+        if (!good || i != m) return luaL_argerror(L, 2, lua_pushfstring(L, "not an error code: '%s'", e));
+        lua_pushvalue(L, 2);
+        lua_tostring(L, -1);                            // 6: the code, a string
+        lua_pushinteger(L, (lua_Integer)atoi(e));       // 7: its RC, the error number
+        code = 6;
+    }
+    if (!lua_isnil(L, 3) && !lua_isstring(L, 3)) return luaL_argerror(L, 3, "the description is a string");
+    if (syntax && !lua_isnil(L, 4) && !lua_istable(L, 4))
+        return luaL_argerror(L, 4, "the substitutions of a SYNTAX condition are a table, {\"BOOM\"}");
+    // the table, as pushRexxCondition makes it
+    lua_createtable(L, 0, 6);
+    lua_pushvalue(L, 5); lua_setfield(L, -2, "condition");
+    if (syntax) {
+        lua_pushvalue(L, 6); lua_setfield(L, -2, "code");
+        lua_pushvalue(L, 7); lua_setfield(L, -2, "rc");
+    }
+    else if (rcd) { lua_pushvalue(L, 2); lua_setfield(L, -2, "rc"); }
+    if (!lua_isnil(L, 3) && lua_rawlen(L, 3) > 0) {
+        lua_pushvalue(L, 3); lua_tostring(L, -1); lua_setfield(L, -2, "description");
+    }
+    if (!lua_isnil(L, 4)) { lua_pushvalue(L, 4); lua_setfield(L, -2, "additional"); }
+    lua_pushboolean(L, 1); lua_setfield(L, -2, "thrown");
+    pushRxErrMeta(L);
+    lua_setmetatable(L, -2);
+    State *st = stateOf(L);
+    // with Rexx code running (that Lua code was called from Rexx), its condition object
+    if (st != NULL && st->tc != NULL && !st->closed && !st->unwind && lua_checkstack(L, 8))
+        keepThrown(L, st, 5, syntax ? 7 : 2, 3, 4, code);
+    return lua_error(L);
 }
 
 // The string value of a Rexx object, or false with a condition pending (its
@@ -3483,7 +3625,8 @@ static void pushModuleFunctions(lua_State *L)        // upvalue on top: popped
 {
     static const luaL_Reg fns[] = {{"eval", mod_eval}, {"run", mod_run}, {"routine", mod_routine},
                                    {"add_command_environment", mod_add_command_environment},
-                                   {"remove_command_environment", mod_remove_command_environment}, {NULL, NULL}};
+                                   {"remove_command_environment", mod_remove_command_environment},
+                                   {"throw", mod_throw}, {NULL, NULL}};
     luaL_setfuncs(L, fns, 1);
 }
 
