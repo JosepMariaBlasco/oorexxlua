@@ -176,10 +176,9 @@ error:
 
 -- a thrown condition (THROW in Rexx code the command calls, or oorexx.throw)
 -- is not an error of the command: it reaches the issuer as itself, as a
--- HALT does (the user, 20/11/2026); a raised one, and a Lua error, are ERROR.
--- (Caught here by a CATCH in the issuer's own code: past a ::routine, or
--- uncaught, ooRexx r13550 loses a condition thrown by a native command
--- environment, docs/design.md, *ADDRESS LUA*.)
+-- HALT does (the user, 20/11/2026), and goes on from caller to caller (since
+-- ooRexx r13557: before it, a condition thrown by a native command
+-- environment stopped at the issuer); a raised one, and a Lua error, are ERROR
 ::method test_a_throw_in_the_command_from_rexx
   .lua~global("_G")["addressThrower"] = .routine~new("t", 'throw user badConfig description "from Rexx"')
   do
@@ -208,6 +207,32 @@ error:
   end
   self~assertSame("40.1", c~code)
   self~assertTrue(c~thrown)
+
+::method test_a_throw_in_the_command_past_a_routine
+  .lua~global("_G")["addressThrower"] = .routine~new("t", 'throw user badConfig description "from Rexx"')
+  .local~lua.test.handled = .false
+  do
+    call addressIssuer 'addressThrower()'
+    self~fail("no USER BADCONFIG")
+  catch c = user badConfig
+  end
+  .lua~global("_G")["addressThrower"] = .nil
+  self~assertSame("from Rexx", c~description)
+  self~assertTrue(c~thrown)
+  self~assertFalse(.local~lua.test.handled, "the issuer's CALL ON does not trap it, nor does it go on")
+
+::method test_a_throw_in_the_command_uncaught_is_error_4_901
+  prog = SysTempFileName("athrow????.rex")
+  call lineout prog, 'address lua ''require("oorexx").throw("user badConfig", nil, "missing key")'''
+  call lineout prog, 'say "went on"'
+  call lineout prog, '::requires "lua.cls"'
+  call lineout prog
+  out = .array~new
+  address system 'rexx' prog '2>&1' with output using (out)
+  code = rc
+  call SysFileDelete prog
+  self~assertTrue(code \= 0, "an error")
+  self~assertSame("Error 4.901:  Program interrupted with USER BADCONFIG condition: missing key.", out~lastItem~strip("T", "0d"x))
 
 ::method test_a_throw_caught_in_the_command_is_nothing
   .lua~global("_G")["addressThrower"] = .routine~new("t", 'throw user badConfig')
@@ -253,3 +278,13 @@ error:
 
 ::routine halts public
   raise halt
+
+::routine addressIssuer       -- a ::routine between the CATCH and the command
+  use arg command
+  call on user badConfig name handled
+  address lua command
+  .local~lua.test.handled = .true      -- not reached
+  return
+handled:
+  .local~lua.test.handled = .true
+  return

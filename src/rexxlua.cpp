@@ -620,7 +620,15 @@ static RexxObjectPtr raiseCondition(RexxThreadContext *c, RexxObjectPtr cond)
         c->DirectoryRemove(d, "LUA.RETURNED");
     }
     if (c->functions->interfaceVersion >= THREAD_INTERFACE_VERSION_5_3_0) {
-        c->RaiseConditionObject(d);
+        // a thrown condition (THROWN .true: THROW, Throw(), oorexx.throw) is
+        // thrown again, by ThrowObject (ooRexx r13554, which returns: the
+        // condition goes on when the native method returns); any other is
+        // raised, by RaiseConditionObject, which since r13554 always raises,
+        // one level.  (ThrowObject came in the same interface version as
+        // RaiseConditionObject, so a 5.3 beta older than r13554, below the
+        // bridge's minimum, cannot be told apart: hence the minimum.)
+        if (isThrown(c, d)) c->ThrowObject(d);
+        else c->RaiseConditionObject(d);
         return returned;
     }
     RexxCondition cd;

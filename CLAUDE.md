@@ -31,7 +31,7 @@ A Lua C function of the bridge that raises a Lua error (`lua_error`,
 a helper: MSVC's `longjmp` would destroy it again (`docs/design.md`,
 *Errors*). Keep such objects in `NOINLINE` functions.
 
-ooRexx: r13550 or later, the family's revision (`.LogicalWrapper`, RFE #880, r13278; the fixes of
+ooRexx: r13557 or later, the family's revision (`.LogicalWrapper`, RFE #880, r13278; the fixes of
 #2111 and #2112, which `WITH` and command environments registered while other
 threads run need; that of #2122, `IsInstanceOf`/`IsRoutine` with other
 threads running Rexx; `.CommandHandler`, r13288; `StackCommandEnvironment`,
@@ -42,7 +42,9 @@ method's own value kept after it raises a condition; r13346, #2124's
 regression fixed; r13358, #2107, #2133, #2115, #2135;
 r13365, #2075, #2134, #2136, #2084; r13379, #2018, #1317, #2137,
 #2138, #2009, #2011, #2014, #1890; r13514, CATCH, RFE #31; r13532, FINALLY, RFE #31, and r13517, a CATCH
-clause's condition object kept; r13550, THROW, RFE #31, and error 4.901, built from
+clause's condition object kept; r13550, THROW, RFE #31, and error 4.901; r13554,
+`ThrowObject`, which the bridge needs since `RaiseConditionObject` always raises; r13557,
+a condition thrown by a native command environment goes on; built from
 SVN until SourceForge's builds are out). The CI uses
 the portable builds, pinned to one revision (`OOREXX_REV` in the workflow).
 

@@ -2,8 +2,8 @@
 # Linux, macOS (arm64 and x64) and Windows: one job per platform and Lua,
 # since the bridge is compiled against one Lua. ooRexx comes from its
 # portable builds on SourceForge, pinned to one revision; a newer one is
-# taken deliberately, after checking it. The bridge's minimum is r13550
-# since 19/11/2026 (THROW, RFE #31, error 4.901), but SourceForge has no build
+# taken deliberately, after checking it. The bridge's minimum is r13557
+# since 21/11/2026 (THROW, RFE #31, error 4.901, ThrowObject), but SourceForge has no build
 # of it yet (its build machine is down): until there is one, the pin stays at
 # r13532, the tests that use THROW would fail here, and pushes say [skip ci]
 # (r13532, 17/11/2026: FINALLY,

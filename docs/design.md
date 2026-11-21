@@ -90,7 +90,7 @@ would hold the Rexx object while Lua runs.
 `tests/rexx/Threads.testGroup` runs several Rexx threads in one state, with
 callbacks, and several threads with states of their own.
 
-**Needs ooRexx r13286 (bug #2122)** (the bridge's minimum is ooRexx trunk r13550). Before it, `IsInstanceOf`, `IsRoutine`
+**Needs ooRexx r13286 (bug #2122)** (the bridge's minimum is ooRexx trunk r13557). Before it, `IsInstanceOf`, `IsRoutine`
 and `IsMethod` asked of a number that has no string value yet (any result of
 Rexx arithmetic) made that string without the kernel lock: with other threads
 running Rexx, ooRexx's heap was corrupted (found by ooRexx/Python). r13286
@@ -688,9 +688,13 @@ the bridge in the same way, with nothing for the bridge to do: the API call
 of the bridge returns with the condition pending, so nothing unwinds through
 Lua's frames (unlike a SIGNAL past Lua, above); Lua gets it as its table
 (*A Rexx condition in Lua*), and if Lua lets it through, or raises the same
-table again with `error(e)`, the bridge raises its condition object again as
-it is (`RaiseConditionObject`), whose `THROWN` entry is `.true`, so ooRexx
-throws it again in the Rexx code that called into Lua: it goes on from
+table again with `error(e)`, the bridge throws its condition object again as
+it is, its `THROWN` entry being `.true`: `ThrowObject` (ooRexx r13554), which
+returns, the condition going on when the bridge's native method returns
+(until r13554 `RaiseConditionObject` did it, keeping `THROWN`; since r13554
+it always raises, one level, and is what the bridge uses for a condition
+that was raised). So ooRexx throws it again in the Rexx code that called
+into Lua: it goes on from
 there, past the levels that do not catch it, `CALL ON` does not trap it,
 its `PROPAGATED` is `.true`, and uncaught it ends the program with error
 4.1, or 4.901 with its description (r13550). A `pcall` in Lua stops it, as
@@ -740,14 +744,14 @@ it again, and when it reaches the bridge it is raised again as it is, which
 throws it in the Rexx caller (the same path as *A THROW past Lua*). With no
 Rexx code running (Lua as the host, nothing in Rexx called it), the table
 is all there is. Not ooRexx's `Throw()` itself: it does not return, and the
-bridge, on every path, leaves a condition pending and returns
-(`RaiseConditionObject` keeps `THROWN`; should it stop keeping it, as is
-proposed in `oorexx-bugs/2026-11-20-throw-object-api.md`, the bridge
-changes its one call, `raiseCondition`, to the API proposed there). Under
+bridge, on every path, leaves a condition pending and returns; so
+`ThrowObject`, which throws and returns (ooRexx r13554, from the family's
+`oorexx-bugs/2026-11-20-throw-object-api.md`), in the bridge's one call,
+`raiseCondition`. Under
 `ADDRESS LUA` it reaches the issuer too (*ADDRESS LUA*). Measured: 150,000 throws caught in Rexx, no growth (RSS
-stable), about 28 µs each. Tests: `Errors.testGroup` (`test_lua_throw_*`),
+stable), about 35 µs each (r13564; 28 µs on r13550, with RaiseConditionObject). Tests: `Errors.testGroup` (`test_lua_throw_*`),
 `CommandHandlers.testGroup` (`test_a_handler_that_throws`),
-`Address.testGroup` (`test_a_throw_in_the_command_is_ERROR`),
+`Address.testGroup` (`test_a_throw_in_the_command_*`),
 `Module.test.lua`.
 
 ## Operators
@@ -912,15 +916,12 @@ as a chunk otherwise, so an expression gives its value.
 by `oorexx.throw`, that Lua does not catch, reaches the issuer as itself,
 raised again as it is (its condition object, `THROWN` `.true`), as a HALT
 does; a raised one (a SYNTAX error of that Rexx code, a RAISE) and a Lua
-error are ERROR, RC 1, as before. RC is 1. **ooRexx r13550 does not throw it
-on**: a condition thrown in a native command environment, as `ADDRESS LUA`
-is, reaches the issuer as a RAISE would (`ContextCommandHandlerDispatcher::handleError`
-keeps any condition but SYNTAX as the command's, and the issuer raises it
-one level), so a CATCH clause or a trap in the issuer's code catches it (and
-one around an internal routine that issued the command), but past a
-`::routine`, or with nothing to catch it, it is lost and the program goes
-on (measured without Lua, a native environment that calls `Throw()`; a
-handler registered with `.lua~commandHandler` is not affected). Tests:
+error are ERROR, RC 1, as before. It goes on from there as any thrown
+condition, past the levels that do not catch it, and uncaught it is error
+4.901 (ooRexx r13557: until then a condition thrown by a native command
+environment, as `ADDRESS LUA` is, reached the issuer as a RAISE would, and
+was lost past a `::routine`; oorexx-bridges
+`oorexx-bugs/2026-11-20-throw-in-native-command-environment.md`). Tests:
 `Address.testGroup` (`test_a_throw_in_the_command_*`).
 
 The sign follows ADDRESS FETCH and DOM of ooRexx/WASM: negative, the program
@@ -949,7 +950,7 @@ documents it.
 uncovers it (until 0.4.0, `AddCommandEnvironment` replaced it, and a
 `deregister` left `LUA` unknown; measured on r13297,
 `test_lua_cls_stacks_over_a_registered_lua`). It needs ooRexx r13297
-(the bridge's minimum is ooRexx trunk r13550). The work on
+(the bridge's minimum is ooRexx trunk r13557). The work on
 command handlers in ooRexx/WASM found that `AddCommandEnvironment` changes
 the instance's table of handlers without the interpreter's lock, and that a
 command sent to an environment before it is registered can cache a handler
